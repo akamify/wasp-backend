@@ -27,7 +27,9 @@ function buildOAuthUrl({ workspaceId }) {
     redirect_uri: metaOAuthRedirectUrl,
     response_type: "code",
     scope:
-      "whatsapp_business_management,whatsapp_business_messaging,business_management",
+      // Include at least one Facebook Login supported permission so the dialog is available,
+      // then add WhatsApp/business scopes used for Cloud API onboarding.
+      "public_profile,email,whatsapp_business_management,whatsapp_business_messaging,business_management",
     state,
   });
 
@@ -86,26 +88,40 @@ async function discoverWabaAndPhone({ accessToken }) {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 
-  const businessesRes = await graph.get("/me/businesses", { params: { limit: 25 } });
-  const businessId = businessesRes.data?.data?.[0]?.id;
-  if (!businessId) throw new HttpError(400, "No Meta business found for this user");
+  const phonesParams = {
+    fields: "id,display_phone_number,verified_name,code_verification_status,status",
+    limit: 25,
+  };
 
-  const wabaRes = await graph.get(`/${businessId}/owned_whatsapp_business_accounts`, {
-    params: { fields: "id,name", limit: 25 },
-  });
-  const wabaId = wabaRes.data?.data?.[0]?.id;
-  if (!wabaId) throw new HttpError(400, "No WhatsApp business account (WABA) found");
+  const businessesRes = await graph.get("/me/businesses", { params: { limit: 50 } });
+  const businesses = Array.isArray(businessesRes.data?.data) ? businessesRes.data.data : [];
+  if (businesses.length === 0) throw new HttpError(400, "No Meta business found for this user");
 
-  const phonesRes = await graph.get(`/${wabaId}/phone_numbers`, {
-    params: {
-      fields: "id,display_phone_number,verified_name,code_verification_status,status",
-      limit: 25,
-    },
-  });
-  const phoneNumberId = phonesRes.data?.data?.[0]?.id;
-  if (!phoneNumberId) throw new HttpError(400, "No phone number found under the WABA");
+  const seenWabas = [];
+  for (const business of businesses) {
+    const businessId = business?.id;
+    if (!businessId) continue;
 
-  return { wabaId, phoneNumberId };
+    const wabaRes = await graph.get(`/${businessId}/owned_whatsapp_business_accounts`, {
+      params: { fields: "id,name", limit: 50 },
+    });
+
+    const wabas = Array.isArray(wabaRes.data?.data) ? wabaRes.data.data : [];
+    for (const waba of wabas) {
+      const wabaId = waba?.id;
+      if (!wabaId) continue;
+      seenWabas.push({ id: wabaId, name: waba?.name || "" });
+
+      const phonesRes = await graph.get(`/${wabaId}/phone_numbers`, { params: phonesParams });
+      const phones = Array.isArray(phonesRes.data?.data) ? phonesRes.data.data : [];
+      const phoneNumberId = phones[0]?.id;
+      if (phoneNumberId) return { wabaId, phoneNumberId };
+    }
+  }
+
+  const err = new HttpError(400, "No phone number found under any WABA");
+  err.details = { wabas: seenWabas.slice(0, 25) };
+  throw err;
 }
 
 async function persistWorkspaceCredentials({ workspaceId, accessToken, wabaId, phoneNumberId }) {
