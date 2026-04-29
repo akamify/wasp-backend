@@ -39,6 +39,7 @@ function mountRoutes(basePath = "") {
   app.use(`${basePath}`, require("./routes/trackingRoutes"));
   app.use(`${basePath}/webhooks`, require("./routes/webhookRoutes"));
 
+  
   // Auth + tenant routes
   app.use(`${basePath}/auth`, require("./routes/authRoutes"));
   app.use(`${basePath}/workspaces`, require("./routes/workspaceRoutes"));
