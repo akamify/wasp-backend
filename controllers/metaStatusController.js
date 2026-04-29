@@ -17,6 +17,7 @@ async function metaStatus(req, res) {
       success: true,
       status: "disconnected",
       credentials: null,
+      build: { commit: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA || null },
     });
   }
 
@@ -36,8 +37,8 @@ async function metaStatus(req, res) {
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
     },
+    build: { commit: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA || null },
   });
 }
 
 module.exports = { metaStatus };
-
