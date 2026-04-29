@@ -26,6 +26,10 @@ function buildOAuthUrl({ workspaceId }) {
     client_id: metaAppId,
     redirect_uri: metaOAuthRedirectUrl,
     response_type: "code",
+    // Ask Meta to return the scopes actually granted so we can debug permission issues.
+    return_scopes: "true",
+    // Force Meta to re-prompt for previously-declined permissions.
+    auth_type: "rerequest",
     scope:
       // Include at least one Facebook Login supported permission so the dialog is available,
       // then add WhatsApp/business scopes used for Cloud API onboarding.
@@ -87,6 +91,31 @@ async function discoverWabaAndPhone({ accessToken }) {
     timeout: 20000,
     headers: { Authorization: `Bearer ${accessToken}` },
   });
+
+  // Helpful early check: the /me/businesses endpoint requires business_management.
+  try {
+    const permsRes = await graph.get("/me/permissions");
+    const perms = Array.isArray(permsRes.data?.data) ? permsRes.data.data : [];
+    const granted = new Set(
+      perms.filter((p) => p?.status === "granted").map((p) => String(p?.permission || ""))
+    );
+    if (!granted.has("business_management")) {
+      const err = new HttpError(
+        403,
+        "(#200) Requires business_management permission to manage the object"
+      );
+      err.details = {
+        hint:
+          "Make sure the user approves the business_management permission during OAuth, and the user has admin access to the Meta Business that owns the WABA/phone number.",
+        granted: Array.from(granted),
+      };
+      throw err;
+    }
+  } catch (err) {
+    // If the permissions endpoint itself fails, continue and let the next calls surface the error.
+    // But if we threw our own HttpError above, rethrow.
+    if (err instanceof HttpError) throw err;
+  }
 
   const phonesParams = {
     fields: "id,display_phone_number,verified_name,code_verification_status,status",
