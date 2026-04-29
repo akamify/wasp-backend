@@ -164,6 +164,29 @@ async function metaCallback(req, res) {
     return res.redirect(url.toString());
   };
 
+  const summarizeError = (err) => {
+    const axiosStatus = err?.response?.status || null;
+    const meta = err?.response?.data?.error || null;
+
+    const metaDebug = err?.metaDebug || null;
+    const metaDebugStatus = metaDebug?.axios?.status || null;
+    const status = axiosStatus || metaDebugStatus || null;
+
+    const step = metaDebug?.step || null;
+    const metaMessage =
+      metaDebug?.meta?.error_user_msg ||
+      metaDebug?.meta?.message ||
+      meta?.error_user_msg ||
+      meta?.message ||
+      null;
+
+    return {
+      status,
+      step,
+      details: metaMessage || err?.message || "Meta OAuth connect failed",
+    };
+  };
+
   try {
     if (error) {
       return redirectToUi({ ok: 0, error: "meta_oauth_failed", error_description });
@@ -193,8 +216,14 @@ async function metaCallback(req, res) {
 
     return redirectToUi({ ok: 1, connected: 1 });
   } catch (err) {
-    const details = err?.details?.message || err?.message || "Meta OAuth connect failed";
-    return redirectToUi({ ok: 0, error: "connect_failed", details });
+    const summary = summarizeError(err);
+    return redirectToUi({
+      ok: 0,
+      error: "connect_failed",
+      ...(summary.status ? { status: summary.status } : {}),
+      ...(summary.step ? { step: summary.step } : {}),
+      details: summary.details,
+    });
   }
 }
 
