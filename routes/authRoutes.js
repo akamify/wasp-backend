@@ -5,8 +5,6 @@ const { validate } = require("../middleware/validate");
 const rateLimiters = require("../middleware/rateLimiters");
 const { auth } = require("../middleware/auth");
 const { register, login, me, rotateApiKey } = require("../controllers/authController");
-const { requireWorkspace } = require("../middleware/requireWorkspace");
-const { metaRedirect, metaCallback } = require("../controllers/metaAuthController");
 
 const router = express.Router();
 
@@ -37,8 +35,6 @@ router.post(
 
 router.get("/me", auth, asyncHandler(me));
 router.post("/api-key/rotate", auth, asyncHandler(rotateApiKey));
-router.get("/meta", auth, requireWorkspace, asyncHandler(metaRedirect));
-router.get("/meta/callback", asyncHandler(metaCallback));
 
 module.exports = router;
 

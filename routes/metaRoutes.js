@@ -20,7 +20,7 @@ router.post(
       accessToken: Joi.string().min(10).required(),
       phoneNumberId: Joi.string().min(3).required(),
       wabaId: Joi.string().min(3).required(),
-      graphApiVersion: Joi.string().pattern(/^v\\d+\\.\\d+$/).optional(),
+      graphApiVersion: Joi.string().pattern(/^v\d+\.\d+$/).optional(),
     })
   ),
   asyncHandler(saveMetaCredentials)

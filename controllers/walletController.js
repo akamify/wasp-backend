@@ -17,6 +17,13 @@ function getRazorpayClient() {
   return new Razorpay({ key_id: razorpayKeyId, key_secret: razorpayKeySecret });
 }
 
+function buildReceipt(workspaceId) {
+  const ws = String(workspaceId || "").replace(/[^a-zA-Z0-9]/g, "").slice(-10) || "ws";
+  const ts = Date.now().toString(36);
+  // Razorpay receipt max length is 40 chars.
+  return `ws_${ws}_${ts}`.slice(0, 40);
+}
+
 async function getWallet(req, res) {
   const wallet = await getOrCreateWallet(req.workspace.id);
   res.json({ success: true, wallet: { balance: wallet.balance, currency: wallet.currency } });
@@ -26,13 +33,26 @@ async function createRechargeOrder(req, res) {
   const amount = Number(req.body.amount || 0);
   if (!Number.isFinite(amount) || amount <= 0) throw new HttpError(400, "Invalid amount");
 
-  const client = getRazorpayClient();
-  const order = await client.orders.create({
-    amount: Math.round(amount * 100),
-    currency: "INR",
-    receipt: `ws_${req.workspace.id}_${Date.now()}`,
-    notes: { workspaceId: req.workspace.id },
-  });
+  let order;
+  try {
+    const client = getRazorpayClient();
+    order = await client.orders.create({
+      amount: Math.round(amount * 100),
+      currency: "INR",
+      receipt: buildReceipt(req.workspace.id),
+      notes: { workspaceId: req.workspace.id },
+    });
+  } catch (err) {
+    const providerMessage =
+      err?.error?.description ||
+      err?.response?.data?.error?.description ||
+      err?.response?.data?.error?.reason ||
+      err?.message ||
+      "Failed to create Razorpay order";
+    throw new HttpError(400, "Recharge order creation failed", {
+      providerError: providerMessage,
+    });
+  }
 
   res.json({
     success: true,
@@ -83,4 +103,3 @@ async function razorpayWebhook(req, res) {
 }
 
 module.exports = { getWallet, createRechargeOrder, razorpayWebhook };
-
