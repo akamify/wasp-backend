@@ -1,7 +1,7 @@
 const { Template } = require("../models/Template");
 const { Message } = require("../models/Message");
 const { HttpError } = require("../utils/httpError");
-const { sendTemplateMessageForUser } = require("../services/outboundMessageService");
+const { sendTemplateMessageForUser, sendTextMessageForUser } = require("../services/outboundMessageService");
 const { getCredentialsForUser } = require("../services/credentialsService");
 const { assertNormalizedPhone, normalizePhone } = require("../services/contactService");
 const { debit, credit, messageCost } = require("../services/walletService");
@@ -207,6 +207,32 @@ async function bulkSend(req, res) {
   res.json({ success: true, count: results.length, results });
 }
 
+async function sendText(req, res) {
+  const { to, text } = req.body;
+  const normalizedPhone = assertNormalizedPhone(to);
+  const body = String(text || "").trim();
+  if (!body) throw new HttpError(400, "Text is required");
+
+  try {
+    await getCredentialsForUser(req.workspace.id);
+    const result = await sendTextMessageForUser({
+      userId: req.workspace.id,
+      to: normalizedPhone,
+      text: body,
+    });
+    res.json({ success: true, message: result.message, meta: result.apiResponse });
+  } catch (err) {
+    if (err.statusCode) throw err;
+    await safeLogFailedOutboundMessage({
+      userId: req.workspace.id,
+      templateId: null,
+      phone: normalizedPhone,
+      err,
+    });
+    throw new HttpError(err?.response?.status || 502, "Failed to send text message", buildDetails(err));
+  }
+}
+
 async function listLogs(req, res) {
   const page = Math.max(Number(req.query.page || 1), 1);
   const limit = Math.min(Math.max(Number(req.query.limit || 25), 1), 100);
@@ -236,4 +262,4 @@ async function messagesByPhone(req, res) {
   res.json({ success: true, phone, messages: messages.reverse() });
 }
 
-module.exports = { sendTemplate, bulkSend, listLogs, messagesByPhone };
+module.exports = { sendTemplate, sendText, bulkSend, listLogs, messagesByPhone };

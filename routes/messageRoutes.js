@@ -6,6 +6,7 @@ const { auth } = require("../middleware/auth");
 const { requireWorkspace } = require("../middleware/requireWorkspace");
 const {
   sendTemplate,
+  sendText,
   bulkSend,
   listLogs,
   messagesByPhone,
@@ -34,6 +35,19 @@ router.post(
     })
   ),
   asyncHandler(sendTemplate)
+);
+
+router.post(
+  "/send-text",
+  auth,
+  requireWorkspace,
+  validate(
+    Joi.object({
+      to: Joi.string().min(8).max(20).required(),
+      text: Joi.string().trim().min(1).max(4096).required(),
+    })
+  ),
+  asyncHandler(sendText)
 );
 
 router.post(

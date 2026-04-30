@@ -1,6 +1,6 @@
 const { Message } = require("../models/Message");
 const { getCredentialsForUser } = require("./credentialsService");
-const { sendTemplateMessage } = require("../utils/whatsappSender");
+const { sendTemplateMessage, sendTextMessage } = require("../utils/whatsappSender");
 const { touchConversation } = require("./conversationService");
 const { touchContactFromMessage } = require("./contactService");
 const {
@@ -92,4 +92,34 @@ async function sendTemplateMessageForUser({
   return { message, apiResponse };
 }
 
-module.exports = { sendTemplateMessageForUser };
+async function sendTextMessageForUser({ userId, to, text }) {
+  const creds = await getCredentialsForUser(userId);
+  const apiResponse = await sendTextMessage({
+    accessToken: creds.accessToken,
+    phoneNumberId: creds.phoneNumberId,
+    to,
+    text,
+    graphApiVersion: creds.graphApiVersion,
+  });
+
+  const waMessageId = Array.isArray(apiResponse?.messages) ? apiResponse.messages[0]?.id : undefined;
+  const now = new Date();
+
+  const message = await Message.create({
+    workspaceId: userId,
+    phone: to,
+    direction: "outbound",
+    whatsappMessageId: waMessageId,
+    status: "sent",
+    statusTimestamps: { sentAt: now },
+    text,
+    payload: { to, text },
+  });
+
+  await touchConversation({ userId, phone: to, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
+  await touchContactFromMessage({ userId, phone: to, direction: "outbound", preview: text, occurredAt: now });
+
+  return { message, apiResponse };
+}
+
+module.exports = { sendTemplateMessageForUser, sendTextMessageForUser };
