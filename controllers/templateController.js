@@ -5,6 +5,7 @@ const {
   submitTemplate,
   fetchTemplateStatus,
   fetchAllMessageTemplates,
+  deleteMessageTemplate,
 } = require("../utils/whatsappSender");
 const { normalizeTemplate } = require("../utils/templateStructure");
 
@@ -34,8 +35,32 @@ function normalizeRemoteTemplate(remote) {
 
 async function createTemplate(req, res) {
   const normalized = normalizeTemplate({ ...req.body, source: "local" });
-  const tpl = await Template.create({ ...normalized, workspaceId: req.workspace.id });
-  res.status(201).json({ success: true, template: tpl });
+  const creds = await getCredentialsForUser(req.workspace.id);
+
+  let metaResponse;
+  try {
+    metaResponse = await submitTemplate({
+      accessToken: creds.accessToken,
+      wabaId: creds.wabaId,
+      template: normalized,
+      graphApiVersion: creds.graphApiVersion,
+    });
+  } catch (err) {
+    throw new HttpError(400, "Template submission failed", {
+      message: err.message,
+      metaDebug: err.metaDebug || null,
+    });
+  }
+
+  const tpl = await Template.create({
+    ...normalized,
+    workspaceId: req.workspace.id,
+    source: "local",
+    metaTemplateId: metaResponse?.id || undefined,
+    status: normalizeRemoteStatus(metaResponse?.status),
+    lastSyncedAt: new Date(),
+  });
+  res.status(201).json({ success: true, template: tpl, meta: metaResponse });
 }
 
 async function listTemplates(req, res) {
@@ -69,8 +94,31 @@ async function updateTemplate(req, res) {
 }
 
 async function deleteTemplate(req, res) {
+  const template = await Template.findOne({ _id: req.params.id, workspaceId: req.workspace.id });
+  if (!template) throw new HttpError(404, "Template not found");
+
+  const shouldDeleteOnMeta = template.source === "meta" || !!template.metaTemplateId;
+  let metaDelete = null;
+
+  if (shouldDeleteOnMeta) {
+    const creds = await getCredentialsForUser(req.workspace.id);
+    try {
+      metaDelete = await deleteMessageTemplate({
+        accessToken: creds.accessToken,
+        wabaId: creds.wabaId,
+        templateName: template.name,
+        graphApiVersion: creds.graphApiVersion,
+      });
+    } catch (err) {
+      throw new HttpError(400, "Meta template delete failed", {
+        message: err.message,
+        metaDebug: err.metaDebug || null,
+      });
+    }
+  }
+
   await Template.deleteOne({ _id: req.params.id, workspaceId: req.workspace.id });
-  res.json({ success: true });
+  res.json({ success: true, meta: metaDelete });
 }
 
 async function submitForApproval(req, res) {

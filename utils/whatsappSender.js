@@ -313,10 +313,36 @@ async function sendTemplateMessage({
   }
 }
 
+async function deleteMessageTemplate({
+  accessToken,
+  wabaId,
+  templateName,
+  graphApiVersion,
+}) {
+  const baseURL = graphBaseUrl(graphApiVersion);
+  const client = axios.create({ baseURL, timeout: 20000 });
+  try {
+    const res = await client.delete(`/${wabaId}/message_templates`, {
+      params: { name: templateName },
+      headers: authHeaders(accessToken),
+    });
+    return res.data;
+  } catch (err) {
+    throw Object.assign(new Error("Meta template delete failed"), {
+      metaDebug: toMetaErrorInfo(err, "delete_message_template", {
+        method: "DELETE",
+        url: `/${wabaId}/message_templates`,
+        params: { name: templateName },
+      }),
+    });
+  }
+}
+
 module.exports = {
   validateCredentials,
   submitTemplate,
   fetchTemplateStatus,
   fetchAllMessageTemplates,
   sendTemplateMessage,
+  deleteMessageTemplate,
 };
