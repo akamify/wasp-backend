@@ -20,9 +20,29 @@ function buildValidationDetails(err) {
 }
 
 async function upsertCredentials(req, res) {
-  const { accessToken, phoneNumberId, businessAccountId, wabaId, graphApiVersion } = req.body;
+  const { accessToken, phoneNumberId, businessAccountId, wabaId, graphApiVersion, override, overrideReason } = req.body;
 
   const businessId = wabaId || businessAccountId;
+
+  const existing = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id }).select(
+    "+phoneNumberIdEnc +businessAccountIdEnc isValid"
+  );
+
+  if (existing?.isValid && existing?.phoneNumberIdEnc && existing?.businessAccountIdEnc) {
+    const currentPhoneNumberId = decryptString(existing.phoneNumberIdEnc);
+    const currentWabaId = decryptString(existing.businessAccountIdEnc);
+
+    const isChangingIds = currentPhoneNumberId !== phoneNumberId || currentWabaId !== businessId;
+
+    if (isChangingIds) {
+      if (!override || !String(overrideReason || "").trim() || String(overrideReason || "").trim().length < 10) {
+        throw new HttpError(409, "Workspace already has a connected WABA. Disconnect is disabled; editing requires override.", {
+          requiresOverride: true,
+          hint: "Pass override=true and a meaningful overrideReason (min 10 chars) to change phoneNumberId/wabaId.",
+        });
+      }
+    }
+  }
 
   try {
     const validationResult = await validateCredentials({
@@ -44,6 +64,9 @@ async function upsertCredentials(req, res) {
           graphApiVersion: graphApiVersion || metaGraphVersion,
           isValid: true,
           lastValidatedAt: new Date(),
+          lastEditedAt: new Date(),
+          lastEditedBy: req.user?.id || null,
+          lastEditedReason: String(overrideReason || "").trim() || null,
         },
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -95,8 +118,10 @@ async function getCredentials(req, res) {
 }
 
 async function deleteCredentials(req, res) {
-  await WhatsAppCredentials.deleteOne({ workspaceId: req.workspace.id });
-  res.json({ success: true });
+  throw new HttpError(
+    403,
+    "Disconnect is disabled for safety. This workspace can only edit credentials with an override reason."
+  );
 }
 
 module.exports = { upsertCredentials, getCredentials, deleteCredentials };

@@ -22,6 +22,15 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
     graphApiVersion: { type: String, default: "v22.0" },
     isValid: { type: Boolean, default: false },
     lastValidatedAt: { type: Date },
+
+    // Connection governance (workspace can have only one connection; edits are audited)
+    lastEditedAt: { type: Date, default: null },
+    lastEditedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    lastEditedReason: { type: String, default: null },
+
+    // Best-effort cached signals from webhooks (some limits are not queryable via REST reliably)
+    messagingLimitTierCached: { type: String, default: null },
+    lastLimitsUpdateAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

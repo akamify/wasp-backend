@@ -11,8 +11,13 @@ const {
   listLogs,
   messagesByPhone,
 } = require("../controllers/messageController");
+const { uploadMessageMedia } = require("../controllers/messageMediaController");
+const multer = require("multer");
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+router.post("/media", auth, requireWorkspace, upload.single("file"), asyncHandler(uploadMessageMedia));
 
 router.post(
   "/send",

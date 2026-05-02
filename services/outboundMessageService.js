@@ -55,8 +55,8 @@ async function sendTemplateMessageForUser({
     phone: to,
     direction: "outbound",
     whatsappMessageId: waMessageId,
-    status: "sent",
-    statusTimestamps: { sentAt: now },
+    status: "accepted",
+    statusTimestamps: { acceptedAt: now },
     text: previewText,
     payload: {
       to,
@@ -110,8 +110,8 @@ async function sendTextMessageForUser({ userId, to, text }) {
     phone: to,
     direction: "outbound",
     whatsappMessageId: waMessageId,
-    status: "sent",
-    statusTimestamps: { sentAt: now },
+    status: "accepted",
+    statusTimestamps: { acceptedAt: now },
     text,
     payload: { to, text },
   });

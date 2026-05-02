@@ -6,8 +6,11 @@ const { requireWorkspace } = require("../middleware/requireWorkspace");
 const { validate } = require("../middleware/validate");
 const { saveMetaCredentials } = require("../controllers/metaCredentialsController");
 const { metaStatus } = require("../controllers/metaStatusController");
+const { updateBusinessProfile, uploadProfilePicture } = require("../controllers/metaProfileController");
+const multer = require("multer");
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 router.get("/status", auth, requireWorkspace, asyncHandler(metaStatus));
 
@@ -21,9 +24,37 @@ router.post(
       phoneNumberId: Joi.string().min(3).required(),
       wabaId: Joi.string().min(3).required(),
       graphApiVersion: Joi.string().pattern(/^v\d+\.\d+$/).optional(),
+      override: Joi.boolean().optional(),
+      overrideReason: Joi.string().trim().max(400).allow("", null).optional(),
     })
   ),
   asyncHandler(saveMetaCredentials)
+);
+
+router.put(
+  "/profile",
+  auth,
+  requireWorkspace,
+  validate(
+    Joi.object({
+      about: Joi.string().max(139).allow("", null).optional(),
+      address: Joi.string().max(256).allow("", null).optional(),
+      description: Joi.string().max(512).allow("", null).optional(),
+      email: Joi.string().email().allow("", null).optional(),
+      websites: Joi.array().items(Joi.string().max(2048)).max(2).optional(),
+      vertical: Joi.string().max(64).allow("", null).optional(),
+      profilePictureHandle: Joi.string().max(512).allow("", null).optional(),
+    })
+  ),
+  asyncHandler(updateBusinessProfile)
+);
+
+router.post(
+  "/profile-picture",
+  auth,
+  requireWorkspace,
+  upload.single("file"),
+  asyncHandler(uploadProfilePicture)
 );
 
 module.exports = router;

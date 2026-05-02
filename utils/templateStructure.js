@@ -244,7 +244,10 @@ function validateBeforeSend(template, data = {}) {
   const buttonValues = ensureStringArray(data.buttonValues);
 
   for (const component of ensureArray(template?.components)) {
-    if (toUpper(component?.type) === "HEADER" && toUpper(component?.format) === "TEXT") {
+    const compType = toUpper(component?.type);
+    const headerFormat = toUpper(component?.format);
+
+    if (compType === "HEADER" && headerFormat === "TEXT") {
       const requiredVariables = maxPlaceholderIndex(component?.text);
       invariant(
         headerVariables.length >= requiredVariables,
@@ -254,7 +257,14 @@ function validateBeforeSend(template, data = {}) {
       );
     }
 
-    if (toUpper(component?.type) === "BODY") {
+    if (compType === "HEADER" && (headerFormat === "IMAGE" || headerFormat === "VIDEO" || headerFormat === "DOCUMENT")) {
+      invariant(
+        toTrimmedString(headerVariables[0]),
+        "Header media is required (provide a media URL or media ID)"
+      );
+    }
+
+    if (compType === "BODY") {
       const requiredVariables = maxPlaceholderIndex(component?.text);
       invariant(
         variables.length >= requiredVariables,
@@ -348,7 +358,10 @@ function buildComponentsFromTemplate(template, data = {}) {
   const components = [];
 
   for (const component of ensureArray(normalizedTemplate.components)) {
-    if (toUpper(component?.type) === "HEADER" && toUpper(component?.format) === "TEXT") {
+    const compType = toUpper(component?.type);
+    const headerFormat = toUpper(component?.format);
+
+    if (compType === "HEADER" && headerFormat === "TEXT") {
       const requiredVariables = maxPlaceholderIndex(component?.text);
 
       if (requiredVariables > 0) {
@@ -362,7 +375,24 @@ function buildComponentsFromTemplate(template, data = {}) {
       }
     }
 
-    if (toUpper(component?.type) === "BODY") {
+    if (compType === "HEADER" && (headerFormat === "IMAGE" || headerFormat === "VIDEO" || headerFormat === "DOCUMENT")) {
+      const value = toTrimmedString(headerVariables[0]);
+      if (value) {
+        const isLink = /^https?:\/\//i.test(value);
+        const kind = headerFormat.toLowerCase();
+        components.push({
+          type: "header",
+          parameters: [
+            {
+              type: kind,
+              [kind]: isLink ? { link: value } : { id: value },
+            },
+          ],
+        });
+      }
+    }
+
+    if (compType === "BODY") {
       const requiredVariables = maxPlaceholderIndex(component?.text);
 
       if (requiredVariables > 0) {

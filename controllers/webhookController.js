@@ -1,8 +1,9 @@
 const { metaWebhookVerifyToken } = require("../config/env");
-const { findTenantByPhoneNumberId } = require("../services/credentialsService");
+const { findTenantByPhoneNumberId, findTenantByWabaId } = require("../services/credentialsService");
 const { Message } = require("../models/Message");
 const { touchConversation } = require("../services/conversationService");
 const { normalizePhone, touchContactFromMessage } = require("../services/contactService");
+const { WhatsAppCredentials } = require("../models/WhatsAppCredentials");
 
 function asDateFromSeconds(seconds) {
   const n = Number(seconds);
@@ -39,7 +40,29 @@ async function receive(req, res) {
   for (const entry of entries) {
     const changes = Array.isArray(entry.changes) ? entry.changes : [];
     for (const change of changes) {
+      const field = String(change?.field || "");
       const value = change?.value;
+
+      // 1) Phone number quality updates (tier upgrades/downgrades etc.) come without metadata.phone_number_id
+      if (field === "phone_number_quality_update") {
+        const wabaId = entry?.id ? String(entry.id) : "";
+        if (!wabaId) continue;
+        const tenant = await findTenantByWabaId(wabaId);
+        if (!tenant) continue;
+
+        const currentLimit = value?.current_limit ? String(value.current_limit) : "";
+        const ts = entry?.time ? asDateFromSeconds(entry.time) : new Date();
+        if (currentLimit) {
+          await WhatsAppCredentials.updateOne(
+            { workspaceId: tenant.workspaceId },
+            { $set: { messagingLimitTierCached: currentLimit, lastLimitsUpdateAt: ts } }
+          );
+        }
+
+        continue;
+      }
+
+      // 2) Message + status webhooks (canonical) - route by phone number id
       const phoneNumberId = value?.metadata?.phone_number_id;
       if (!phoneNumberId) continue;
 
@@ -75,6 +98,7 @@ async function receive(req, res) {
               workspaceId,
               phone: phone || "unknown",
               direction: "outbound",
+              "statusTimestamps.acceptedAt": new Date(),
             },
           },
           { upsert: true, new: true, setDefaultsOnInsert: true }

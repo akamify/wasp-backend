@@ -17,11 +17,12 @@ const MessageSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["queued", "sent", "delivered", "read", "failed", "received"],
+      enum: ["queued", "accepted", "sent", "delivered", "read", "failed", "received", "timeout_unknown"],
       default: "queued",
       index: true,
     },
     statusTimestamps: {
+      acceptedAt: Date,
       sentAt: Date,
       deliveredAt: Date,
       readAt: Date,

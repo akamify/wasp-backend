@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const Razorpay = require("razorpay");
 const { getOrCreateWallet, credit } = require("../services/walletService");
+const { Transaction } = require("../models/Transaction");
 const { HttpError } = require("../utils/httpError");
 
 const razorpayKeyId = process.env.RAZORPAY_KEY_ID || "";
@@ -65,6 +66,35 @@ async function createRechargeOrder(req, res) {
   });
 }
 
+async function walletHistory(req, res) {
+  const limit = Math.min(Math.max(Number(req.query.limit || 25), 1), 200);
+  const cursor = req.query.cursor ? String(req.query.cursor) : null;
+
+  const query = { workspaceId: req.workspace.id };
+  if (cursor) {
+    query._id = { $lt: cursor };
+  }
+
+  const items = await Transaction.find(query).sort({ _id: -1 }).limit(limit + 1);
+  const hasMore = items.length > limit;
+  const page = hasMore ? items.slice(0, limit) : items;
+
+  res.json({
+    success: true,
+    transactions: page.map((t) => ({
+      id: String(t._id),
+      type: t.type,
+      amount: t.amount,
+      currency: t.currency,
+      reason: t.reason,
+      provider: t.provider,
+      providerRef: t.providerRef,
+      createdAt: t.createdAt,
+    })),
+    nextCursor: hasMore ? String(page[page.length - 1]?._id) : null,
+  });
+}
+
 async function razorpayWebhook(req, res) {
   if (!razorpayWebhookSecret) throw new HttpError(400, "RAZORPAY_WEBHOOK_SECRET not configured");
 
@@ -102,4 +132,4 @@ async function razorpayWebhook(req, res) {
   return res.json({ success: true });
 }
 
-module.exports = { getWallet, createRechargeOrder, razorpayWebhook };
+module.exports = { getWallet, createRechargeOrder, walletHistory, razorpayWebhook };

@@ -32,4 +32,12 @@ async function findTenantByPhoneNumberId(phoneNumberId) {
   return doc || null;
 }
 
-module.exports = { getCredentialsForUser, findTenantByPhoneNumberId };
+async function findTenantByWabaId(wabaId) {
+  const businessAccountIdHash = hashForLookup(wabaId);
+  const doc = await WhatsAppCredentials.findOne({ businessAccountIdHash }).select(
+    "workspaceId businessAccountIdHash"
+  );
+  return doc || null;
+}
+
+module.exports = { getCredentialsForUser, findTenantByPhoneNumberId, findTenantByWabaId };

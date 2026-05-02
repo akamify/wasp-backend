@@ -42,7 +42,7 @@ async function ensureDefaultWorkspace(user) {
 }
 
 async function register(req, res) {
-  const { email, password, name } = req.body;
+  const { email, password, name, phone } = req.body;
 
   const existing = await User.findOne({ email: String(email).toLowerCase() }).select("_id");
   if (existing) throw new HttpError(409, "Email already registered");
@@ -51,7 +51,7 @@ async function register(req, res) {
   const apiKey = generateApiKey();
   const apiKeyHash = sha256Hex(apiKey);
 
-  const user = await User.create({ email, passwordHash, name, apiKeyHash });
+  const user = await User.create({ email, passwordHash, name, phone, apiKeyHash });
   const workspace = await Workspace.create({
     ownerId: user._id,
     name: name ? `${String(name).trim()}'s workspace` : "My workspace",
@@ -63,14 +63,14 @@ async function register(req, res) {
     token,
     apiKey, // show once; store only the hash
     workspace: { id: workspace._id, name: workspace.name, plan: workspace.plan },
-    user: { id: user._id, email: user.email, name: user.name, role: user.role },
+    user: { id: user._id, email: user.email, name: user.name, phone: user.phone, role: user.role },
   });
 }
 
 async function login(req, res) {
   const { email, password } = req.body;
   const user = await User.findOne({ email: String(email).toLowerCase() }).select(
-    "+passwordHash role email name"
+    "+passwordHash role email name phone"
   );
   if (!user) throw new HttpError(401, "Invalid credentials");
 
@@ -84,12 +84,12 @@ async function login(req, res) {
     success: true,
     token,
     workspace: { id: workspace._id, name: workspace.name, plan: workspace.plan },
-    user: { id: user._id, email: user.email, name: user.name, role: user.role },
+    user: { id: user._id, email: user.email, name: user.name, phone: user.phone, role: user.role },
   });
 }
 
 async function me(req, res) {
-  const user = await User.findById(req.user.id).select("email name role createdAt");
+  const user = await User.findById(req.user.id).select("email name phone role createdAt");
   if (!user) throw new HttpError(404, "User not found");
   let workspace = await Workspace.findOne({
     _id: req.user.workspaceId,
@@ -105,6 +105,7 @@ async function me(req, res) {
       id: String(user._id),
       email: user.email,
       name: user.name,
+      phone: user.phone,
       role: user.role,
       createdAt: user.createdAt,
     },
@@ -122,4 +123,29 @@ async function rotateApiKey(req, res) {
   res.json({ success: true, apiKey });
 }
 
-module.exports = { register, login, me, rotateApiKey };
+async function updateProfile(req, res) {
+  const { name, phone } = req.body;
+
+  const update = {};
+  if (name !== undefined) update.name = name;
+  if (phone !== undefined) update.phone = phone;
+
+  const user = await User.findByIdAndUpdate(req.user.id, { $set: update }, { new: true }).select(
+    "email name phone role createdAt"
+  );
+  if (!user) throw new HttpError(404, "User not found");
+
+  res.json({
+    success: true,
+    user: {
+      id: String(user._id),
+      email: user.email,
+      name: user.name,
+      phone: user.phone,
+      role: user.role,
+      createdAt: user.createdAt,
+    },
+  });
+}
+
+module.exports = { register, login, me, rotateApiKey, updateProfile };

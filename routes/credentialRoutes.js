@@ -25,6 +25,8 @@ router.put(
       businessAccountId: Joi.string().min(3).optional(),
       wabaId: Joi.string().min(3).optional(),
       graphApiVersion: Joi.string().pattern(/^v\d+\.\d+$/).optional(),
+      override: Joi.boolean().optional(),
+      overrideReason: Joi.string().trim().max(400).allow("", null).optional(),
     }).or("businessAccountId", "wabaId")
   ),
   asyncHandler(upsertCredentials)

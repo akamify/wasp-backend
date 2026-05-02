@@ -14,8 +14,11 @@ const {
   syncStatus,
   syncMetaTemplates,
 } = require("../controllers/templateController");
+const { uploadTemplateMedia } = require("../controllers/templateMediaController");
+const multer = require("multer");
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 const templateSchema = Joi.object({
   name: Joi.string().regex(/^[a-z0-9_]+$/).min(3).max(512).required(),
@@ -26,6 +29,7 @@ const templateSchema = Joi.object({
   metaTemplateId: Joi.forbidden(),
 });
 
+router.post("/media", auth, requireWorkspace, upload.single("file"), asyncHandler(uploadTemplateMedia));
 router.post("/", auth, requireWorkspace, validate(templateSchema), asyncHandler(createTemplate));
 router.get("/", auth, requireWorkspace, asyncHandler(listTemplates));
 router.post(
