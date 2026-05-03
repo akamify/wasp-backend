@@ -26,7 +26,15 @@ async function verify(req, res) {
   const challenge = req.query["hub.challenge"];
 
   if (mode === "subscribe" && token && token === metaWebhookVerifyToken) {
+    if (String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true") {
+      // eslint-disable-next-line no-console
+      console.log("Webhook verify OK.");
+    }
     return res.status(200).send(challenge);
+  }
+  if (String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true") {
+    // eslint-disable-next-line no-console
+    console.warn("Webhook verify FAILED.", { mode, tokenPresent: !!token });
   }
   return res.sendStatus(403);
 }
@@ -34,6 +42,15 @@ async function verify(req, res) {
 async function receive(req, res) {
   const body = req.body;
   if (!body) return res.sendStatus(400);
+
+  const debug = String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true";
+  if (debug) {
+    // eslint-disable-next-line no-console
+    console.log("Webhook received.", {
+      object: body?.object,
+      entries: Array.isArray(body?.entry) ? body.entry.length : 0,
+    });
+  }
 
   const entries = Array.isArray(body.entry) ? body.entry : [];
 
@@ -48,6 +65,13 @@ async function receive(req, res) {
         const wabaId = entry?.id ? String(entry.id) : "";
         if (!wabaId) continue;
         const tenant = await findTenantByWabaId(wabaId);
+        if (!tenant) {
+          if (debug) {
+            // eslint-disable-next-line no-console
+            console.warn("Webhook quality_update: tenant not found for wabaId.", wabaId);
+          }
+          continue;
+        }
         if (!tenant) continue;
 
         const currentLimit = value?.current_limit ? String(value.current_limit) : "";
@@ -64,13 +88,29 @@ async function receive(req, res) {
 
       // 2) Message + status webhooks (canonical) - route by phone number id
       const phoneNumberId = value?.metadata?.phone_number_id;
-      if (!phoneNumberId) continue;
+      if (!phoneNumberId) {
+        if (debug) {
+          // eslint-disable-next-line no-console
+          console.warn("Webhook change missing metadata.phone_number_id.", { field });
+        }
+        continue;
+      }
 
       const tenant = await findTenantByPhoneNumberId(phoneNumberId);
-      if (!tenant) continue;
+      if (!tenant) {
+        if (debug) {
+          // eslint-disable-next-line no-console
+          console.warn("Webhook: tenant not found for phone_number_id.", phoneNumberId);
+        }
+        continue;
+      }
       const workspaceId = tenant.workspaceId;
 
       const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
+      if (debug && statuses.length) {
+        // eslint-disable-next-line no-console
+        console.log("Webhook statuses:", statuses.map((s) => ({ id: s?.id, status: s?.status })));
+      }
       for (const s of statuses) {
         const waId = s.id;
         if (!waId) continue;
@@ -106,6 +146,10 @@ async function receive(req, res) {
       }
 
       const messages = Array.isArray(value?.messages) ? value.messages : [];
+      if (debug && messages.length) {
+        // eslint-disable-next-line no-console
+        console.log("Webhook inbound messages:", messages.map((m) => ({ id: m?.id, from: m?.from, type: m?.type })));
+      }
       for (const m of messages) {
         const waId = m.id;
         const from = normalizePhone(m.from);
