@@ -1,6 +1,7 @@
 const { metaWebhookVerifyToken } = require("../config/env");
 const { findTenantByPhoneNumberId, findTenantByWabaId } = require("../services/credentialsService");
 const { Message } = require("../models/Message");
+const mongoose = require("mongoose");
 const { touchConversation } = require("../services/conversationService");
 const { normalizePhone, touchContactFromMessage } = require("../services/contactService");
 const { WhatsAppCredentials } = require("../models/WhatsAppCredentials");
@@ -122,7 +123,8 @@ async function receive(req, res) {
         }
         continue;
       }
-      const workspaceId = String(tenant.workspaceId);
+      const workspaceIdRaw = tenant?.workspaceId ? String(tenant.workspaceId) : "";
+      const hasValidWorkspaceId = mongoose.Types.ObjectId.isValid(workspaceIdRaw);
 
       const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
       if (statuses.length) {
@@ -162,31 +164,54 @@ async function receive(req, res) {
         if (newStatus === "failed") set["statusTimestamps.failedAt"] = ts;
 
         try {
+          const filter = hasValidWorkspaceId
+            ? { workspaceId: workspaceIdRaw, whatsappMessageId: waId }
+            : { whatsappMessageId: waId };
+          const update = hasValidWorkspaceId
+            ? {
+                $set: set,
+                $setOnInsert: {
+                  workspaceId: workspaceIdRaw,
+                  // Keep phone only in $set to avoid Mongo conflicting update operators.
+                  // When recipient_id is missing in status webhook, fallback to placeholder.
+                  ...(phone ? {} : { phone: "unknown" }),
+                  direction: "outbound",
+                  "statusTimestamps.acceptedAt": new Date(),
+                },
+              }
+            : { $set: set };
+
           await Message.findOneAndUpdate(
-            { workspaceId, whatsappMessageId: waId },
+            filter,
+            update,
             {
-              $set: set,
-              $setOnInsert: {
-                workspaceId,
-                // Keep phone only in $set to avoid Mongo conflicting update operators.
-                // When recipient_id is missing in status webhook, fallback to placeholder.
-                ...(phone ? {} : { phone: "unknown" }),
-                direction: "outbound",
-                "statusTimestamps.acceptedAt": new Date(),
-              },
-            },
-            { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
+              upsert: hasValidWorkspaceId,
+              returnDocument: "after",
+              setDefaultsOnInsert: hasValidWorkspaceId,
+            }
           );
+
+          if (!hasValidWorkspaceId) {
+            pushWebhookDebugEvent({
+              type: "tenant_workspace_missing",
+              waId,
+              phoneNumberId: String(phoneNumberId),
+            });
+          }
         } catch (statusErr) {
           pushWebhookDebugEvent({
             type: "status_update_error",
             waId,
-            workspaceId,
+            workspaceId: workspaceIdRaw || null,
             error: statusErr?.message || "Failed to upsert status",
           });
           if (debug) {
             // eslint-disable-next-line no-console
-            console.error("Webhook status upsert failed.", { waId, workspaceId, error: statusErr?.message });
+            console.error("Webhook status upsert failed.", {
+              waId,
+              workspaceId: workspaceIdRaw || null,
+              error: statusErr?.message,
+            });
           }
         }
       }
@@ -219,10 +244,10 @@ async function receive(req, res) {
 
         try {
           await Message.findOneAndUpdate(
-            { workspaceId, whatsappMessageId: waId },
+            { workspaceId: workspaceIdRaw, whatsappMessageId: waId },
             {
               $set: {
-                workspaceId,
+                workspaceId: workspaceIdRaw,
                 phone: from,
                 direction: "inbound",
                 status: "received",
@@ -235,14 +260,14 @@ async function receive(req, res) {
           );
 
           await touchConversation({
-            userId: workspaceId,
+            userId: workspaceIdRaw,
             phone: from,
             lastMessageAt: ts,
             lastMessagePreview: text.slice(0, 160),
             incrementUnread: true,
           });
           await touchContactFromMessage({
-            userId: workspaceId,
+            userId: workspaceIdRaw,
             phone: from,
             direction: "inbound",
             preview: text.slice(0, 160),
@@ -252,12 +277,16 @@ async function receive(req, res) {
           pushWebhookDebugEvent({
             type: "inbound_update_error",
             waId,
-            workspaceId,
+            workspaceId: workspaceIdRaw || null,
             error: messageErr?.message || "Failed to upsert inbound message",
           });
           if (debug) {
             // eslint-disable-next-line no-console
-            console.error("Webhook inbound upsert failed.", { waId, workspaceId, error: messageErr?.message });
+            console.error("Webhook inbound upsert failed.", {
+              waId,
+              workspaceId: workspaceIdRaw || null,
+              error: messageErr?.message,
+            });
           }
         }
       }
