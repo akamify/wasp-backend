@@ -122,7 +122,7 @@ async function receive(req, res) {
         }
         continue;
       }
-      const workspaceId = tenant.workspaceId;
+      const workspaceId = String(tenant.workspaceId);
 
       const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
       if (statuses.length) {
