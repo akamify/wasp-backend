@@ -5,6 +5,19 @@ const { touchConversation } = require("../services/conversationService");
 const { normalizePhone, touchContactFromMessage } = require("../services/contactService");
 const { WhatsAppCredentials } = require("../models/WhatsAppCredentials");
 
+const WEBHOOK_DEBUG_LIMIT = 40;
+const webhookDebugEvents = [];
+
+function pushWebhookDebugEvent(event) {
+  webhookDebugEvents.unshift({
+    at: new Date().toISOString(),
+    ...event,
+  });
+  if (webhookDebugEvents.length > WEBHOOK_DEBUG_LIMIT) {
+    webhookDebugEvents.length = WEBHOOK_DEBUG_LIMIT;
+  }
+}
+
 function asDateFromSeconds(seconds) {
   const n = Number(seconds);
   if (!Number.isFinite(n) || n <= 0) return new Date();
@@ -42,6 +55,11 @@ async function verify(req, res) {
 async function receive(req, res) {
   const body = req.body;
   if (!body) return res.sendStatus(400);
+  pushWebhookDebugEvent({
+    type: "incoming",
+    object: body?.object || null,
+    entries: Array.isArray(body?.entry) ? body.entry.length : 0,
+  });
 
   const debug = String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true";
   if (debug) {
@@ -107,6 +125,19 @@ async function receive(req, res) {
       const workspaceId = tenant.workspaceId;
 
       const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
+      if (statuses.length) {
+        pushWebhookDebugEvent({
+          type: "statuses",
+          field,
+          phoneNumberId: String(phoneNumberId),
+          statuses: statuses.map((s) => ({
+            id: s?.id || null,
+            status: s?.status || null,
+            recipient_id: s?.recipient_id || null,
+            timestamp: s?.timestamp || null,
+          })),
+        });
+      }
       if (debug && statuses.length) {
         // eslint-disable-next-line no-console
         console.log("Webhook statuses:", statuses.map((s) => ({ id: s?.id, status: s?.status })));
@@ -146,6 +177,19 @@ async function receive(req, res) {
       }
 
       const messages = Array.isArray(value?.messages) ? value.messages : [];
+      if (messages.length) {
+        pushWebhookDebugEvent({
+          type: "messages",
+          field,
+          phoneNumberId: String(phoneNumberId),
+          messages: messages.map((m) => ({
+            id: m?.id || null,
+            from: m?.from || null,
+            type: m?.type || null,
+            timestamp: m?.timestamp || null,
+          })),
+        });
+      }
       if (debug && messages.length) {
         // eslint-disable-next-line no-console
         console.log("Webhook inbound messages:", messages.map((m) => ({ id: m?.id, from: m?.from, type: m?.type })));
@@ -195,4 +239,13 @@ async function receive(req, res) {
   return res.sendStatus(200);
 }
 
-module.exports = { verify, receive };
+async function listWebhookDebugEvents(req, res) {
+  const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), WEBHOOK_DEBUG_LIMIT);
+  return res.json({
+    success: true,
+    count: Math.min(limit, webhookDebugEvents.length),
+    events: webhookDebugEvents.slice(0, limit),
+  });
+}
+
+module.exports = { verify, receive, listWebhookDebugEvents };

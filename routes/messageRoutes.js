@@ -10,6 +10,7 @@ const {
   bulkSend,
   listLogs,
   messagesByPhone,
+  messageStatusByWaId,
 } = require("../controllers/messageController");
 const { uploadMessageMedia } = require("../controllers/messageMediaController");
 const multer = require("multer");
@@ -88,6 +89,7 @@ router.post(
 );
 
 router.get("/logs", auth, requireWorkspace, asyncHandler(listLogs));
+router.get("/status/:waId", auth, requireWorkspace, asyncHandler(messageStatusByWaId));
 router.get("/:phone", auth, requireWorkspace, asyncHandler(messagesByPhone));
 
 module.exports = router;

@@ -1,13 +1,21 @@
 const express = require("express");
 const { asyncHandler } = require("../utils/asyncHandler");
 const { verifyWebhookSignature } = require("../middleware/webhookSignature");
-const { verify, receive } = require("../controllers/webhookController");
+const { verify, receive, listWebhookDebugEvents } = require("../controllers/webhookController");
 const { razorpayWebhook } = require("../controllers/walletController");
+const { lookupSecret } = require("../config/env");
 
 const router = express.Router();
 
 // Simple healthcheck endpoint for validating that Meta can reach this service.
 router.get("/ping", (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+router.get("/debug/last", (req, res, next) => {
+  const token = String(req.query.token || "");
+  if (!lookupSecret || token !== lookupSecret) {
+    return res.status(403).json({ success: false, message: "Forbidden" });
+  }
+  return next();
+}, asyncHandler(listWebhookDebugEvents));
 
 router.get("/whatsapp", asyncHandler(verify));
 router.post("/whatsapp", verifyWebhookSignature, asyncHandler(receive));

@@ -271,4 +271,30 @@ async function messagesByPhone(req, res) {
   res.json({ success: true, phone, messages: messages.reverse() });
 }
 
-module.exports = { sendTemplate, sendText, bulkSend, listLogs, messagesByPhone };
+async function messageStatusByWaId(req, res) {
+  const waId = String(req.params.waId || "").trim();
+  if (!waId) throw new HttpError(400, "Invalid WhatsApp message id");
+
+  const message = await Message.findOne({
+    workspaceId: req.workspace.id,
+    whatsappMessageId: waId,
+  });
+
+  if (!message) {
+    return res.status(404).json({
+      success: false,
+      message: "Message status not found yet",
+      waId,
+    });
+  }
+
+  return res.json({
+    success: true,
+    waId,
+    status: message.status,
+    statusTimestamps: message.statusTimestamps || {},
+    message,
+  });
+}
+
+module.exports = { sendTemplate, sendText, bulkSend, listLogs, messagesByPhone, messageStatusByWaId };
