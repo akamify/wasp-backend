@@ -161,21 +161,34 @@ async function receive(req, res) {
         if (newStatus === "read") set["statusTimestamps.readAt"] = ts;
         if (newStatus === "failed") set["statusTimestamps.failedAt"] = ts;
 
-        await Message.findOneAndUpdate(
-          { workspaceId, whatsappMessageId: waId },
-          {
-            $set: set,
-            $setOnInsert: {
-              workspaceId,
-              // Keep phone only in $set to avoid Mongo conflicting update operators.
-              // When recipient_id is missing in status webhook, fallback to placeholder.
-              ...(phone ? {} : { phone: "unknown" }),
-              direction: "outbound",
-              "statusTimestamps.acceptedAt": new Date(),
+        try {
+          await Message.findOneAndUpdate(
+            { workspaceId, whatsappMessageId: waId },
+            {
+              $set: set,
+              $setOnInsert: {
+                workspaceId,
+                // Keep phone only in $set to avoid Mongo conflicting update operators.
+                // When recipient_id is missing in status webhook, fallback to placeholder.
+                ...(phone ? {} : { phone: "unknown" }),
+                direction: "outbound",
+                "statusTimestamps.acceptedAt": new Date(),
+              },
             },
-          },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
+            { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
+          );
+        } catch (statusErr) {
+          pushWebhookDebugEvent({
+            type: "status_update_error",
+            waId,
+            workspaceId,
+            error: statusErr?.message || "Failed to upsert status",
+          });
+          if (debug) {
+            // eslint-disable-next-line no-console
+            console.error("Webhook status upsert failed.", { waId, workspaceId, error: statusErr?.message });
+          }
+        }
       }
 
       const messages = Array.isArray(value?.messages) ? value.messages : [];
@@ -204,36 +217,49 @@ async function receive(req, res) {
         const ts = asDateFromSeconds(m.timestamp);
         const text = m.text?.body || (m.type ? `[${m.type}]` : "");
 
-        await Message.findOneAndUpdate(
-          { workspaceId, whatsappMessageId: waId },
-          {
-            $set: {
-              workspaceId,
-              phone: from,
-              direction: "inbound",
-              status: "received",
-              "statusTimestamps.receivedAt": ts,
-              text,
+        try {
+          await Message.findOneAndUpdate(
+            { workspaceId, whatsappMessageId: waId },
+            {
+              $set: {
+                workspaceId,
+                phone: from,
+                direction: "inbound",
+                status: "received",
+                "statusTimestamps.receivedAt": ts,
+                text,
+              },
+              $setOnInsert: { createdAt: ts },
             },
-            $setOnInsert: { createdAt: ts },
-          },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
+            { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
+          );
 
-        await touchConversation({
-          userId: workspaceId,
-          phone: from,
-          lastMessageAt: ts,
-          lastMessagePreview: text.slice(0, 160),
-          incrementUnread: true,
-        });
-        await touchContactFromMessage({
-          userId: workspaceId,
-          phone: from,
-          direction: "inbound",
-          preview: text.slice(0, 160),
-          occurredAt: ts,
-        });
+          await touchConversation({
+            userId: workspaceId,
+            phone: from,
+            lastMessageAt: ts,
+            lastMessagePreview: text.slice(0, 160),
+            incrementUnread: true,
+          });
+          await touchContactFromMessage({
+            userId: workspaceId,
+            phone: from,
+            direction: "inbound",
+            preview: text.slice(0, 160),
+            occurredAt: ts,
+          });
+        } catch (messageErr) {
+          pushWebhookDebugEvent({
+            type: "inbound_update_error",
+            waId,
+            workspaceId,
+            error: messageErr?.message || "Failed to upsert inbound message",
+          });
+          if (debug) {
+            // eslint-disable-next-line no-console
+            console.error("Webhook inbound upsert failed.", { waId, workspaceId, error: messageErr?.message });
+          }
+        }
       }
     }
   }
