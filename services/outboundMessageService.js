@@ -18,6 +18,9 @@ async function sendTemplateMessageForUser({
   headerVariables,
   otpCode,
   buttonValues,
+  buttonTtlMinutes,
+  flowTokens,
+  flowActionData,
 }) {
   const creds = await getCredentialsForUser(userId);
   const normalizedTemplate = normalizeTemplate(template.toObject ? template.toObject() : template);
@@ -26,6 +29,9 @@ async function sendTemplateMessageForUser({
     headerVariables,
     otpCode,
     buttonValues,
+    buttonTtlMinutes,
+    flowTokens,
+    flowActionData,
   });
   const previewText = renderTemplatePreview(normalizedTemplate, {
     variables,
@@ -46,13 +52,15 @@ async function sendTemplateMessageForUser({
   const waMessageId = Array.isArray(apiResponse?.messages)
     ? apiResponse.messages[0]?.id
     : undefined;
+  const waId = Array.isArray(apiResponse?.contacts) ? apiResponse.contacts[0]?.wa_id : undefined;
+  const resolvedPhone = waId ? String(waId) : to;
 
   const now = new Date();
 
   const message = await Message.create({
     workspaceId: userId,
     templateId: normalizedTemplate._id,
-    phone: to,
+    phone: resolvedPhone,
     direction: "outbound",
     whatsappMessageId: waMessageId,
     status: "accepted",
@@ -69,6 +77,9 @@ async function sendTemplateMessageForUser({
         headerVariables: headerVariables || [],
         otpCode: otpCode || "",
         buttonValues: buttonValues || [],
+        buttonTtlMinutes: buttonTtlMinutes || [],
+        flowTokens: flowTokens || [],
+        flowActionData: flowActionData || [],
       },
       components: sendComponents,
     },
@@ -76,14 +87,14 @@ async function sendTemplateMessageForUser({
 
   await touchConversation({
     userId,
-    phone: to,
+    phone: resolvedPhone,
     lastMessageAt: now,
     lastMessagePreview: previewText,
     incrementUnread: false,
   });
   await touchContactFromMessage({
     userId,
-    phone: to,
+    phone: resolvedPhone,
     direction: "outbound",
     preview: previewText,
     occurredAt: now,
@@ -103,11 +114,13 @@ async function sendTextMessageForUser({ userId, to, text }) {
   });
 
   const waMessageId = Array.isArray(apiResponse?.messages) ? apiResponse.messages[0]?.id : undefined;
+  const waId = Array.isArray(apiResponse?.contacts) ? apiResponse.contacts[0]?.wa_id : undefined;
+  const resolvedPhone = waId ? String(waId) : to;
   const now = new Date();
 
   const message = await Message.create({
     workspaceId: userId,
-    phone: to,
+    phone: resolvedPhone,
     direction: "outbound",
     whatsappMessageId: waMessageId,
     status: "accepted",
@@ -116,8 +129,8 @@ async function sendTextMessageForUser({ userId, to, text }) {
     payload: { to, text },
   });
 
-  await touchConversation({ userId, phone: to, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
-  await touchContactFromMessage({ userId, phone: to, direction: "outbound", preview: text, occurredAt: now });
+  await touchConversation({ userId, phone: resolvedPhone, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
+  await touchContactFromMessage({ userId, phone: resolvedPhone, direction: "outbound", preview: text, occurredAt: now });
 
   return { message, apiResponse };
 }

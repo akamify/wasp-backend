@@ -103,6 +103,41 @@ function normalizeButton(button, category) {
     };
   }
 
+  if (type === "VOICE_CALL") {
+    const text = toTrimmedString(button?.text);
+    invariant(text, "Call on WhatsApp button text is required");
+
+    return {
+      type: "VOICE_CALL",
+      text,
+    };
+  }
+
+  if (type === "FLOW") {
+    const text = toTrimmedString(button?.text);
+    const flowId = toTrimmedString(button?.flow_id || button?.flowId || button?.flow_id);
+    invariant(text, "Flow button text is required");
+    invariant(flowId, "Flow button flow_id is required");
+
+    return {
+      type: "FLOW",
+      text,
+      flow_id: flowId,
+    };
+  }
+
+  if (type === "COPY_CODE") {
+    invariant(category === "marketing", "Copy Offer Code is supported only for marketing templates");
+
+    const text = toTrimmedString(button?.text);
+    invariant(text, "Copy offer code button text is required");
+
+    return {
+      type: "COPY_CODE",
+      text,
+    };
+  }
+
   if (type === "OTP" && category === "authentication") {
     return { ...AUTH_OTP_BUTTON };
   }
@@ -185,8 +220,11 @@ function normalizeStandardComponents(category, components) {
   invariant(hasBody, "BODY component is required");
 
   const buttonComponent = normalized.find((component) => component.type === "BUTTONS");
-  if (category === "utility" && buttonComponent?.buttons?.length > 1) {
-    throw new HttpError(400, "Utility templates support at most one button");
+  if (buttonComponent?.buttons?.length > 10) {
+    throw new HttpError(400, "Templates support at most 10 buttons");
+  }
+  if (buttonComponent?.buttons?.filter((button) => toUpper(button?.type) === "FLOW").length > 1) {
+    throw new HttpError(400, "Templates support at most one Flow button");
   }
 
   return normalized;
@@ -242,6 +280,9 @@ function validateBeforeSend(template, data = {}) {
   const variables = ensureStringArray(data.variables);
   const headerVariables = ensureStringArray(data.headerVariables);
   const buttonValues = ensureStringArray(data.buttonValues);
+  const buttonTtlMinutes = ensureArray(data.buttonTtlMinutes);
+  const flowTokens = ensureStringArray(data.flowTokens);
+  const flowActionData = ensureArray(data.flowActionData);
 
   for (const component of ensureArray(template?.components)) {
     const compType = toUpper(component?.type);
@@ -290,6 +331,31 @@ function validateBeforeSend(template, data = {}) {
         if (buttonType === "URL" && hasDynamicUrl(button?.url)) {
           invariant(runtimeValue, `Dynamic URL value required for button ${index + 1}`);
         }
+
+        if (buttonType === "VOICE_CALL") {
+          const ttlRaw = buttonTtlMinutes[index] ?? runtimeValue ?? "";
+          const ttl = Number(ttlRaw);
+          invariant(
+            Number.isFinite(ttl) && ttl >= 1 && ttl <= 43200,
+            `Voice call validity (ttl_minutes) must be between 1 and 43200 for button ${index + 1}`
+          );
+        }
+
+        if (buttonType === "FLOW") {
+          const token = toTrimmedString(flowTokens[index] ?? "");
+          const action = flowActionData[index];
+          if (token) {
+            // token is optional, but if present it must be non-empty string already trimmed.
+            invariant(token.length <= 512, `Flow token too long for button ${index + 1}`);
+          }
+          if (action !== undefined && action !== null && typeof action !== "object") {
+            invariant(false, `Flow action data must be an object for button ${index + 1}`);
+          }
+        }
+
+        if (buttonType === "COPY_CODE") {
+          invariant(runtimeValue, `Offer code required for button ${index + 1}`);
+        }
       });
     }
   }
@@ -298,6 +364,9 @@ function validateBeforeSend(template, data = {}) {
 function buildButtonComponent(button, index, data) {
   const buttonType = toUpper(button?.type);
   const buttonValues = ensureStringArray(data.buttonValues);
+  const buttonTtlMinutes = ensureArray(data.buttonTtlMinutes);
+  const flowTokens = ensureStringArray(data.flowTokens);
+  const flowActionData = ensureArray(data.flowActionData);
   const runtimeValue = getButtonRuntimeValue(
     { ...button, __runtimeIndex: index },
     buttonValues,
@@ -341,6 +410,59 @@ function buildButtonComponent(button, index, data) {
         {
           type: "payload",
           payload: runtimeValue,
+        },
+      ],
+    };
+  }
+
+  if (buttonType === "VOICE_CALL") {
+    const ttlRaw = buttonTtlMinutes[index] ?? runtimeValue ?? "";
+    const ttl = Number(ttlRaw);
+    if (!Number.isFinite(ttl) || ttl < 1 || ttl > 43200) return null;
+
+    return {
+      type: "button",
+      sub_type: "voice_call",
+      index: String(index),
+      parameters: [
+        {
+          type: "ttl_minutes",
+          ttl_minutes: ttl,
+        },
+      ],
+    };
+  }
+
+  if (buttonType === "FLOW") {
+    const token = toTrimmedString(flowTokens[index] ?? "");
+    const action = flowActionData[index];
+
+    const actionPayload = {};
+    if (token) actionPayload.flow_token = token;
+    if (action && typeof action === "object") actionPayload.flow_action_data = action;
+
+    return {
+      type: "button",
+      sub_type: "flow",
+      index: String(index),
+      parameters: [
+        {
+          type: "action",
+          ...(Object.keys(actionPayload).length > 0 ? { action: actionPayload } : {}),
+        },
+      ],
+    };
+  }
+
+  if (buttonType === "COPY_CODE" && runtimeValue) {
+    return {
+      type: "button",
+      sub_type: "copy_code",
+      index: String(index),
+      parameters: [
+        {
+          type: "coupon_code",
+          coupon_code: runtimeValue,
         },
       ],
     };

@@ -7,6 +7,7 @@ const { validate } = require("../middleware/validate");
 const { saveMetaCredentials } = require("../controllers/metaCredentialsController");
 const { metaStatus } = require("../controllers/metaStatusController");
 const { updateBusinessProfile, uploadProfilePicture } = require("../controllers/metaProfileController");
+const { listFlows, createFlow } = require("../controllers/metaFlowsController");
 const multer = require("multer");
 
 const router = express.Router();
@@ -55,6 +56,20 @@ router.post(
   requireWorkspace,
   upload.single("file"),
   asyncHandler(uploadProfilePicture)
+);
+
+router.get("/flows", auth, requireWorkspace, asyncHandler(listFlows));
+router.post(
+  "/flows",
+  auth,
+  requireWorkspace,
+  validate(
+    Joi.object({
+      name: Joi.string().trim().min(2).max(128).required(),
+      categories: Joi.array().items(Joi.string().max(64)).min(1).max(5).optional(),
+    })
+  ),
+  asyncHandler(createFlow)
 );
 
 module.exports = router;

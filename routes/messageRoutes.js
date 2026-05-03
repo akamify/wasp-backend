@@ -37,6 +37,9 @@ router.post(
       otpCode: Joi.string().trim().min(1).optional(),
 
       buttonValues: Joi.array().items(Joi.string().allow("")).optional(),
+      buttonTtlMinutes: Joi.array().items(Joi.number().integer().min(1).max(43200)).optional(),
+      flowTokens: Joi.array().items(Joi.string().max(512).allow("")).optional(),
+      flowActionData: Joi.array().items(Joi.object().unknown(true)).optional(),
     })
   ),
   asyncHandler(sendTemplate)
@@ -72,6 +75,9 @@ router.post(
             headerVariables: Joi.array().items(Joi.string().allow("")).optional(),
             otpCode: Joi.string().trim().min(1).optional(),
             buttonValues: Joi.array().items(Joi.string().allow("")).optional(),
+            buttonTtlMinutes: Joi.array().items(Joi.number().integer().min(1).max(43200)).optional(),
+            flowTokens: Joi.array().items(Joi.string().max(512).allow("")).optional(),
+            flowActionData: Joi.array().items(Joi.object().unknown(true)).optional(),
           }).required()
         )
         .min(1)

@@ -59,6 +59,9 @@ async function sendTemplate(req, res) {
     headerVariables,
     otpCode,
     buttonValues,
+    buttonTtlMinutes,
+    flowTokens,
+    flowActionData,
     languageCode,
   } = req.body;
   const normalizedPhone = assertNormalizedPhone(to);
@@ -87,6 +90,9 @@ async function sendTemplate(req, res) {
       headerVariables,
       otpCode,
       buttonValues,
+      buttonTtlMinutes,
+      flowTokens,
+      flowActionData,
     });
 
     res.json({
@@ -160,6 +166,9 @@ async function bulkSend(req, res) {
           headerVariables: r.headerVariables,
           otpCode: r.otpCode,
           buttonValues: r.buttonValues,
+          buttonTtlMinutes: r.buttonTtlMinutes,
+          flowTokens: r.flowTokens,
+          flowActionData: r.flowActionData,
         });
 
         results.push({
