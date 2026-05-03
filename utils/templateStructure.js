@@ -63,6 +63,26 @@ function normalizeAuthSecurityRecommendation(components) {
   return true;
 }
 
+function normalizeAuthSupportedApps(button) {
+  const supportedApps = Array.isArray(button?.supported_apps)
+    ? button.supported_apps
+    : toTrimmedString(button?.package_name || button?.packageName) || toTrimmedString(button?.signature_hash || button?.signatureHash)
+      ? [
+          {
+            package_name: button?.package_name || button?.packageName,
+            signature_hash: button?.signature_hash || button?.signatureHash,
+          },
+        ]
+      : [];
+
+  return supportedApps
+    .map((app) => ({
+      package_name: toTrimmedString(app?.package_name || app?.packageName),
+      signature_hash: toTrimmedString(app?.signature_hash || app?.signatureHash),
+    }))
+    .filter((app) => app.package_name || app.signature_hash);
+}
+
 function normalizeButton(button, category) {
   const type = toUpper(button?.type);
 
@@ -116,13 +136,16 @@ function normalizeButton(button, category) {
   if (type === "FLOW") {
     const text = toTrimmedString(button?.text);
     const flowId = toTrimmedString(button?.flow_id || button?.flowId || button?.flow_id);
+    const icon = toUpper(button?.icon || button?.flow_icon || "DEFAULT");
     invariant(text, "Flow button text is required");
     invariant(flowId, "Flow button flow_id is required");
+    invariant(["DEFAULT", "DOCUMENT", "PROMOTION", "REVIEW"].includes(icon), "Invalid flow button icon");
 
     return {
       type: "FLOW",
       text,
       flow_id: flowId,
+      icon,
     };
   }
 
@@ -138,8 +161,34 @@ function normalizeButton(button, category) {
     };
   }
 
-  if (type === "OTP" && category === "authentication") {
-    return { ...AUTH_OTP_BUTTON };
+  if ((type === "OTP" || button?.otp_type || button?.otpType) && category === "authentication") {
+    const otpType = toUpper(button?.otp_type || button?.otpType || "COPY_CODE");
+    invariant(["COPY_CODE", "ONE_TAP", "ZERO_TAP"].includes(otpType), "Invalid authentication otp_type");
+    const supportedApps = normalizeAuthSupportedApps(button);
+
+    if (otpType !== "COPY_CODE") {
+      invariant(supportedApps.length > 0, "At least one supported app is required for autofill authentication");
+      invariant(supportedApps.length <= 5, "Authentication templates support at most 5 apps");
+    }
+    supportedApps.forEach((app, index) => {
+      invariant(app.package_name, `Package name is required for app ${index + 1}`);
+      invariant(app.signature_hash, `Signature hash is required for app ${index + 1}`);
+      invariant(app.signature_hash.length === 11, `Signature hash must be 11 characters for app ${index + 1}`);
+    });
+    if (otpType === "ZERO_TAP") {
+      invariant(button?.zero_tap_terms_accepted !== false, "Zero-tap terms must be accepted");
+    }
+    const primaryApp = supportedApps[0];
+
+    return {
+      type: "OTP",
+      otp_type: otpType,
+      text: toTrimmedString(button?.text) || "Copy code",
+      ...(otpType !== "COPY_CODE" ? { autofill_text: toTrimmedString(button?.autofill_text || button?.autofillText) || "Autofill" } : {}),
+      ...(primaryApp ? { package_name: primaryApp.package_name, signature_hash: primaryApp.signature_hash } : {}),
+      ...(supportedApps.length > 0 ? { supported_apps: supportedApps } : {}),
+      ...(otpType === "ZERO_TAP" ? { zero_tap_terms_accepted: true } : {}),
+    };
   }
 
   throw new HttpError(400, `Unsupported button type: ${button?.type || "unknown"}`);
@@ -223,22 +272,67 @@ function normalizeStandardComponents(category, components) {
   if (buttonComponent?.buttons?.length > 10) {
     throw new HttpError(400, "Templates support at most 10 buttons");
   }
-  if (buttonComponent?.buttons?.filter((button) => toUpper(button?.type) === "FLOW").length > 1) {
-    throw new HttpError(400, "Templates support at most one Flow button");
+  if (buttonComponent?.buttons?.length) {
+    const counts = new Map();
+    for (const button of buttonComponent.buttons) {
+      const t = toUpper(button?.type);
+      counts.set(t, (counts.get(t) || 0) + 1);
+    }
+
+    if ((counts.get("URL") || 0) > 2) throw new HttpError(400, "Visit Website buttons support at most 2");
+    if ((counts.get("QUICK_REPLY") || 0) > 10) throw new HttpError(400, "Quick Reply buttons support at most 10");
+
+    const singleTypes = ["FLOW", "VOICE_CALL", "PHONE_NUMBER", "COPY_CODE"];
+    for (const t of singleTypes) {
+      if ((counts.get(t) || 0) > 1) throw new HttpError(400, `${t} button supports at most 1`);
+    }
   }
 
   return normalized;
 }
 
 function normalizeAuthenticationComponents(components) {
+  const bodyComponent = ensureArray(components).find(
+    (component) => toUpper(component?.type) === "BODY"
+  );
+  const footerComponent = ensureArray(components).find(
+    (component) => toUpper(component?.type) === "FOOTER"
+  );
+  const buttonsComponent = ensureArray(components).find(
+    (component) => toUpper(component?.type) === "BUTTONS"
+  );
+
+  const addSecurity = normalizeAuthSecurityRecommendation(components);
+  const otpButton = ensureArray(buttonsComponent?.buttons)[0];
+  const hasExpiration =
+    Object.prototype.hasOwnProperty.call(footerComponent || {}, "code_expiration_minutes") ||
+    Object.prototype.hasOwnProperty.call(footerComponent || {}, "codeExpirationMinutes");
+  const expires = hasExpiration
+    ? Number(footerComponent?.code_expiration_minutes ?? footerComponent?.codeExpirationMinutes)
+    : null;
+  if (hasExpiration) {
+    invariant(Number.isFinite(expires) && expires >= 1 && expires <= 90, "code_expiration_minutes must be between 1 and 90");
+  }
+
   return [
     {
       type: "BODY",
-      add_security_recommendation: normalizeAuthSecurityRecommendation(components),
+      add_security_recommendation:
+        typeof bodyComponent?.add_security_recommendation === "boolean"
+          ? bodyComponent.add_security_recommendation
+          : addSecurity,
     },
+    ...(hasExpiration
+      ? [
+          {
+            type: "FOOTER",
+            code_expiration_minutes: expires,
+          },
+        ]
+      : []),
     {
       type: "BUTTONS",
-      buttons: [{ ...AUTH_OTP_BUTTON }],
+      buttons: [otpButton ? normalizeButton(otpButton, "authentication") : { ...AUTH_OTP_BUTTON }],
     },
   ];
 }

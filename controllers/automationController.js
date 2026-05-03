@@ -4,7 +4,7 @@ const { HttpError } = require("../utils/httpError");
 const { sendTemplateMessageForUser } = require("../services/outboundMessageService");
 const { getCredentialsForUser } = require("../services/credentialsService");
 const { assertNormalizedPhone } = require("../services/contactService");
-const { debit, credit, messageCost } = require("../services/walletService");
+const { debit, credit, messageCostForTemplateCategory } = require("../services/walletService");
 
 async function triggerEvent(req, res) {
   const {
@@ -36,8 +36,9 @@ async function triggerEvent(req, res) {
     status: "triggered",
   });
 
+  const chargeAmount = messageCostForTemplateCategory(template.category, 1);
   try {
-    await debit(req.workspace.id, messageCost(1), "Message send (automation)", {
+    await debit(req.workspace.id, chargeAmount, "Message send (automation)", {
       templateId: String(template._id),
       to: normalizedPhone,
       eventName,
@@ -63,7 +64,7 @@ async function triggerEvent(req, res) {
 
     if (err?.response) {
       try {
-        await credit(req.workspace.id, messageCost(1), "Message refund (automation failed)", "internal", "", {
+        await credit(req.workspace.id, chargeAmount, "Message refund (automation failed)", "internal", "", {
           templateId: String(template._id),
           to: normalizedPhone,
           eventName,

@@ -2,7 +2,7 @@ const { Campaign } = require("../models/Campaign");
 const { Template } = require("../models/Template");
 const { HttpError } = require("../utils/httpError");
 const { assertNormalizedPhone } = require("../services/contactService");
-const { campaignQueue } = require("../services/campaignQueue");
+const { getCampaignQueue } = require("../services/campaignQueue");
 
 async function listCampaigns(req, res) {
   const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
@@ -40,6 +40,7 @@ async function createCampaign(req, res) {
 
   const delayMs = campaign.scheduledAt ? Math.max(campaign.scheduledAt.getTime() - Date.now(), 0) : 0;
 
+  const campaignQueue = getCampaignQueue();
   await Promise.all(
     normalizedRecipients.map((to) =>
       campaignQueue.add(

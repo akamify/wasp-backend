@@ -1,7 +1,14 @@
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const { jwtSecret, jwtExpiresIn } = require("../config/env");
+const {
+  jwtSecret,
+  jwtExpiresIn,
+  adminSessionExpiresIn,
+  adminEmail,
+  adminPassword,
+  adminName,
+} = require("../config/env");
 const { User } = require("../models/User");
 const { Workspace } = require("../models/Workspace");
 const { HttpError } = require("../utils/httpError");
@@ -24,6 +31,19 @@ function signToken({ user, workspaceId }) {
     subject: String(user._id),
     expiresIn: jwtExpiresIn,
   });
+}
+
+function signAdminToken() {
+  return jwt.sign({ role: "admin", workspaceId: "admin" }, jwtSecret, {
+    subject: "env-admin",
+    expiresIn: adminSessionExpiresIn,
+  });
+}
+
+function isEnvAdminLogin(email, password) {
+  if (!adminEmail || !adminPassword) return false;
+  return String(email || "").trim().toLowerCase() === String(adminEmail).trim().toLowerCase() &&
+    String(password || "") === String(adminPassword);
 }
 
 async function ensureDefaultWorkspace(user) {
@@ -69,6 +89,17 @@ async function register(req, res) {
 
 async function login(req, res) {
   const { email, password } = req.body;
+
+  if (isEnvAdminLogin(email, password)) {
+    const token = signAdminToken();
+    return res.json({
+      success: true,
+      token,
+      workspace: null,
+      user: { id: "env-admin", email: adminEmail, name: adminName, role: "admin" },
+    });
+  }
+
   const user = await User.findOne({ email: String(email).toLowerCase() }).select(
     "+passwordHash role email name phone"
   );
@@ -89,6 +120,19 @@ async function login(req, res) {
 }
 
 async function me(req, res) {
+  if (req.user.role === "admin" && req.user.id === "env-admin") {
+    return res.json({
+      success: true,
+      user: {
+        id: "env-admin",
+        email: adminEmail,
+        name: adminName,
+        role: "admin",
+      },
+      workspace: null,
+    });
+  }
+
   const user = await User.findById(req.user.id).select("email name phone role createdAt");
   if (!user) throw new HttpError(404, "User not found");
   let workspace = await Workspace.findOne({

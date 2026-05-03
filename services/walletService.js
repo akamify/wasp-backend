@@ -5,6 +5,26 @@ const { HttpError } = require("../utils/httpError");
 const COST_PER_MESSAGE = Number(process.env.COST_PER_MESSAGE || 1); // INR
 const SEED_BALANCE = Number(process.env.WALLET_SEED_BALANCE || 0);
 
+function perCategoryCost(category) {
+  const c = String(category || "").trim().toLowerCase();
+  const fallback = COST_PER_MESSAGE;
+
+  if (c === "marketing") {
+    const v = Number(process.env.COST_PER_MESSAGE_MARKETING || fallback);
+    return Number.isFinite(v) ? v : fallback;
+  }
+  if (c === "authentication") {
+    const v = Number(process.env.COST_PER_MESSAGE_AUTHENTICATION || fallback);
+    return Number.isFinite(v) ? v : fallback;
+  }
+  if (c === "utility") {
+    const v = Number(process.env.COST_PER_MESSAGE_UTILITY || fallback);
+    return Number.isFinite(v) ? v : fallback;
+  }
+
+  return fallback;
+}
+
 async function getOrCreateWallet(workspaceId) {
   return Wallet.findOneAndUpdate(
     { workspaceId },
@@ -78,4 +98,9 @@ function messageCost(count = 1) {
   return COST_PER_MESSAGE * n;
 }
 
-module.exports = { getOrCreateWallet, ensureBalance, debit, credit, messageCost };
+function messageCostForTemplateCategory(category, count = 1) {
+  const n = Math.max(Number(count || 1), 1);
+  return perCategoryCost(category) * n;
+}
+
+module.exports = { getOrCreateWallet, ensureBalance, debit, credit, messageCost, messageCostForTemplateCategory };

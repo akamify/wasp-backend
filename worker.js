@@ -7,7 +7,7 @@ const { getRedisConnection } = require("./services/queue");
 const { Campaign } = require("./models/Campaign");
 const { Template } = require("./models/Template");
 const { sendTemplateMessageForUser } = require("./services/outboundMessageService");
-const { debit, credit, messageCost } = require("./services/walletService");
+const { debit, credit, messageCostForTemplateCategory } = require("./services/walletService");
 
 const concurrency = Math.max(Number(process.env.CAMPAIGN_WORKER_CONCURRENCY || 5), 1);
 const ratePerSec = Math.max(Number(process.env.CAMPAIGN_RATE_LIMIT_PER_SEC || 10), 1);
@@ -26,8 +26,9 @@ async function startWorker() {
       const template = await Template.findOne({ _id: templateId, workspaceId });
       if (!template) throw new Error("Template not found");
 
+      const chargeAmount = messageCostForTemplateCategory(template.category, 1);
       try {
-        await debit(workspaceId, messageCost(1), "Message send (campaign)", {
+        await debit(workspaceId, chargeAmount, "Message send (campaign)", {
           campaignId,
           templateId,
           to,
@@ -46,7 +47,7 @@ async function startWorker() {
       } catch (err) {
         if (err?.response) {
           try {
-            await credit(workspaceId, messageCost(1), "Message refund (campaign failed)", "internal", "", {
+            await credit(workspaceId, chargeAmount, "Message refund (campaign failed)", "internal", "", {
               campaignId,
               templateId,
               to,

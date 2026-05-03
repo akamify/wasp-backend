@@ -5,6 +5,13 @@ function graphBaseUrl(graphApiVersion) {
   return `https://graph.facebook.com/${version}`;
 }
 
+function maskSecret(value) {
+  const s = String(value || "");
+  if (!s) return "";
+  if (s.length <= 8) return "***";
+  return `${s.slice(0, 3)}***${s.slice(-3)}`;
+}
+
 function authHeaders(accessToken) {
   return {
     "Content-Type": "application/json",
@@ -40,6 +47,42 @@ function toMetaErrorInfo(err, step, requestInfo = {}) {
       : null,
     raw: data,
   };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function debugToken({ inputToken, graphApiVersion }) {
+  const appId = process.env.APP_ID || process.env.META_APP_ID || "";
+  const appSecret = process.env.APP_SECRET || process.env.META_APP_SECRET || "";
+  if (!appId || !appSecret) return null;
+
+  const baseURL = graphBaseUrl(graphApiVersion);
+  const client = axios.create({ baseURL, timeout: 15000 });
+
+  // App access token: app_id|app_secret (server-side only)
+  const appAccessToken = `${appId}|${appSecret}`;
+
+  try {
+    const res = await client.get("/debug_token", {
+      params: { input_token: inputToken, access_token: appAccessToken },
+    });
+    const data = res.data?.data || null;
+    if (!data) return null;
+    return {
+      appId: maskSecret(data.app_id),
+      type: data.type || null,
+      application: data.application || null,
+      userId: data.user_id || null,
+      isValid: !!data.is_valid,
+      expiresAt: data.expires_at ? new Date(Number(data.expires_at) * 1000).toISOString() : null,
+      issuedAt: data.issued_at ? new Date(Number(data.issued_at) * 1000).toISOString() : null,
+      scopes: Array.isArray(data.scopes) ? data.scopes : [],
+    };
+  } catch (_) {
+    return null;
+  }
 }
 
 async function validateCredentials({
@@ -146,6 +189,15 @@ async function validateCredentials({
     );
   }
 
+  // Step 4: token scope debug (best-effort; requires APP_ID/APP_SECRET in env)
+  const tokenInfo = await debugToken({ inputToken: accessToken, graphApiVersion });
+  steps.push({
+    step: "debug_token",
+    ok: !!tokenInfo?.isValid,
+    request: { method: "GET", url: "/debug_token" },
+    response: tokenInfo,
+  });
+
   return { ok: true, steps };
 }
 
@@ -153,32 +205,131 @@ async function submitTemplate({
   accessToken,
   wabaId,
   template,
+  metaTemplateId,
   graphApiVersion,
 }) {
   const baseURL = graphBaseUrl(graphApiVersion);
   const client = axios.create({ baseURL, timeout: 20000 });
 
-  const payload = {
+  const createPayload = {
     name: template.name,
     language: template.language,
     category: template.category,
     components: template.components,
   };
 
-  try {
-    const res = await client.post(`/${wabaId}/message_templates`, payload, {
-      headers: authHeaders(accessToken),
-    });
-    return res.data;
-  } catch (err) {
-    throw Object.assign(new Error("Meta template submit failed"), {
-      metaDebug: toMetaErrorInfo(err, "submit_template", {
-        method: "POST",
-        url: `/${wabaId}/message_templates`,
-        body: payload,
-      }),
-    });
+  // When editing an existing template, Meta expects a different edge (template object by ID).
+  // Template name/language are immutable for approved templates; only components/category/TTL can be edited.
+  const editPayload = {
+    category: template.category,
+    components: template.components,
+  };
+
+  async function editById(id) {
+    try {
+      const res = await client.post(`/${id}`, editPayload, {
+        headers: authHeaders(accessToken),
+      });
+      return res.data;
+    } catch (err) {
+      throw Object.assign(new Error("Meta template edit failed"), {
+        metaDebug: toMetaErrorInfo(err, "edit_template", {
+          method: "POST",
+          url: `/${id}`,
+          body: editPayload,
+        }),
+      });
+    }
   }
+
+  if (metaTemplateId) {
+    // Don't wrap edit errors as "submit_template" errors; preserve the true step.
+    return await editById(metaTemplateId);
+  }
+
+  // Meta sometimes holds a transient lock while deleting old language content (subcode 2388023).
+  // Their guidance is "< 1 minute", but in practice it can take a bit longer, so we allow a wider window.
+  const maxAttempts = Math.max(Number(process.env.META_TEMPLATE_SUBMIT_RETRIES || 4), 1);
+  const retryDelaysMs = [20_000, 25_000, 30_000, 35_000];
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const res = await client.post(`/${wabaId}/message_templates`, createPayload, {
+        headers: authHeaders(accessToken),
+      });
+      return res.data;
+    } catch (err) {
+      const subcode = err?.response?.data?.error?.error_subcode;
+      const metaCode = err?.response?.data?.error?.code;
+
+      // Meta sometimes returns: 2388023 "Message template language is being deleted" (transient).
+      // Their advice is to retry in <1 minute. We'll do a couple of retries with backoff.
+      if (Number(subcode) === 2388023 && attempt < maxAttempts) {
+        const delay = retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)];
+        await sleep(delay);
+        continue;
+      }
+
+      // Recovery path: if template already exists for this language, try editing the existing template (by ID).
+      // This typically happens when the UI "edits" a template but backend tries to "create" it again.
+      if (Number(subcode) === 2388024) {
+        try {
+          const candidates = await fetchAllMessageTemplates({
+            accessToken,
+            wabaId,
+            graphApiVersion,
+            exactName: template.name,
+          });
+
+          const lang = String(template.language || "").trim().toLowerCase();
+          const match =
+            candidates.find(
+              (t) =>
+                String(t?.language || "").trim().toLowerCase() === lang &&
+                String(t?.name || "").trim().toLowerCase() === String(template.name || "").trim().toLowerCase() &&
+                t?.id
+            ) || null;
+
+          if (match?.id) {
+            return await editById(String(match.id));
+          }
+        } catch (recoveryErr) {
+          // Fall through to the original error with additional context.
+          err.recovery = recoveryErr;
+        }
+      }
+
+      // Permissions error: usually missing `whatsapp_business_management` scope or token not granted WABA access.
+      // Attach debug_token output when available to help diagnose quickly.
+      let tokenDebug = null;
+      let providerError = null;
+      if (Number(metaCode) === 200) {
+        tokenDebug = await debugToken({ inputToken: accessToken, graphApiVersion });
+        const scopes = new Set((tokenDebug?.scopes || []).map((s) => String(s)));
+        if (tokenDebug?.isValid && !scopes.has("business_management")) {
+          providerError =
+            "Meta token is missing `business_management` permission. Regenerate the System User access token with `business_management`, `whatsapp_business_management`, and `whatsapp_business_messaging`, then save credentials again.";
+        } else if (tokenDebug?.isValid && !scopes.has("whatsapp_business_management")) {
+          providerError =
+            "Meta token is missing `whatsapp_business_management` permission. Regenerate the System User access token with the required WhatsApp permissions, then save credentials again.";
+        }
+      }
+
+      throw Object.assign(new Error("Meta template submit failed"), {
+        metaDebug: toMetaErrorInfo(err, "submit_template", {
+          method: "POST",
+          url: `/${wabaId}/message_templates`,
+          body: createPayload,
+        }),
+        recoveryError: err.recovery?.metaDebug || null,
+        tokenDebug,
+        providerError,
+      });
+    }
+  }
+
+  // Should be unreachable, but keeps control flow explicit.
+  throw new Error("Meta template submit failed");
 }
 
 async function fetchTemplateStatus({

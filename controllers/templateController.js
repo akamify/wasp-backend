@@ -49,6 +49,8 @@ async function createTemplate(req, res) {
     throw new HttpError(400, "Template submission failed", {
       message: err.message,
       metaDebug: err.metaDebug || null,
+      tokenDebug: err.tokenDebug || null,
+      providerError: err.providerError || null,
     });
   }
 
@@ -79,6 +81,17 @@ async function getTemplate(req, res) {
 async function updateTemplate(req, res) {
   const existing = await Template.findOne({ _id: req.params.id, workspaceId: req.workspace.id });
   if (!existing) throw new HttpError(404, "Template not found");
+  if (req.body?.category && String(req.body.category).trim().toLowerCase() !== String(existing.category || "").trim().toLowerCase()) {
+    throw new HttpError(400, "Template category cannot be changed after creation");
+  }
+  if (existing.metaTemplateId) {
+    if (req.body?.name && String(req.body.name).trim() !== String(existing.name || "").trim()) {
+      throw new HttpError(400, "Template name cannot be changed after it is linked to Meta");
+    }
+    if (req.body?.language && String(req.body.language).trim() !== String(existing.language || "").trim()) {
+      throw new HttpError(400, "Template language cannot be changed after it is linked to Meta");
+    }
+  }
 
   const normalized = normalizeTemplate({
     ...existing.toObject(),
@@ -87,7 +100,7 @@ async function updateTemplate(req, res) {
 
   existing.name = normalized.name;
   existing.language = normalized.language;
-  existing.category = normalized.category;
+  existing.category = existing.category;
   existing.components = normalized.components;
   const template = await existing.save();
   res.json({ success: true, template });
@@ -124,6 +137,14 @@ async function deleteTemplate(req, res) {
 async function submitForApproval(req, res) {
   const template = await Template.findOne({ _id: req.params.id, workspaceId: req.workspace.id });
   if (!template) throw new HttpError(404, "Template not found");
+  // Meta's Cloud API comes with a built-in sample template called `hello_world` (en_US).
+  // Attempting to submit/edit it via API tends to fail; require users to create a new template name instead.
+  if (String(template.name || "").trim().toLowerCase() === "hello_world") {
+    throw new HttpError(
+      400,
+      "The Meta sample template `hello_world` cannot be submitted/edited. Create a new template with a different name."
+    );
+  }
 
   const creds = await getCredentialsForUser(req.workspace.id);
   const normalizedTemplate = normalizeTemplate(template.toObject());
@@ -139,6 +160,7 @@ async function submitForApproval(req, res) {
       accessToken: creds.accessToken,
       wabaId: creds.wabaId,
       template: normalizedTemplate,
+      metaTemplateId: template.metaTemplateId,
       graphApiVersion: creds.graphApiVersion,
     });
   } catch (err) {

@@ -4,6 +4,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimiters = require("./middleware/rateLimiters");
 const { notFound, errorHandler } = require("./middleware/errorHandler");
+const { appBrandName } = require("./config/env");
 
 const app = express();
 
@@ -27,7 +28,7 @@ app.use(morgan("dev"));
 app.get("/", (req, res) =>
   res.json({
     success: true,
-    message: "Waspakamify API is running",
+    message: `${appBrandName} API is running`,
     health: "/health",
     apiHealth: "/api/health",
   })
@@ -42,6 +43,7 @@ function mountRoutes(basePath = "") {
   
   // Auth + tenant routes
   app.use(`${basePath}/auth`, require("./routes/authRoutes"));
+  app.use(`${basePath}/admin`, require("./routes/adminRoutes"));
   app.use(`${basePath}/workspaces`, require("./routes/workspaceRoutes"));
   app.use(`${basePath}/credentials`, require("./routes/credentialRoutes"));
   app.use(`${basePath}/templates`, require("./routes/templateRoutes"));

@@ -4,7 +4,7 @@ const { HttpError } = require("../utils/httpError");
 const { sendTemplateMessageForUser, sendTextMessageForUser } = require("../services/outboundMessageService");
 const { getCredentialsForUser } = require("../services/credentialsService");
 const { assertNormalizedPhone, normalizePhone } = require("../services/contactService");
-const { debit, credit, messageCost } = require("../services/walletService");
+const { debit, credit, messageCostForTemplateCategory } = require("../services/walletService");
 
 function isDuplicateKeyError(err) {
   return err?.code === 11000 || err?.name === "MongoServerError";
@@ -72,8 +72,8 @@ async function sendTemplate(req, res) {
     throw new HttpError(400, "Template must be approved before sending");
   }
 
+  const chargeAmount = messageCostForTemplateCategory(template.category, 1);
   try {
-    const chargeAmount = messageCost(1);
     await debit(req.workspace.id, chargeAmount, "Message send", {
       kind: "single",
       templateId: String(template._id),
@@ -104,7 +104,7 @@ async function sendTemplate(req, res) {
     if (!err?.statusCode && err?.response) {
       // If provider send failed, refund the wallet debit.
       try {
-        await credit(req.workspace.id, messageCost(1), "Message refund (send failed)", "internal", "", {
+        await credit(req.workspace.id, chargeAmount, "Message refund (send failed)", "internal", "", {
           templateId: templateId,
           to: normalizedPhone,
         });
@@ -149,9 +149,9 @@ async function bulkSend(req, res) {
       const r = queue.shift();
       if (!r) continue;
       const to = assertNormalizedPhone(r.to);
+      const chargeAmount = messageCostForTemplateCategory(template.category, 1);
 
       try {
-        const chargeAmount = messageCost(1);
         await debit(req.workspace.id, chargeAmount, "Message send", {
           kind: "bulk",
           templateId: String(template._id),
@@ -179,7 +179,7 @@ async function bulkSend(req, res) {
       } catch (err) {
         if (!err?.statusCode && err?.response) {
           try {
-            await credit(req.workspace.id, messageCost(1), "Message refund (send failed)", "internal", "", {
+            await credit(req.workspace.id, chargeAmount, "Message refund (send failed)", "internal", "", {
               templateId: String(template._id),
               to,
             });
