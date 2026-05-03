@@ -240,6 +240,11 @@ async function receive(req, res) {
 }
 
 async function listWebhookDebugEvents(req, res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  res.set("Surrogate-Control", "no-store");
+
   const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), WEBHOOK_DEBUG_LIMIT);
   return res.json({
     success: true,
