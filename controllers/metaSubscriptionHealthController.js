@@ -56,7 +56,15 @@ async function metaSubscriptionHealth(req, res) {
   const subscribedApps =
     subsRes.status === "fulfilled" ? (subsRes.value?.data?.data || []) : [];
   const subscribedAppIds = subscribedApps
-    .map((item) => String(item?.whatsapp_business_api_data?.app_id || item?.app_id || "").trim())
+    .map((item) =>
+      String(
+        item?.whatsapp_business_api_data?.id ||
+          item?.whatsapp_business_api_data?.app_id ||
+          item?.app_id ||
+          item?.id ||
+          ""
+      ).trim()
+    )
     .filter(Boolean);
   const isAppSubscribed = appId ? subscribedAppIds.includes(String(appId)) : subscribedAppIds.length > 0;
 
@@ -123,4 +131,3 @@ async function metaSubscriptionHealth(req, res) {
 }
 
 module.exports = { metaSubscriptionHealth };
-
