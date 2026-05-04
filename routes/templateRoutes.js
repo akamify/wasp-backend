@@ -14,7 +14,7 @@ const {
   syncStatus,
   syncMetaTemplates,
 } = require("../controllers/templateController");
-const { uploadTemplateMedia } = require("../controllers/templateMediaController");
+const { uploadTemplateMedia, downloadTemplateMediaByHandle } = require("../controllers/templateMediaController");
 const multer = require("multer");
 
 const router = express.Router();
@@ -30,6 +30,7 @@ const templateSchema = Joi.object({
 });
 
 router.post("/media", auth, requireWorkspace, upload.single("file"), asyncHandler(uploadTemplateMedia));
+router.get("/media/handle/:handle", auth, requireWorkspace, asyncHandler(downloadTemplateMediaByHandle));
 router.post("/", auth, requireWorkspace, validate(templateSchema), asyncHandler(createTemplate));
 router.get("/", auth, requireWorkspace, asyncHandler(listTemplates));
 router.post(
