@@ -89,14 +89,31 @@ function normalizeButton(button, category) {
   if (type === "URL") {
     const text = toTrimmedString(button?.text);
     const url = toTrimmedString(button?.url);
+    const example = Array.isArray(button?.example) ? button.example : null;
 
     invariant(text, "URL button text is required");
     invariant(url, "URL button URL is required");
+
+    const dynamic = /\{\{\d+\}\}/.test(url);
+    if (dynamic) {
+      const sample = toTrimmedString(example?.[0] || "");
+      invariant(sample, "URL button sample is required for dynamic URLs");
+      invariant(/^https:\/\//i.test(sample), "URL button sample must start with https://");
+      // require a basic domain + tld (.co, .in, .co.in, etc.)
+      let host = "";
+      try {
+        host = new URL(sample).hostname || "";
+      } catch {
+        host = "";
+      }
+      invariant(host && host.includes("."), "URL button sample must be a valid URL");
+    }
 
     return {
       type: "URL",
       text,
       url,
+      ...(dynamic && example ? { example } : {}),
     };
   }
 
@@ -208,6 +225,7 @@ function normalizeStandardComponents(category, components) {
       normalized.push({
         type: "BODY",
         text,
+        ...(component?.example ? { example: component.example } : {}),
       });
       continue;
     }
@@ -218,10 +236,13 @@ function normalizeStandardComponents(category, components) {
       if (format === "TEXT") {
         const text = String(component?.text ?? "");
         invariant(text.trim(), "HEADER text is required");
+        // Meta restriction: header supports at most 1 variable placeholder.
+        invariant(maxPlaceholderIndex(text) <= 1, "HEADER supports at most 1 variable placeholder");
         normalized.push({
           type: "HEADER",
           format: "TEXT",
           text,
+          ...(component?.example ? { example: component.example } : {}),
         });
         continue;
       }

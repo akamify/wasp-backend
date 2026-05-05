@@ -11,6 +11,7 @@ const {
 
 async function sendTemplateMessageForUser({
   userId,
+  campaignId,
   template,
   to,
   languageCode,
@@ -59,6 +60,7 @@ async function sendTemplateMessageForUser({
 
   const message = await Message.create({
     workspaceId: userId,
+    ...(campaignId ? { campaignId } : {}),
     templateId: normalizedTemplate._id,
     phone: resolvedPhone,
     direction: "outbound",

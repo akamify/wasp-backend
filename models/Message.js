@@ -8,6 +8,12 @@ const MessageSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    campaignId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Campaign",
+      index: true,
+      default: undefined,
+    },
     templateId: { type: mongoose.Schema.Types.ObjectId, ref: "Template", index: true },
 
     phone: { type: String, required: true, index: true },

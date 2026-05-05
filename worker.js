@@ -18,9 +18,32 @@ async function startWorker() {
   const worker = new Worker(
     "campaigns",
     async (job) => {
-      const { workspaceId, campaignId, templateId, to } = job.data || {};
+      const {
+        workspaceId,
+        campaignId,
+        templateId,
+        to,
+        variables,
+        headerVariables,
+        otpCode,
+        buttonValues,
+        buttonTtlMinutes,
+        flowTokens,
+        flowActionData,
+      } = job.data || {};
       if (!workspaceId || !campaignId || !templateId || !to) {
         throw new Error("Invalid job payload");
+      }
+
+      const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals");
+      if (!campaign) throw new Error("Campaign not found");
+      const status = String(campaign.status || "");
+      if (status === "paused" || status === "canceled") {
+        await Campaign.updateOne(
+          { _id: campaignId, workspaceId },
+          { $inc: { "totals.queued": -1 } }
+        );
+        return { ok: true, skipped: true, status };
       }
 
       const template = await Template.findOne({ _id: templateId, workspaceId });
@@ -35,8 +58,16 @@ async function startWorker() {
         });
         await sendTemplateMessageForUser({
           userId: workspaceId,
+          campaignId,
           template,
           to,
+          variables,
+          headerVariables,
+          otpCode,
+          buttonValues,
+          buttonTtlMinutes,
+          flowTokens,
+          flowActionData,
         });
 
         await Campaign.updateOne(
@@ -45,6 +76,33 @@ async function startWorker() {
         );
         return { ok: true };
       } catch (err) {
+        try {
+          const now = new Date();
+          await require("./models/Message").Message.create({
+            workspaceId,
+            campaignId,
+            templateId,
+            phone: to,
+            direction: "outbound",
+            status: "failed",
+            statusTimestamps: { failedAt: now },
+            text: "",
+            payload: {
+              to,
+              template: { id: templateId },
+              runtime: {
+                variables: variables || [],
+                headerVariables: headerVariables || [],
+                otpCode: otpCode || "",
+                buttonValues: buttonValues || [],
+                buttonTtlMinutes: buttonTtlMinutes || [],
+                flowTokens: flowTokens || [],
+                flowActionData: flowActionData || [],
+              },
+            },
+            error: err?.response?.data || err?.message || err,
+          });
+        } catch {}
         if (err?.response) {
           try {
             await credit(workspaceId, chargeAmount, "Message refund (campaign failed)", "internal", "", {
