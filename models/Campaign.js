@@ -10,9 +10,15 @@ const CampaignSchema = new mongoose.Schema(
     },
     name: { type: String, required: true, trim: true },
     templateId: { type: mongoose.Schema.Types.ObjectId, ref: "Template", required: true, index: true },
+    type: {
+      type: String,
+      enum: ["broadcast", "csv", "api"],
+      default: "broadcast",
+      index: true,
+    },
     status: {
       type: String,
-      enum: ["draft", "queued", "running", "completed", "failed", "paused", "canceled"],
+      enum: ["draft", "queued", "running", "completed", "failed", "paused", "cancelled"],
       default: "draft",
       index: true,
     },
@@ -33,4 +39,3 @@ CampaignSchema.index({ workspaceId: 1, createdAt: -1 });
 const Campaign = mongoose.model("Campaign", CampaignSchema);
 
 module.exports = { Campaign };
-
