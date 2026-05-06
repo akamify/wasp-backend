@@ -1,4 +1,4 @@
-const { metaWebhookVerifyToken } = require("../config/env");
+const { metaWebhookVerifyToken, defaultWorkspaceId } = require("../config/env");
 const { findTenantByPhoneNumberId, findTenantByWabaId } = require("../services/credentialsService");
 const { Message } = require("../models/Message");
 const mongoose = require("mongoose");
@@ -171,14 +171,27 @@ async function receive(req, res) {
       }
 
       const tenant = await findTenantByPhoneNumberId(phoneNumberId);
-      if (!tenant) {
+      const resolvedWorkspaceId = tenant?.workspaceId ? String(tenant.workspaceId) : "";
+      const fallbackWorkspaceId = String(defaultWorkspaceId || "");
+      const workspaceIdRaw =
+        mongoose.Types.ObjectId.isValid(resolvedWorkspaceId)
+          ? resolvedWorkspaceId
+          : mongoose.Types.ObjectId.isValid(fallbackWorkspaceId)
+            ? fallbackWorkspaceId
+            : "";
+
+      if (!workspaceIdRaw) {
         if (debug) {
           // eslint-disable-next-line no-console
-          console.warn("Webhook: tenant not found for phone_number_id.", phoneNumberId);
+          console.warn("Webhook: workspace not resolved for phone_number_id.", phoneNumberId);
         }
+        pushWebhookDebugEvent({
+          type: "tenant_workspace_missing",
+          phoneNumberId: String(phoneNumberId),
+        });
         continue;
       }
-      const workspaceIdRaw = tenant?.workspaceId ? String(tenant.workspaceId) : "";
+
       const hasValidWorkspaceId = mongoose.Types.ObjectId.isValid(workspaceIdRaw);
 
       const statuses = Array.isArray(value?.statuses) ? value.statuses : [];

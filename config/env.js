@@ -24,8 +24,8 @@ module.exports = {
   metaGraphVersion: process.env.META_GRAPH_VERSION || "v22.0",
   metaWebhookVerifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || "",
   metaAppSecret: process.env.META_APP_SECRET || "",
-  lookupSecret: process.env.LOOKUP_SECRET || "",
+  lookupSecret: process.env.LOOKUP_SECRET || process.env.CREDENTIALS_LOOKUP_SECRET || "",
+  defaultWorkspaceId: process.env.DEFAULT_WORKSPACE_ID || "",
   trackingBaseUrl:
     process.env.TRACKING_BASE_URL || process.env.APP_BASE_URL || `http://localhost:${port}`,
 };
-
