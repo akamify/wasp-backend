@@ -316,6 +316,16 @@ async function receive(req, res) {
       }
 
       const messages = Array.isArray(value?.messages) ? value.messages : [];
+      const webhookContacts = Array.isArray(value?.contacts) ? value.contacts : [];
+      const nameByWaId = new Map(
+        webhookContacts
+          .map((contact) => {
+            const waId = normalizePhone(contact?.wa_id);
+            const profileName = String(contact?.profile?.name || "").trim();
+            return waId && profileName ? [waId, profileName] : null;
+          })
+          .filter(Boolean)
+      );
       if (messages.length) {
         pushWebhookDebugEvent({
           type: "messages",
@@ -372,6 +382,7 @@ async function receive(req, res) {
             direction: "inbound",
             preview: text.slice(0, 160),
             occurredAt: ts,
+            name: nameByWaId.get(from) || undefined,
           });
         } catch (messageErr) {
           pushWebhookDebugEvent({

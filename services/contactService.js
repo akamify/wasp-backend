@@ -104,11 +104,12 @@ async function upsertContactForUser({ userId, phone, patch = {}, createIfMissing
   });
 }
 
-async function touchContactFromMessage({ userId, phone, direction, preview, occurredAt }) {
+async function touchContactFromMessage({ userId, phone, direction, preview, occurredAt, name }) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return null;
 
   const patch = {
+    ...(name ? { name } : {}),
     lastMessagePreview: preview || "",
     source: direction === "inbound" ? "inbound" : "outbound",
     ...(direction === "inbound"
