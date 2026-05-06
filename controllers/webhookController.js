@@ -194,23 +194,20 @@ async function receive(req, res) {
             ? fallbackWorkspaceId
             : "";
 
-      // Last-resort fallback for single-tenant deployments:
-      // if mapping is broken (key mismatch, legacy hash), but only one valid
-      // WhatsApp connection exists, route webhooks to that workspace.
+      // Last-resort fallback: pick the most recently validated WhatsApp connection.
+      // This keeps inbound ingest alive even when tenant lookup hashes drift across envs.
       if (!workspaceIdRaw) {
-        const validCreds = await WhatsAppCredentials.find({ isValid: true })
-          .select("workspaceId")
-          .limit(2);
-        if (validCreds.length === 1) {
-          const onlyWorkspaceId = String(validCreds[0]?.workspaceId || "");
-          if (mongoose.Types.ObjectId.isValid(onlyWorkspaceId)) {
-            workspaceIdRaw = onlyWorkspaceId;
-            pushWebhookDebugEvent({
-              type: "tenant_single_workspace_fallback",
-              phoneNumberId: String(phoneNumberId),
-              workspaceId: workspaceIdRaw,
-            });
-          }
+        const recentCred = await WhatsAppCredentials.findOne({ isValid: true })
+          .sort({ lastValidatedAt: -1, updatedAt: -1, createdAt: -1 })
+          .select("workspaceId");
+        const recentWorkspaceId = String(recentCred?.workspaceId || "");
+        if (mongoose.Types.ObjectId.isValid(recentWorkspaceId)) {
+          workspaceIdRaw = recentWorkspaceId;
+          pushWebhookDebugEvent({
+            type: "tenant_recent_credentials_fallback",
+            phoneNumberId: String(phoneNumberId),
+            workspaceId: workspaceIdRaw,
+          });
         }
       }
 
