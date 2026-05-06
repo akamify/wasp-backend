@@ -5,6 +5,7 @@ const mongoose = require("mongoose");
 const { touchConversation } = require("../services/conversationService");
 const { normalizePhone, touchContactFromMessage } = require("../services/contactService");
 const { WhatsAppCredentials } = require("../models/WhatsAppCredentials");
+const { Campaign } = require("../models/Campaign");
 
 const WEBHOOK_DEBUG_LIMIT = 40;
 const webhookDebugEvents = [];
@@ -47,6 +48,59 @@ function parseTierLimitToNumber(tier) {
   if (suffix === "K") n *= 1000;
   if (suffix === "M") n *= 1000 * 1000;
   return n;
+}
+
+async function refreshCampaignFromMessage(workspaceId, messageDoc) {
+  const campaignId = messageDoc?.campaignId;
+  if (!campaignId || !workspaceId) return;
+
+  const [campaign, grouped] = await Promise.all([
+    Campaign.findOne({ _id: campaignId, workspaceId }).select("_id totals status"),
+    Message.aggregate([
+      {
+        $match: {
+          workspaceId: new mongoose.Types.ObjectId(String(workspaceId)),
+          campaignId: new mongoose.Types.ObjectId(String(campaignId)),
+          direction: "outbound",
+        },
+      },
+      { $group: { _id: "$status", count: { $sum: 1 } } },
+    ]),
+  ]);
+
+  if (!campaign) return;
+
+  const byStatus = Object.fromEntries(grouped.map((row) => [String(row._id), Number(row.count || 0)]));
+  const sentLike =
+    Number(byStatus.accepted || 0) +
+    Number(byStatus.sent || 0) +
+    Number(byStatus.delivered || 0) +
+    Number(byStatus.read || 0);
+  const failedLike = Number(byStatus.failed || 0) + Number(byStatus.timeout_unknown || 0);
+  const total = Number(campaign.totals?.total || 0);
+  const queued = Math.max(total - sentLike - failedLike, 0);
+
+  let nextStatus = String(campaign.status || "queued");
+  if (queued === 0) {
+    if (failedLike > 0 && sentLike === 0) nextStatus = "failed";
+    else nextStatus = "completed";
+  } else if (sentLike > 0 || failedLike > 0) {
+    nextStatus = "running";
+  } else {
+    nextStatus = "queued";
+  }
+
+  await Campaign.updateOne(
+    { _id: campaign._id, workspaceId },
+    {
+      $set: {
+        status: nextStatus,
+        "totals.queued": queued,
+        "totals.sent": sentLike,
+        "totals.failed": failedLike,
+      },
+    }
+  );
 }
 
 async function verify(req, res) {
@@ -280,7 +334,7 @@ async function receive(req, res) {
               }
             : { $set: set };
 
-          await Message.findOneAndUpdate(
+          const updated = await Message.findOneAndUpdate(
             filter,
             update,
             {
@@ -289,6 +343,9 @@ async function receive(req, res) {
               setDefaultsOnInsert: hasValidWorkspaceId,
             }
           );
+          if (updated) {
+            await refreshCampaignFromMessage(workspaceIdRaw, updated);
+          }
 
           if (!hasValidWorkspaceId) {
             pushWebhookDebugEvent({

@@ -34,7 +34,9 @@ const MessageSchema = new mongoose.Schema(
       readAt: Date,
       failedAt: Date,
       receivedAt: Date,
+      readByBusinessAt: Date,
     },
+    readReceiptSentAt: { type: Date, default: null, index: true },
 
     text: { type: String },
     payload: { type: Object },

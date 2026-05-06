@@ -495,6 +495,35 @@ async function sendTextMessage({
   }
 }
 
+async function markMessageAsRead({
+  accessToken,
+  phoneNumberId,
+  messageId,
+  graphApiVersion,
+}) {
+  const baseURL = graphBaseUrl(graphApiVersion);
+  const client = axios.create({ baseURL, timeout: 20000 });
+  const payload = {
+    messaging_product: "whatsapp",
+    status: "read",
+    message_id: messageId,
+  };
+  try {
+    const res = await client.post(`/${phoneNumberId}/messages`, payload, {
+      headers: authHeaders(accessToken),
+    });
+    return res.data;
+  } catch (err) {
+    throw Object.assign(new Error("Meta mark as read failed"), {
+      metaDebug: toMetaErrorInfo(err, "mark_message_as_read", {
+        method: "POST",
+        url: `/${phoneNumberId}/messages`,
+        body: payload,
+      }),
+    });
+  }
+}
+
 async function deleteMessageTemplate({
   accessToken,
   wabaId,
@@ -527,5 +556,6 @@ module.exports = {
   fetchAllMessageTemplates,
   sendTemplateMessage,
   sendTextMessage,
+  markMessageAsRead,
   deleteMessageTemplate,
 };

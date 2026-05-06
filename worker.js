@@ -8,6 +8,7 @@ const { Campaign } = require("./models/Campaign");
 const { Template } = require("./models/Template");
 const { sendTemplateMessageForUser } = require("./services/outboundMessageService");
 const { debit, credit, messageCostForTemplateCategory } = require("./services/walletService");
+const { isCustomerServiceWindowOpen } = require("./services/pricingService");
 
 const concurrency = Math.max(Number(process.env.CAMPAIGN_WORKER_CONCURRENCY || 5), 1);
 const ratePerSec = Math.max(Number(process.env.CAMPAIGN_RATE_LIMIT_PER_SEC || 10), 1);
@@ -49,13 +50,16 @@ async function startWorker() {
       const template = await Template.findOne({ _id: templateId, workspaceId });
       if (!template) throw new Error("Template not found");
 
-      const chargeAmount = messageCostForTemplateCategory(template.category, 1);
+      const windowOpen = await isCustomerServiceWindowOpen({ workspaceId, phone: to });
+      const chargeAmount = windowOpen ? 0 : messageCostForTemplateCategory(template.category, 1);
       try {
-        await debit(workspaceId, chargeAmount, "Message send (campaign)", {
-          campaignId,
-          templateId,
-          to,
-        });
+        if (chargeAmount > 0) {
+          await debit(workspaceId, chargeAmount, "Message send (campaign)", {
+            campaignId,
+            templateId,
+            to,
+          });
+        }
         await sendTemplateMessageForUser({
           userId: workspaceId,
           campaignId,
@@ -105,11 +109,13 @@ async function startWorker() {
         } catch {}
         if (err?.response) {
           try {
-            await credit(workspaceId, chargeAmount, "Message refund (campaign failed)", "internal", "", {
-              campaignId,
-              templateId,
-              to,
-            });
+            if (chargeAmount > 0) {
+              await credit(workspaceId, chargeAmount, "Message refund (campaign failed)", "internal", "", {
+                campaignId,
+                templateId,
+                to,
+              });
+            }
           } catch {}
         }
         await Campaign.updateOne(

@@ -51,6 +51,31 @@ function hasDynamicUrl(url) {
   return /\{\{\d+\}\}/.test(String(url || ""));
 }
 
+function dynamicUrlPrefix(url) {
+  const source = String(url || "");
+  const marker = source.indexOf("{{");
+  if (marker <= 0) return "";
+  return source.slice(0, marker);
+}
+
+function normalizeDynamicUrlRuntimeValue(templateUrl, runtimeValue) {
+  const raw = toTrimmedString(runtimeValue);
+  if (!raw) return "";
+
+  const prefix = dynamicUrlPrefix(templateUrl);
+  if (!prefix) return raw;
+
+  if (!/^https?:\/\//i.test(raw)) return raw;
+
+  // If user pasted a full URL that starts with the template URL prefix,
+  // convert it to suffix automatically.
+  if (raw.toLowerCase().startsWith(prefix.toLowerCase())) {
+    return raw.slice(prefix.length);
+  }
+
+  return raw;
+}
+
 function normalizeAuthSecurityRecommendation(components) {
   const bodyComponent = ensureArray(components).find(
     (component) => toUpper(component?.type) === "BODY"
@@ -444,7 +469,15 @@ function validateBeforeSend(template, data = {}) {
         }
 
         if (buttonType === "URL" && hasDynamicUrl(button?.url)) {
-          invariant(runtimeValue, `Dynamic URL value required for button ${index + 1}`);
+          const normalizedRuntimeValue = normalizeDynamicUrlRuntimeValue(button?.url, runtimeValue);
+          invariant(normalizedRuntimeValue, `Dynamic URL value required for button ${index + 1}`);
+          const prefix = dynamicUrlPrefix(button?.url);
+          if (/^https?:\/\//i.test(normalizedRuntimeValue) && prefix) {
+            invariant(
+              false,
+              `Dynamic URL value for button ${index + 1} must be only the variable part (do not send full URL)`
+            );
+          }
         }
 
         if (buttonType === "VOICE_CALL") {
@@ -503,6 +536,8 @@ function buildButtonComponent(button, index, data) {
   }
 
   if (buttonType === "URL" && hasDynamicUrl(button?.url)) {
+    const normalizedRuntimeValue = normalizeDynamicUrlRuntimeValue(button?.url, runtimeValue);
+    const encodedRuntimeValue = encodeURIComponent(normalizedRuntimeValue);
     return {
       type: "button",
       sub_type: "url",
@@ -510,7 +545,7 @@ function buildButtonComponent(button, index, data) {
       parameters: [
         {
           type: "text",
-          text: runtimeValue,
+          text: encodedRuntimeValue,
         },
       ],
     };

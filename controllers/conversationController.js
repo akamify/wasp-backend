@@ -1,7 +1,10 @@
 const { Conversation } = require("../models/Conversation");
 const { Contact } = require("../models/Contact");
+const { Message } = require("../models/Message");
 const { normalizePhone } = require("../services/contactService");
 const { markConversationRead } = require("../services/conversationService");
+const { getCredentialsForUser } = require("../services/credentialsService");
+const { markMessageAsRead } = require("../utils/whatsappSender");
 const { HttpError } = require("../utils/httpError");
 
 async function attachContacts(userId, conversations) {
@@ -74,6 +77,47 @@ async function getConversation(req, res) {
 async function readConversation(req, res) {
   const phone = normalizePhone(req.params.phone);
   if (!phone) throw new HttpError(400, "Invalid phone number");
+
+  // Send read receipts only when agent opens/reads chat (controlled seen behavior).
+  // Best-effort: conversation read should still succeed even if Meta call fails.
+  try {
+    const creds = await getCredentialsForUser(req.workspace.id);
+    const pendingInbound = await Message.find({
+      workspaceId: req.workspace.id,
+      phone,
+      direction: "inbound",
+      status: "received",
+      whatsappMessageId: { $type: "string" },
+      readReceiptSentAt: null,
+    })
+      .sort({ createdAt: 1 })
+      .limit(100)
+      .select("_id whatsappMessageId");
+
+    for (const msg of pendingInbound) {
+      try {
+        await markMessageAsRead({
+          accessToken: creds.accessToken,
+          phoneNumberId: creds.phoneNumberId,
+          messageId: String(msg.whatsappMessageId),
+          graphApiVersion: creds.graphApiVersion,
+        });
+        await Message.updateOne(
+          { _id: msg._id },
+          {
+            $set: {
+              readReceiptSentAt: new Date(),
+              "statusTimestamps.readByBusinessAt": new Date(),
+            },
+          }
+        );
+      } catch {
+        // Ignore per-message read receipt failures and continue.
+      }
+    }
+  } catch {
+    // Ignore credential/Meta issues; keeping read endpoint resilient.
+  }
 
   const conversation = await markConversationRead({ userId: req.workspace.id, phone });
   res.json({ success: true, conversation: conversation || null, phone });

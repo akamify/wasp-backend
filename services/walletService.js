@@ -6,6 +6,14 @@ const mongoose = require("mongoose");
 const COST_PER_MESSAGE = Number(process.env.COST_PER_MESSAGE || 1); // INR
 const SEED_BALANCE = Number(process.env.WALLET_SEED_BALANCE || 0);
 const MERCHANT_WORKSPACE_ID = String(process.env.MERCHANT_WORKSPACE_ID || "").trim();
+const MONEY_PRECISION = 2;
+
+function roundCurrency(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return 0;
+  const rounded = Number(n.toFixed(MONEY_PRECISION));
+  return Math.abs(rounded) < 1e-9 ? 0 : rounded;
+}
 
 function envFlag(name) {
   const raw = process.env[name];
@@ -52,22 +60,25 @@ async function getOrCreateWallet(workspaceId) {
 
 async function ensureBalance(workspaceId, amount) {
   const wallet = await getOrCreateWallet(workspaceId);
-  if (wallet.balance < amount) {
+  const currentBalance = roundCurrency(wallet.balance);
+  const required = roundCurrency(amount);
+  if (currentBalance + 1e-9 < required) {
     throw new HttpError(402, "Insufficient wallet balance", {
-      balance: wallet.balance,
-      required: amount,
+      balance: currentBalance,
+      required,
     });
   }
   return wallet;
 }
 
 async function debit(workspaceId, amount, reason, meta = {}) {
-  if (amount <= 0) return getOrCreateWallet(workspaceId);
+  const normalizedAmount = roundCurrency(amount);
+  if (normalizedAmount <= 0) return getOrCreateWallet(workspaceId);
   await getOrCreateWallet(workspaceId);
 
   const wallet = await Wallet.findOneAndUpdate(
-    { workspaceId, balance: { $gte: amount } },
-    { $inc: { balance: -Number(amount) } },
+    { workspaceId, balance: { $gte: normalizedAmount } },
+    { $inc: { balance: -normalizedAmount } },
     { returnDocument: "after" }
   );
   if (!wallet) {
@@ -77,7 +88,7 @@ async function debit(workspaceId, amount, reason, meta = {}) {
   await Transaction.create({
     workspaceId,
     type: "debit",
-    amount,
+    amount: normalizedAmount,
     currency: wallet.currency,
     reason,
     provider: "internal",
@@ -88,18 +99,19 @@ async function debit(workspaceId, amount, reason, meta = {}) {
 }
 
 async function credit(workspaceId, amount, reason, provider = "internal", providerRef = "", meta = {}) {
-  if (amount <= 0) throw new HttpError(400, "Invalid amount");
+  const normalizedAmount = roundCurrency(amount);
+  if (normalizedAmount <= 0) throw new HttpError(400, "Invalid amount");
   await getOrCreateWallet(workspaceId);
   const wallet = await Wallet.findOneAndUpdate(
     { workspaceId },
-    { $inc: { balance: Number(amount) } },
+    { $inc: { balance: normalizedAmount } },
     { returnDocument: "after" }
   );
 
   await Transaction.create({
     workspaceId,
     type: "credit",
-    amount,
+    amount: normalizedAmount,
     currency: wallet.currency,
     reason,
     provider,
@@ -158,13 +170,13 @@ async function refundMessagingCharge(payerWorkspaceId, amount, meta = {}) {
 }
 
 function messageCost(count = 1) {
-  const n = Math.max(Number(count || 1), 1);
-  return COST_PER_MESSAGE * n;
+  const n = Math.max(Number(count || 0), 0);
+  return roundCurrency(COST_PER_MESSAGE * n);
 }
 
 function messageCostForTemplateCategory(category, count = 1) {
-  const n = Math.max(Number(count || 1), 1);
-  return perCategoryCost(category) * n;
+  const n = Math.max(Number(count || 0), 0);
+  return roundCurrency(perCategoryCost(category) * n);
 }
 
 module.exports = {
@@ -177,4 +189,5 @@ module.exports = {
   messageCost,
   messageCostForTemplateCategory,
   walletChargesEnabled,
+  roundCurrency,
 };

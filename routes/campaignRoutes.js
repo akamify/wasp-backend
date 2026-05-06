@@ -8,11 +8,14 @@ const {
   listCampaigns,
   getCampaign,
   createCampaign,
+  estimateCampaign,
   getCampaignMetrics,
   listCampaignMessages,
   listCampaignReplies,
   getCampaignCreditUsage,
   updateCampaignStatus,
+  retryFailedCampaign,
+  deleteCampaign,
 } = require("../controllers/campaignController");
 
 const router = express.Router();
@@ -23,6 +26,8 @@ router.get("/:id/metrics", auth, requireWorkspace, asyncHandler(getCampaignMetri
 router.get("/:id/messages", auth, requireWorkspace, asyncHandler(listCampaignMessages));
 router.get("/:id/replies", auth, requireWorkspace, asyncHandler(listCampaignReplies));
 router.get("/:id/credit-usage", auth, requireWorkspace, asyncHandler(getCampaignCreditUsage));
+router.post("/:id/retry-failed", auth, requireWorkspace, asyncHandler(retryFailedCampaign));
+router.delete("/:id", auth, requireWorkspace, asyncHandler(deleteCampaign));
 router.post(
   "/:id/action",
   auth,
@@ -30,6 +35,37 @@ router.post(
   validate(Joi.object({ action: Joi.string().valid("pause", "resume", "stop").required() })),
   asyncHandler(updateCampaignStatus)
 );
+router.post(
+  "/estimate",
+  auth,
+  requireWorkspace,
+  validate(
+    Joi.object({
+      templateId: Joi.string().required(),
+      recipients: Joi.array()
+        .items(
+          Joi.alternatives().try(
+            Joi.string().min(8).max(30),
+            Joi.object({
+              to: Joi.string().min(8).max(30).required(),
+              variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
+              headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+              otpCode: Joi.string().allow("").max(20).optional(),
+              buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+              buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
+              flowTokens: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+              flowActionData: Joi.array().max(10).optional(),
+            })
+          )
+        )
+        .min(1)
+        .max(50000)
+        .required(),
+    })
+  ),
+  asyncHandler(estimateCampaign)
+);
+
 router.post(
   "/",
   auth,
