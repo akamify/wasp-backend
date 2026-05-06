@@ -34,6 +34,21 @@ function normalizeStatus(status) {
   return "sent";
 }
 
+function parseTierLimitToNumber(tier) {
+  const s = String(tier || "").trim().toUpperCase();
+  if (!s) return null;
+  if (s.includes("UNLIMITED")) return -1;
+
+  const match = s.match(/TIER[_\s-]*([0-9]+)\s*(K|M)?/);
+  if (!match) return null;
+  let n = Number(match[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const suffix = match[2] || "";
+  if (suffix === "K") n *= 1000;
+  if (suffix === "M") n *= 1000 * 1000;
+  return n;
+}
+
 async function verify(req, res) {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -93,14 +108,54 @@ async function receive(req, res) {
         }
         if (!tenant) continue;
 
-        const currentLimit = value?.current_limit ? String(value.current_limit) : "";
+        const currentLimitRaw = value?.current_limit ?? null;
+        const nextLimitRaw = value?.next_limit ?? null;
+
+        const currentLimitStr = currentLimitRaw != null ? String(currentLimitRaw) : "";
+        const currentLimitNum = Number(currentLimitRaw);
+        const nextLimitNum = Number(nextLimitRaw);
         const ts = entry?.time ? asDateFromSeconds(entry.time) : new Date();
-        if (currentLimit) {
-          await WhatsAppCredentials.updateOne(
-            { workspaceId: tenant.workspaceId },
-            { $set: { messagingLimitTierCached: currentLimit, lastLimitsUpdateAt: ts } }
-          );
+
+        const update = { lastLimitsUpdateAt: ts };
+        if (currentLimitStr) update.messagingLimitTierCached = currentLimitStr;
+        if (Number.isFinite(currentLimitNum) && currentLimitNum > 0) update.messagingLimitCurrentCached = currentLimitNum;
+        if (Number.isFinite(nextLimitNum) && nextLimitNum > 0) update.messagingLimitNextCached = nextLimitNum;
+
+        await WhatsAppCredentials.updateOne(
+          { workspaceId: tenant.workspaceId },
+          { $set: update }
+        );
+
+        continue;
+      }
+
+      // 1b) Newer webhooks: business_capability_update for messaging limits
+      if (field === "business_capability_update") {
+        const wabaId = entry?.id ? String(entry.id) : "";
+        if (!wabaId) continue;
+        const tenant = await findTenantByWabaId(wabaId);
+        if (!tenant) continue;
+
+        const perBusinessTier = value?.max_daily_conversations_per_business ?? null;
+        const perPhone = value?.max_daily_conversations_per_phone ?? value?.max_daily_conversation_per_phone ?? null;
+        const ts = entry?.time ? asDateFromSeconds(entry.time) : new Date();
+
+        const tierStr = perBusinessTier != null ? String(perBusinessTier) : "";
+        const currentNumFromTier = parseTierLimitToNumber(tierStr);
+        const currentNumFromPhone = Number(perPhone);
+
+        const update = { lastLimitsUpdateAt: ts };
+        if (tierStr) update.messagingLimitTierCached = tierStr;
+        if (Number.isFinite(currentNumFromTier) || currentNumFromTier === -1) {
+          update.messagingLimitCurrentCached = currentNumFromTier;
+        } else if (Number.isFinite(currentNumFromPhone) && currentNumFromPhone > 0) {
+          update.messagingLimitCurrentCached = currentNumFromPhone;
         }
+
+        await WhatsAppCredentials.updateOne(
+          { workspaceId: tenant.workspaceId },
+          { $set: update }
+        );
 
         continue;
       }
@@ -263,6 +318,7 @@ async function receive(req, res) {
             userId: workspaceIdRaw,
             phone: from,
             lastMessageAt: ts,
+            lastInboundAt: ts,
             lastMessagePreview: text.slice(0, 160),
             incrementUnread: true,
           });

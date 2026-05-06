@@ -30,6 +30,9 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
 
     // Best-effort cached signals from webhooks (some limits are not queryable via REST reliably)
     messagingLimitTierCached: { type: String, default: null },
+    // Numeric "business-initiated conversations in a rolling 24-hour period" (WhatsApp Manager)
+    messagingLimitCurrentCached: { type: Number, default: null },
+    messagingLimitNextCached: { type: Number, default: null },
     lastLimitsUpdateAt: { type: Date, default: null },
   },
   { timestamps: true }

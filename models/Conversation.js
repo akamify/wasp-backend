@@ -10,6 +10,7 @@ const ConversationSchema = new mongoose.Schema(
     },
     phone: { type: String, required: true, index: true },
     lastMessageAt: { type: Date, index: true },
+    lastInboundAt: { type: Date, index: true, default: null },
     lastMessagePreview: { type: String },
     unreadCount: { type: Number, default: 0 },
   },

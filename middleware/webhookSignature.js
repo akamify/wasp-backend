@@ -16,6 +16,9 @@ function verifyWebhookSignature(req, res, next) {
     return next();
   }
 
+  // In non-production, signature validation is best-effort to avoid blocking local dev
+  // when the callback URL is proxied / test tools omit signature headers.
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
   if (!metaAppSecret) return next(); // signature verification optional
 
   const signature = req.headers["x-hub-signature-256"];
@@ -24,6 +27,7 @@ function verifyWebhookSignature(req, res, next) {
       // eslint-disable-next-line no-console
       console.warn("Webhook signature missing (x-hub-signature-256).");
     }
+    if (!isProd) return next();
     return next(new HttpError(401, "Missing X-Hub-Signature-256 header"));
   }
 
@@ -33,6 +37,7 @@ function verifyWebhookSignature(req, res, next) {
       // eslint-disable-next-line no-console
       console.warn("Webhook rawBody missing. Ensure express.json verify() is configured.");
     }
+    if (!isProd) return next();
     return next(new HttpError(500, "Missing raw body for signature verification"));
   }
 
@@ -50,6 +55,7 @@ function verifyWebhookSignature(req, res, next) {
       // eslint-disable-next-line no-console
       console.warn("Webhook signature mismatch.");
     }
+    if (!isProd) return next();
     return next(new HttpError(401, "Invalid webhook signature"));
   }
 

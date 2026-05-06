@@ -1,9 +1,26 @@
 const { Wallet } = require("../models/Wallet");
 const { Transaction } = require("../models/Transaction");
 const { HttpError } = require("../utils/httpError");
+const mongoose = require("mongoose");
 
 const COST_PER_MESSAGE = Number(process.env.COST_PER_MESSAGE || 1); // INR
 const SEED_BALANCE = Number(process.env.WALLET_SEED_BALANCE || 0);
+const MERCHANT_WORKSPACE_ID = String(process.env.MERCHANT_WORKSPACE_ID || "").trim();
+
+function envFlag(name) {
+  const raw = process.env[name];
+  if (raw == null) return null;
+  const s = String(raw).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(s)) return true;
+  if (["0", "false", "no", "n", "off"].includes(s)) return false;
+  return null;
+}
+
+function walletChargesEnabled() {
+  const explicit = envFlag("WALLET_CHARGES_ENABLED");
+  if (explicit !== null) return explicit;
+  return String(process.env.NODE_ENV || "").toLowerCase() === "production";
+}
 
 function perCategoryCost(category) {
   const c = String(category || "").trim().toLowerCase();
@@ -93,6 +110,53 @@ async function credit(workspaceId, amount, reason, provider = "internal", provid
   return wallet;
 }
 
+async function chargeForMessaging(payerWorkspaceId, amount, reason, meta = {}) {
+  if (!walletChargesEnabled()) {
+    return { charged: false, amount: 0, merchantCredited: false, wallet: await getOrCreateWallet(payerWorkspaceId) };
+  }
+  if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    return { charged: false, amount: 0, merchantCredited: false, wallet: await getOrCreateWallet(payerWorkspaceId) };
+  }
+
+  const wallet = await debit(payerWorkspaceId, Number(amount), reason, meta);
+
+  let merchantCredited = false;
+  if (MERCHANT_WORKSPACE_ID && mongoose.Types.ObjectId.isValid(MERCHANT_WORKSPACE_ID)) {
+    try {
+      await credit(
+        MERCHANT_WORKSPACE_ID,
+        Number(amount),
+        "Message revenue",
+        "internal",
+        String(payerWorkspaceId),
+        { ...meta, fromWorkspaceId: String(payerWorkspaceId) }
+      );
+      merchantCredited = true;
+    } catch (err) {
+      // Best-effort; don't block sends if merchant credit fails.
+    }
+  }
+
+  return { charged: true, amount: Number(amount), merchantCredited, wallet };
+}
+
+async function refundMessagingCharge(payerWorkspaceId, amount, meta = {}) {
+  if (!walletChargesEnabled()) return { refunded: false };
+  if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) return { refunded: false };
+
+  await credit(payerWorkspaceId, Number(amount), "Message refund (send failed)", "internal", "", meta);
+
+  if (MERCHANT_WORKSPACE_ID && mongoose.Types.ObjectId.isValid(MERCHANT_WORKSPACE_ID)) {
+    try {
+      await debit(MERCHANT_WORKSPACE_ID, Number(amount), "Message revenue reversal", meta);
+    } catch (err) {
+      // Best-effort.
+    }
+  }
+
+  return { refunded: true };
+}
+
 function messageCost(count = 1) {
   const n = Math.max(Number(count || 1), 1);
   return COST_PER_MESSAGE * n;
@@ -103,4 +167,14 @@ function messageCostForTemplateCategory(category, count = 1) {
   return perCategoryCost(category) * n;
 }
 
-module.exports = { getOrCreateWallet, ensureBalance, debit, credit, messageCost, messageCostForTemplateCategory };
+module.exports = {
+  getOrCreateWallet,
+  ensureBalance,
+  debit,
+  credit,
+  chargeForMessaging,
+  refundMessagingCharge,
+  messageCost,
+  messageCostForTemplateCategory,
+  walletChargesEnabled,
+};

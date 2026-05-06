@@ -5,6 +5,7 @@ async function touchConversation({
   userId,
   phone,
   lastMessageAt,
+  lastInboundAt,
   lastMessagePreview,
   incrementUnread = false,
 }) {
@@ -14,6 +15,7 @@ async function touchConversation({
   const update = {
     $set: {
       lastMessageAt: lastMessageAt || new Date(),
+      ...(lastInboundAt ? { lastInboundAt } : {}),
       ...(lastMessagePreview !== undefined ? { lastMessagePreview } : {}),
     },
   };

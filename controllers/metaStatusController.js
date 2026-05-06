@@ -2,6 +2,22 @@ const { WhatsAppCredentials } = require("../models/WhatsAppCredentials");
 const { decryptString } = require("../utils/crypto");
 const axios = require("axios");
 
+function parseTierLimitToNumber(tier) {
+  const s = String(tier || "").trim().toUpperCase();
+  if (!s) return null;
+  if (s.includes("UNLIMITED")) return -1;
+
+  // Support formats like: TIER_250, TIER_2K, TIER_10K, TIER_100K
+  const match = s.match(/TIER[_\s-]*([0-9]+)\s*(K|M)?/);
+  if (!match) return null;
+  let n = Number(match[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const suffix = match[2] || "";
+  if (suffix === "K") n *= 1000;
+  if (suffix === "M") n *= 1000 * 1000;
+  return n;
+}
+
 function mask(value) {
   const s = String(value || "");
   if (s.length <= 6) return "***";
@@ -18,7 +34,7 @@ async function metaStatus(req, res) {
   res.set("Cache-Control", "no-store");
 
   const doc = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id }).select(
-    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid lastValidatedAt createdAt updatedAt messagingLimitTierCached lastLimitsUpdateAt"
+    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid lastValidatedAt createdAt updatedAt messagingLimitTierCached messagingLimitCurrentCached messagingLimitNextCached lastLimitsUpdateAt"
   );
 
   if (!doc) {
@@ -37,6 +53,7 @@ async function metaStatus(req, res) {
   let phone = null;
   let businessProfile = null;
   let debugHint = null;
+  let apiTier = null;
 
   try {
     const client = axios.create({ baseURL: graphBaseUrl(doc.graphApiVersion), timeout: 15000 });
@@ -48,7 +65,7 @@ async function metaStatus(req, res) {
           fields:
             // NOTE: phone number object does not reliably expose tier/limit fields for all accounts.
             // Keep this list to known-stable fields to avoid (#100) nonexisting field errors.
-            "id,display_phone_number,verified_name,quality_rating,code_verification_status,name_status,platform_type,throughput,status,account_mode,health_status",
+            "id,display_phone_number,verified_name,quality_rating,code_verification_status,name_status,platform_type,throughput,status,account_mode,health_status,whatsapp_business_manager_messaging_limit",
         },
         headers,
       }),
@@ -60,7 +77,10 @@ async function metaStatus(req, res) {
       }),
     ]);
 
-    if (phoneRes.status === "fulfilled") phone = phoneRes.value.data;
+    if (phoneRes.status === "fulfilled") {
+      phone = phoneRes.value.data;
+      apiTier = phone?.whatsapp_business_manager_messaging_limit || null;
+    }
     if (profileRes.status === "fulfilled") {
       const data = profileRes.value.data?.data;
       businessProfile = Array.isArray(data) ? data[0] : data || null;
@@ -96,9 +116,13 @@ async function metaStatus(req, res) {
     phone,
     businessProfile,
     limits: {
-      messagingLimitTier: doc.messagingLimitTierCached || null,
+      messagingLimitTier: doc.messagingLimitTierCached || apiTier || null,
+      messagingLimitCurrent: Number.isFinite(doc.messagingLimitCurrentCached)
+        ? doc.messagingLimitCurrentCached
+        : parseTierLimitToNumber(doc.messagingLimitTierCached || apiTier),
+      messagingLimitNext: Number.isFinite(doc.messagingLimitNextCached) ? doc.messagingLimitNextCached : null,
       lastLimitsUpdateAt: doc.lastLimitsUpdateAt || null,
-      source: doc.messagingLimitTierCached ? "webhook" : null,
+      source: doc.messagingLimitTierCached || doc.messagingLimitCurrentCached ? "webhook" : apiTier ? "api" : null,
     },
     debugHint,
     build: { commit: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA || null },

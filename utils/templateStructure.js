@@ -697,6 +697,41 @@ function renderTemplatePreview(template, data = {}) {
   return normalizedTemplate.name || "Template message";
 }
 
+function renderTemplatePreviewParts(template, data = {}) {
+  const normalizedTemplate = normalizeTemplate(template);
+
+  const header = ensureArray(normalizedTemplate.components).find(
+    (component) =>
+      toUpper(component?.type) === "HEADER" &&
+      toUpper(component?.format) === "TEXT" &&
+      typeof component?.text === "string"
+  );
+  const body = ensureArray(normalizedTemplate.components).find(
+    (component) => toUpper(component?.type) === "BODY" && typeof component?.text === "string"
+  );
+  const footer = ensureArray(normalizedTemplate.components).find(
+    (component) => toUpper(component?.type) === "FOOTER" && typeof component?.text === "string"
+  );
+
+  const headerText = header?.text
+    ? replacePlaceholders(header.text, ensureStringArray(data.headerVariables)).slice(0, 300)
+    : "";
+
+  let bodyText = "";
+  if (body?.text) {
+    bodyText = replacePlaceholders(body.text, ensureStringArray(data.variables)).slice(0, 4096);
+  } else if (normalizedTemplate.category === "authentication") {
+    const code = toTrimmedString(data.otpCode);
+    bodyText = code ? `Authentication code: ${code}` : "Authentication template";
+  } else {
+    bodyText = normalizedTemplate.name || "Template message";
+  }
+
+  const footerText = footer?.text ? footer.text.slice(0, 300) : "";
+
+  return { header: headerText, body: bodyText, footer: footerText };
+}
+
 module.exports = {
   maxPlaceholderIndex,
   hasDynamicUrl,
@@ -704,4 +739,5 @@ module.exports = {
   validateBeforeSend,
   buildComponentsFromTemplate,
   renderTemplatePreview,
+  renderTemplatePreviewParts,
 };

@@ -19,6 +19,9 @@ router.get("/debug/last", (req, res, next) => {
 
 router.get("/whatsapp", asyncHandler(verify));
 router.post("/whatsapp", verifyWebhookSignature, asyncHandler(receive));
+// Alias paths (common in tutorials / older setups)
+router.get("/webhook", asyncHandler(verify));
+router.post("/webhook", verifyWebhookSignature, asyncHandler(receive));
 router.post("/razorpay", asyncHandler(razorpayWebhook));
 
 module.exports = router;

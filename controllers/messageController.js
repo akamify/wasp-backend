@@ -4,7 +4,9 @@ const { HttpError } = require("../utils/httpError");
 const { sendTemplateMessageForUser, sendTextMessageForUser } = require("../services/outboundMessageService");
 const { getCredentialsForUser } = require("../services/credentialsService");
 const { assertNormalizedPhone, normalizePhone } = require("../services/contactService");
-const { debit, credit, messageCostForTemplateCategory } = require("../services/walletService");
+const { chargeForMessaging, refundMessagingCharge, messageCostForTemplateCategory } = require("../services/walletService");
+const { isCustomerServiceWindowOpen } = require("../services/pricingService");
+const { renderTemplatePreviewParts } = require("../utils/templateStructure");
 
 function isDuplicateKeyError(err) {
   return err?.code === 11000 || err?.name === "MongoServerError";
@@ -72,12 +74,14 @@ async function sendTemplate(req, res) {
     throw new HttpError(400, "Template must be approved before sending");
   }
 
-  const chargeAmount = messageCostForTemplateCategory(template.category, 1);
+  const windowOpen = await isCustomerServiceWindowOpen({ workspaceId: req.workspace.id, phone: normalizedPhone });
+  const chargeAmount = windowOpen ? 0 : messageCostForTemplateCategory(template.category, 1);
   try {
-    await debit(req.workspace.id, chargeAmount, "Message send", {
+    await chargeForMessaging(req.workspace.id, chargeAmount, "Message send", {
       kind: "single",
       templateId: String(template._id),
       to: normalizedPhone,
+      pricing: { customerServiceWindowOpen: windowOpen },
     });
     await getCredentialsForUser(req.workspace.id);
 
@@ -104,10 +108,7 @@ async function sendTemplate(req, res) {
     if (!err?.statusCode && err?.response) {
       // If provider send failed, refund the wallet debit.
       try {
-        await credit(req.workspace.id, chargeAmount, "Message refund (send failed)", "internal", "", {
-          templateId: templateId,
-          to: normalizedPhone,
-        });
+        await refundMessagingCharge(req.workspace.id, chargeAmount, { templateId: templateId, to: normalizedPhone });
       } catch {}
     }
     if (err.statusCode) {
@@ -149,13 +150,15 @@ async function bulkSend(req, res) {
       const r = queue.shift();
       if (!r) continue;
       const to = assertNormalizedPhone(r.to);
-      const chargeAmount = messageCostForTemplateCategory(template.category, 1);
+      const windowOpen = await isCustomerServiceWindowOpen({ workspaceId: req.workspace.id, phone: to });
+      const chargeAmount = windowOpen ? 0 : messageCostForTemplateCategory(template.category, 1);
 
       try {
-        await debit(req.workspace.id, chargeAmount, "Message send", {
+        await chargeForMessaging(req.workspace.id, chargeAmount, "Message send", {
           kind: "bulk",
           templateId: String(template._id),
           to,
+          pricing: { customerServiceWindowOpen: windowOpen },
         });
         const { message } = await sendTemplateMessageForUser({
           userId: req.workspace.id,
@@ -179,10 +182,7 @@ async function bulkSend(req, res) {
       } catch (err) {
         if (!err?.statusCode && err?.response) {
           try {
-            await credit(req.workspace.id, chargeAmount, "Message refund (send failed)", "internal", "", {
-              templateId: String(template._id),
-              to,
-            });
+            await refundMessagingCharge(req.workspace.id, chargeAmount, { templateId: String(template._id), to });
           } catch {}
         }
         if (err.statusCode) {
@@ -223,6 +223,12 @@ async function sendText(req, res) {
   if (!body) throw new HttpError(400, "Text is required");
 
   try {
+    const windowOpen = await isCustomerServiceWindowOpen({ workspaceId: req.workspace.id, phone: normalizedPhone });
+    if (!windowOpen) {
+      throw new HttpError(400, "Customer service window is closed. Ask the user to message first (24h window).", {
+        phone: normalizedPhone,
+      });
+    }
     await getCredentialsForUser(req.workspace.id);
     const result = await sendTextMessageForUser({
       userId: req.workspace.id,
@@ -268,7 +274,59 @@ async function messagesByPhone(req, res) {
     .sort({ createdAt: -1 })
     .limit(limit);
 
-  res.json({ success: true, phone, messages: messages.reverse() });
+  const templateIds = Array.from(
+    new Set(
+      messages
+        .map((m) => (m.templateId ? String(m.templateId) : ""))
+        .filter(Boolean)
+    )
+  );
+
+  const templates = templateIds.length
+    ? await Template.find({ _id: { $in: templateIds }, workspaceId: req.workspace.id })
+    : [];
+  const templateMap = new Map(templates.map((t) => [String(t._id), t]));
+
+  const decorated = messages
+    .slice()
+    .reverse()
+    .map((m) => {
+      const obj = m.toObject();
+
+      // Avoid "[object Object]" leaks in UI.
+      const rawText = obj.text;
+      if (rawText && typeof rawText !== "string") {
+        obj.text = null;
+      }
+
+      if (obj.templateId) {
+        const tpl = templateMap.get(String(obj.templateId));
+        if (tpl) {
+          const runtime = obj?.payload?.runtime || {};
+          const parts = renderTemplatePreviewParts(tpl, {
+            variables: runtime.variables || [],
+            headerVariables: runtime.headerVariables || [],
+            otpCode: runtime.otpCode || "",
+          });
+          obj.display = {
+            kind: "template",
+            header: parts.header,
+            body: parts.body,
+            footer: parts.footer,
+            templateName: tpl.name,
+            category: tpl.category,
+          };
+        }
+      }
+
+      if (!obj.display && typeof obj.text === "string" && obj.text.trim()) {
+        obj.display = { kind: "text", body: obj.text };
+      }
+
+      return obj;
+    });
+
+  res.json({ success: true, phone, messages: decorated });
 }
 
 async function messageStatusByWaId(req, res) {
