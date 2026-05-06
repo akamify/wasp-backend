@@ -170,7 +170,21 @@ async function receive(req, res) {
         continue;
       }
 
-      const tenant = await findTenantByPhoneNumberId(phoneNumberId);
+      let tenant = await findTenantByPhoneNumberId(phoneNumberId);
+      if (!tenant) {
+        const wabaIdFromEntry = entry?.id ? String(entry.id) : "";
+        if (wabaIdFromEntry) {
+          tenant = await findTenantByWabaId(wabaIdFromEntry);
+          if (tenant) {
+            pushWebhookDebugEvent({
+              type: "tenant_resolved_by_waba_fallback",
+              phoneNumberId: String(phoneNumberId),
+              wabaId: wabaIdFromEntry,
+            });
+          }
+        }
+      }
+
       const resolvedWorkspaceId = tenant?.workspaceId ? String(tenant.workspaceId) : "";
       const fallbackWorkspaceId = String(defaultWorkspaceId || "");
       let workspaceIdRaw =
