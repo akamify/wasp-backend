@@ -173,12 +173,32 @@ async function receive(req, res) {
       const tenant = await findTenantByPhoneNumberId(phoneNumberId);
       const resolvedWorkspaceId = tenant?.workspaceId ? String(tenant.workspaceId) : "";
       const fallbackWorkspaceId = String(defaultWorkspaceId || "");
-      const workspaceIdRaw =
+      let workspaceIdRaw =
         mongoose.Types.ObjectId.isValid(resolvedWorkspaceId)
           ? resolvedWorkspaceId
           : mongoose.Types.ObjectId.isValid(fallbackWorkspaceId)
             ? fallbackWorkspaceId
             : "";
+
+      // Last-resort fallback for single-tenant deployments:
+      // if mapping is broken (key mismatch, legacy hash), but only one valid
+      // WhatsApp connection exists, route webhooks to that workspace.
+      if (!workspaceIdRaw) {
+        const validCreds = await WhatsAppCredentials.find({ isValid: true })
+          .select("workspaceId")
+          .limit(2);
+        if (validCreds.length === 1) {
+          const onlyWorkspaceId = String(validCreds[0]?.workspaceId || "");
+          if (mongoose.Types.ObjectId.isValid(onlyWorkspaceId)) {
+            workspaceIdRaw = onlyWorkspaceId;
+            pushWebhookDebugEvent({
+              type: "tenant_single_workspace_fallback",
+              phoneNumberId: String(phoneNumberId),
+              workspaceId: workspaceIdRaw,
+            });
+          }
+        }
+      }
 
       if (!workspaceIdRaw) {
         if (debug) {
