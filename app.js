@@ -40,6 +40,18 @@ function mountRoutes(basePath = "") {
   app.use(`${basePath}`, require("./routes/trackingRoutes"));
   app.use(`${basePath}/webhooks`, require("./routes/webhookRoutes"));
 
+  // Common webhook callback aliases (many setups use `/webhook` directly).
+  // These must remain public (no auth) and support the Meta verification handshake.
+  // Mounted for both `/` and `/api` base paths.
+  // NOTE: We mount handlers directly (instead of re-mounting the router) so that
+  // `GET/POST {basePath}/webhook` works (not `{basePath}/webhook/webhook`).
+  // eslint-disable-next-line global-require
+  const { verifyWebhookSignature } = require("./middleware/webhookSignature");
+  // eslint-disable-next-line global-require
+  const { verify, receive } = require("./controllers/webhookController");
+  app.get(`${basePath}/webhook`, verify);
+  app.post(`${basePath}/webhook`, verifyWebhookSignature, receive);
+
   
   // Auth + tenant routes
   app.use(`${basePath}/auth`, require("./routes/authRoutes"));
