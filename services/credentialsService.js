@@ -25,19 +25,53 @@ async function getCredentialsForUser(userId) {
 }
 
 async function findTenantByPhoneNumberId(phoneNumberId) {
-  const phoneNumberIdHash = hashForLookup(phoneNumberId);
-  const doc = await WhatsAppCredentials.findOne({ phoneNumberIdHash }).select(
+  const normalized = String(phoneNumberId || "").trim();
+  if (!normalized) return null;
+
+  // Fast path: deterministic hash lookup.
+  const phoneNumberIdHash = hashForLookup(normalized);
+  const byHash = await WhatsAppCredentials.findOne({ phoneNumberIdHash }).select(
     "workspaceId phoneNumberIdHash"
   );
-  return doc || null;
+  if (byHash) return byHash;
+
+  // Fallback path: if lookup secret changed across environments, compare decrypted values.
+  const docs = await WhatsAppCredentials.find({ isValid: true }).select(
+    "workspaceId +phoneNumberIdEnc"
+  );
+  for (const doc of docs) {
+    try {
+      const raw = decryptString(doc.phoneNumberIdEnc);
+      if (String(raw).trim() === normalized) return doc;
+    } catch {
+      // Ignore corrupted rows and continue scanning.
+    }
+  }
+  return null;
 }
 
 async function findTenantByWabaId(wabaId) {
-  const businessAccountIdHash = hashForLookup(wabaId);
-  const doc = await WhatsAppCredentials.findOne({ businessAccountIdHash }).select(
+  const normalized = String(wabaId || "").trim();
+  if (!normalized) return null;
+
+  const businessAccountIdHash = hashForLookup(normalized);
+  const byHash = await WhatsAppCredentials.findOne({ businessAccountIdHash }).select(
     "workspaceId businessAccountIdHash"
   );
-  return doc || null;
+  if (byHash) return byHash;
+
+  const docs = await WhatsAppCredentials.find({ isValid: true }).select(
+    "workspaceId +businessAccountIdEnc"
+  );
+  for (const doc of docs) {
+    try {
+      const raw = decryptString(doc.businessAccountIdEnc);
+      if (String(raw).trim() === normalized) return doc;
+    } catch {
+      // Ignore corrupted rows and continue scanning.
+    }
+  }
+  return null;
 }
 
 module.exports = { getCredentialsForUser, findTenantByPhoneNumberId, findTenantByWabaId };
