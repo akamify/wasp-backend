@@ -261,11 +261,19 @@ async function listLogs(req, res) {
   const skip = (page - 1) * limit;
 
   const filter = { workspaceId: req.workspace.id, direction: "outbound" };
-  if (req.query.status) filter.status = req.query.status;
+  if (req.query.status && req.query.status !== "all") filter.status = req.query.status;
   if (req.query.templateId) filter.templateId = req.query.templateId;
+  if (req.query.search) {
+    const q = String(req.query.search).trim();
+    if (q) {
+      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      filter.$or = [{ phone: rx }, { whatsappMessageId: rx }, { status: rx }, { text: rx }];
+    }
+  }
+  const sortDir = String(req.query.sort || "desc").toLowerCase() === "asc" ? 1 : -1;
 
   const [items, total] = await Promise.all([
-    Message.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+    Message.find(filter).sort({ createdAt: sortDir, _id: sortDir }).skip(skip).limit(limit),
     Message.countDocuments(filter),
   ]);
 
