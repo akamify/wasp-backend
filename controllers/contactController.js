@@ -2,31 +2,29 @@ const { Contact } = require("../models/Contact");
 const {
   assertNormalizedPhone,
   normalizePhone,
-  upsertContactForUser,
 } = require("../services/contactService");
 const { HttpError } = require("../utils/httpError");
 
-function matchesSearch(contact, search) {
-  const query = String(search || "").trim().toLowerCase();
-  if (!query) return true;
-
-  return [contact.phone, contact.name, contact.email, contact.company]
-    .filter(Boolean)
-    .some((value) => String(value).toLowerCase().includes(query));
-}
-
 async function listContacts(req, res) {
-  const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 500);
-  const contacts = await Contact.find({ workspaceId: req.workspace.id }).sort({
-    updatedAt: -1,
-    name: 1,
-  });
+  const page = Math.max(Number(req.query.page || 1), 1);
+  const limit = Math.min(Math.max(Number(req.query.limit || 25), 1), 100);
+  const skip = (page - 1) * limit;
+  const filter = { workspaceId: req.workspace.id };
 
-  const filtered = req.query.search
-    ? contacts.filter((contact) => matchesSearch(contact, req.query.search))
-    : contacts;
+  if (req.query.search) {
+    const q = String(req.query.search).trim();
+    if (q) {
+      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      filter.$or = [{ phone: rx }, { name: rx }, { email: rx }, { company: rx }];
+    }
+  }
 
-  res.json({ success: true, contacts: filtered.slice(0, limit) });
+  const [contacts, total] = await Promise.all([
+    Contact.find(filter).sort({ updatedAt: -1, name: 1 }).skip(skip).limit(limit),
+    Contact.countDocuments(filter),
+  ]);
+
+  res.json({ success: true, contacts, page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) });
 }
 
 async function getContact(req, res) {
@@ -45,18 +43,18 @@ async function lookupContactByPhone(req, res) {
 
 async function createContact(req, res) {
   const phone = assertNormalizedPhone(req.body.phone);
-  const contact = await upsertContactForUser({
-    userId: req.workspace.id,
+  const duplicate = await Contact.findOne({ workspaceId: req.workspace.id, phone }).select("_id");
+  if (duplicate) throw new HttpError(409, "A contact with this phone already exists");
+
+  const contact = await Contact.create({
+    workspaceId: req.workspace.id,
     phone,
-    patch: {
-      name: req.body.name,
-      email: req.body.email,
-      company: req.body.company,
-      notes: req.body.notes,
-      tags: req.body.tags,
-      source: "manual",
-    },
-    createIfMissing: true,
+    name: req.body.name || undefined,
+    email: req.body.email ? String(req.body.email).trim().toLowerCase() : undefined,
+    company: req.body.company || undefined,
+    notes: req.body.notes || undefined,
+    tags: Array.from(new Set((req.body.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean))),
+    source: "manual",
   });
 
   res.status(201).json({ success: true, contact });
