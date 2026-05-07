@@ -673,6 +673,27 @@ async function retryFailedCampaign(req, res) {
   });
 }
 
+async function listFailedRecipients(req, res) {
+  const { id } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(id)) throw new HttpError(400, "Invalid campaign id");
+
+  const campaign = await Campaign.findOne({ _id: id, workspaceId: req.workspace.id }).select("_id workspaceId");
+  if (!campaign) throw new HttpError(404, "Campaign not found");
+
+  const phones = await Message.distinct("phone", {
+    workspaceId: campaign.workspaceId,
+    campaignId: campaign._id,
+    direction: "outbound",
+    status: { $in: ["failed", "timeout_unknown"] },
+  });
+
+  const normalized = (phones || [])
+    .map((p) => String(p || "").replace(/\D/g, ""))
+    .filter((p) => p.length >= 8);
+
+  return res.json({ success: true, campaignId: String(campaign._id), phones: normalized });
+}
+
 async function deleteCampaign(req, res) {
   const { id } = req.params;
   if (!mongoose.Types.ObjectId.isValid(id)) throw new HttpError(400, "Invalid campaign id");
@@ -726,5 +747,6 @@ module.exports = {
   updateCampaignStatus,
   estimateCampaign,
   retryFailedCampaign,
+  listFailedRecipients,
   deleteCampaign,
 };

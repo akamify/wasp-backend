@@ -15,6 +15,7 @@ const {
   getCampaignCreditUsage,
   updateCampaignStatus,
   retryFailedCampaign,
+  listFailedRecipients,
   deleteCampaign,
 } = require("../controllers/campaignController");
 
@@ -26,6 +27,7 @@ router.get("/:id/metrics", auth, requireWorkspace, asyncHandler(getCampaignMetri
 router.get("/:id/messages", auth, requireWorkspace, asyncHandler(listCampaignMessages));
 router.get("/:id/replies", auth, requireWorkspace, asyncHandler(listCampaignReplies));
 router.get("/:id/credit-usage", auth, requireWorkspace, asyncHandler(getCampaignCreditUsage));
+router.get("/:id/failed-recipients", auth, requireWorkspace, asyncHandler(listFailedRecipients));
 router.post("/:id/retry-failed", auth, requireWorkspace, asyncHandler(retryFailedCampaign));
 router.delete("/:id", auth, requireWorkspace, asyncHandler(deleteCampaign));
 router.post(
