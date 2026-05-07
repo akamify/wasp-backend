@@ -493,6 +493,7 @@ async function createCampaign(req, res) {
             || err?.message
             || "Campaign send failed";
           try {
+            const now = new Date();
             await Message.create({
               workspaceId: req.workspace.id,
               campaignId: campaign._id,
@@ -500,8 +501,22 @@ async function createCampaign(req, res) {
               phone: recipient.to,
               direction: "outbound",
               status: "failed",
-              statusTimestamps: { failedAt: new Date() },
-              error: err?.response?.data || { message: String(lastFailure) },
+              statusTimestamps: { failedAt: now },
+              text: "",
+              payload: {
+                to: recipient.to,
+                template: { id: String(template._id), name: template.name, language: template.language },
+                runtime: {
+                  variables: recipient.variables || [],
+                  headerVariables: recipient.headerVariables || [],
+                  otpCode: recipient.otpCode || "",
+                  buttonValues: recipient.buttonValues || [],
+                  buttonTtlMinutes: recipient.buttonTtlMinutes || [],
+                  flowTokens: recipient.flowTokens || [],
+                  flowActionData: recipient.flowActionData || [],
+                },
+              },
+              error: err?.response?.data || err?.message || err || { message: String(lastFailure) },
             });
           } catch {}
           try {
@@ -548,10 +563,13 @@ async function retryFailedCampaign(req, res) {
   if (!template) throw new HttpError(404, "Template not found");
   if (template.status !== "approved") throw new HttpError(400, "Template must be approved");
 
+  // NOTE: Aggregations do not cast string -> ObjectId. `req.workspace.id` is a string.
+  const workspaceObjectId = new mongoose.Types.ObjectId(req.workspace.id);
+
   const failedRows = await Message.aggregate([
     {
       $match: {
-        workspaceId: req.workspace.id,
+        workspaceId: workspaceObjectId,
         campaignId: baseCampaign._id,
         direction: "outbound",
         status: { $in: ["failed", "timeout_unknown"] },
