@@ -31,6 +31,26 @@ async function attachContacts(userId, conversations) {
   });
 }
 
+function previewFromMessage(message, fallback = "") {
+  if (!message) return fallback || "";
+
+  const payload = message.payload || {};
+  if (payload.deleted) return "Message deleted";
+
+  const templateName = payload.template?.name || message.display?.templateName;
+  if (templateName) return `Template: ${String(templateName).trim()}`.slice(0, 160);
+
+  const text = String(message.text || message.display?.body || fallback || "").trim();
+  if (text && !/^\[(image|video|document|contacts?)\]$/i.test(text)) return text.slice(0, 160);
+
+  if (payload.image?.id || payload.image?.link) return "Image";
+  if (payload.video?.id || payload.video?.link) return "Video";
+  if (payload.document?.id || payload.document?.link) return String(payload.document?.filename || "Document").slice(0, 160);
+  if (Array.isArray(payload.contacts) && payload.contacts.length) return "Contact";
+
+  return text.slice(0, 160);
+}
+
 async function listConversations(req, res) {
   const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
   const conversations = await Conversation.find({ workspaceId: req.workspace.id })
@@ -38,6 +58,41 @@ async function listConversations(req, res) {
     .limit(limit);
 
   let items = await attachContacts(req.workspace.id, conversations);
+  const phones = items.map((item) => item.phone).filter(Boolean);
+
+  if (phones.length) {
+    const latestRows = await Message.aggregate([
+      { $match: { workspaceId: conversations[0].workspaceId, phone: { $in: phones } } },
+      { $sort: { createdAt: -1, _id: -1 } },
+      {
+        $group: {
+          _id: "$phone",
+          latest: {
+            $first: {
+              phone: "$phone",
+              text: "$text",
+              payload: "$payload",
+              display: "$display",
+              createdAt: "$createdAt",
+            },
+          },
+        },
+      },
+    ]);
+    const latestByPhone = new Map(latestRows.map((row) => [row._id, row.latest]));
+
+    items = items
+      .map((item) => {
+        const latest = latestByPhone.get(item.phone);
+        if (!latest) return item;
+        return {
+          ...item,
+          lastMessageAt: latest.createdAt || item.lastMessageAt,
+          lastMessagePreview: previewFromMessage(latest, item.lastMessagePreview),
+        };
+      })
+      .sort((a, b) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime());
+  }
 
   if (req.query.search) {
     const query = String(req.query.search).trim().toLowerCase();

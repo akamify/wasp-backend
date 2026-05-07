@@ -407,8 +407,14 @@ async function receive(req, res) {
 
         const ts = asDateFromSeconds(m.timestamp);
         const type = String(m.type || "").trim().toLowerCase();
+        const isDeletedOrUnsupported =
+          type === "unsupported" ||
+          type === "deleted" ||
+          (Array.isArray(m.errors) &&
+            m.errors.some((err) => /deleted|unsupported/i.test(`${err?.title || ""} ${err?.message || ""} ${err?.details || ""}`)));
         const payload = {
           type,
+          ...(isDeletedOrUnsupported ? { deleted: true, errors: Array.isArray(m.errors) ? m.errors : [] } : {}),
           ...(m.text?.body ? { text: { body: String(m.text.body) } } : {}),
           ...(m.image?.id ? { image: { id: String(m.image.id), mime_type: m.image.mime_type || null, sha256: m.image.sha256 || null } } : {}),
           ...(m.video?.id ? { video: { id: String(m.video.id), mime_type: m.video.mime_type || null, sha256: m.video.sha256 || null } } : {}),
@@ -425,7 +431,7 @@ async function receive(req, res) {
           ...(Array.isArray(m.contacts) ? { contacts: m.contacts } : {}),
         };
 
-        const text = m.text?.body || (type ? `[${type}]` : "");
+        const text = isDeletedOrUnsupported ? "[deleted]" : m.text?.body || (type ? `[${type}]` : "");
 
         try {
           await Message.findOneAndUpdate(
