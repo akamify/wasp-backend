@@ -8,6 +8,13 @@ const UserSchema = new mongoose.Schema(
     phone: { type: String, trim: true },
     role: { type: String, enum: ["user", "admin"], default: "user" },
     apiKeyHash: { type: String, required: true, select: false, index: true },
+    twoFactorEnabled: { type: Boolean, default: false },
+    twoFactorCodeHash: { type: String, select: false },
+    twoFactorCodeExpiresAt: { type: Date, select: false },
+    loginOtpCodeHash: { type: String, select: false },
+    loginOtpCodeExpiresAt: { type: Date, select: false },
+    passwordResetTokenHash: { type: String, select: false },
+    passwordResetTokenExpiresAt: { type: Date, select: false },
   },
   { timestamps: true }
 );

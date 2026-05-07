@@ -4,7 +4,20 @@ const { asyncHandler } = require("../utils/asyncHandler");
 const { validate } = require("../middleware/validate");
 const rateLimiters = require("../middleware/rateLimiters");
 const { auth } = require("../middleware/auth");
-const { register, login, me, rotateApiKey, updateProfile } = require("../controllers/authController");
+const {
+  register,
+  login,
+  verifyLoginOtp,
+  me,
+  rotateApiKey,
+  updateProfile,
+  changePassword,
+  requestEnable2fa,
+  verifyEnable2fa,
+  disable2fa,
+  forgotPassword,
+  resetPassword,
+} = require("../controllers/authController");
 
 const router = express.Router();
 
@@ -34,6 +47,41 @@ router.post(
   asyncHandler(login)
 );
 
+router.post(
+  "/login/verify-otp",
+  rateLimiters.auth,
+  validate(
+    Joi.object({
+      challengeToken: Joi.string().required(),
+      otp: Joi.string().pattern(/^\d{6}$/).required(),
+    })
+  ),
+  asyncHandler(verifyLoginOtp)
+);
+
+router.post(
+  "/forgot-password",
+  rateLimiters.auth,
+  validate(
+    Joi.object({
+      email: Joi.string().email().required(),
+    })
+  ),
+  asyncHandler(forgotPassword)
+);
+
+router.post(
+  "/reset-password",
+  rateLimiters.auth,
+  validate(
+    Joi.object({
+      token: Joi.string().required(),
+      password: Joi.string().min(8).required(),
+    })
+  ),
+  asyncHandler(resetPassword)
+);
+
 router.get("/me", auth, asyncHandler(me));
 router.post("/api-key/rotate", auth, asyncHandler(rotateApiKey));
 router.put(
@@ -47,6 +95,31 @@ router.put(
   ),
   asyncHandler(updateProfile)
 );
+
+router.post(
+  "/change-password",
+  auth,
+  validate(
+    Joi.object({
+      currentPassword: Joi.string().required(),
+      newPassword: Joi.string().min(8).required(),
+    })
+  ),
+  asyncHandler(changePassword)
+);
+
+router.post("/2fa/request-enable", auth, asyncHandler(requestEnable2fa));
+router.post(
+  "/2fa/verify-enable",
+  auth,
+  validate(
+    Joi.object({
+      otp: Joi.string().pattern(/^\d{6}$/).required(),
+    })
+  ),
+  asyncHandler(verifyEnable2fa)
+);
+router.post("/2fa/disable", auth, asyncHandler(disable2fa));
 
 module.exports = router;
 
