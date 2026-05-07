@@ -39,5 +39,32 @@ async function uploadMessageMedia(req, res) {
   }
 }
 
-module.exports = { uploadMessageMedia };
+async function downloadMessageMedia(req, res) {
+  const creds = await getCredentialsForUser(req.workspace.id);
+  const mediaId = String(req.params.id || "").trim();
+  if (!mediaId) throw new HttpError(400, "Media id is required");
 
+  const client = axios.create({ baseURL: graphBaseUrl(creds.graphApiVersion), timeout: 30000 });
+  const headers = { Authorization: `Bearer ${creds.accessToken}` };
+
+  try {
+    const metaRes = await client.get(`/${encodeURIComponent(mediaId)}`, {
+      params: { fields: "url,mime_type,file_size,sha256" },
+      headers,
+    });
+
+    const url = metaRes.data?.url ? String(metaRes.data.url) : "";
+    const mimeType = metaRes.data?.mime_type ? String(metaRes.data.mime_type) : "application/octet-stream";
+    if (!url) throw new Error("Meta media lookup returned no url");
+
+    const blobRes = await axios.get(url, { responseType: "arraybuffer", headers });
+    res.set("Content-Type", mimeType);
+    res.set("Cache-Control", "private, max-age=3600");
+    res.send(Buffer.from(blobRes.data));
+  } catch (err) {
+    const msg = err?.response?.data?.error?.message || err?.message || "Meta media download failed";
+    throw new HttpError(400, "Message media download failed", { providerError: msg, raw: err?.response?.data || null });
+  }
+}
+
+module.exports = { uploadMessageMedia, downloadMessageMedia };

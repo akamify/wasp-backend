@@ -406,7 +406,26 @@ async function receive(req, res) {
         if (!waId || !from) continue;
 
         const ts = asDateFromSeconds(m.timestamp);
-        const text = m.text?.body || (m.type ? `[${m.type}]` : "");
+        const type = String(m.type || "").trim().toLowerCase();
+        const payload = {
+          type,
+          ...(m.text?.body ? { text: { body: String(m.text.body) } } : {}),
+          ...(m.image?.id ? { image: { id: String(m.image.id), mime_type: m.image.mime_type || null, sha256: m.image.sha256 || null } } : {}),
+          ...(m.video?.id ? { video: { id: String(m.video.id), mime_type: m.video.mime_type || null, sha256: m.video.sha256 || null } } : {}),
+          ...(m.document?.id
+            ? {
+                document: {
+                  id: String(m.document.id),
+                  mime_type: m.document.mime_type || null,
+                  sha256: m.document.sha256 || null,
+                  filename: m.document.filename || null,
+                },
+              }
+            : {}),
+          ...(Array.isArray(m.contacts) ? { contacts: m.contacts } : {}),
+        };
+
+        const text = m.text?.body || (type ? `[${type}]` : "");
 
         try {
           await Message.findOneAndUpdate(
@@ -419,6 +438,7 @@ async function receive(req, res) {
                 status: "received",
                 "statusTimestamps.receivedAt": ts,
                 text,
+                payload,
               },
               $setOnInsert: { createdAt: ts },
             },
