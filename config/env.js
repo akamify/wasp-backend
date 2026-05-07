@@ -20,7 +20,10 @@ module.exports = {
   adminPassword: process.env.ADMIN_PASSWORD || "",
   adminName: process.env.ADMIN_NAME || "Whasp Admin",
   appBrandName: process.env.APP_BRAND_NAME || "DigitalWhasp",
-  appBaseUrl: process.env.APP_BASE_URL || `http://localhost:${port}`,
+  appBaseUrl:
+    process.env.FRONTEND_BASE_URL ||
+    process.env.APP_BASE_URL ||
+    `http://localhost:${port}`,
   metaGraphVersion: process.env.META_GRAPH_VERSION || "v22.0",
   metaWebhookVerifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || "",
   metaAppSecret: process.env.META_APP_SECRET || "",
