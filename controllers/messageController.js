@@ -13,7 +13,14 @@ function isDuplicateKeyError(err) {
 }
 
 function providerErrorFrom(err) {
+  const metaDetails =
+    err?.metaDebug?.meta?.error_data?.details ||
+    err?.metaDebug?.raw?.error?.error_data?.details ||
+    err?.response?.data?.error?.error_data?.details ||
+    err?.response?.data?.error?.error_user_title ||
+    null;
   return (
+    metaDetails ||
     err?.metaDebug?.meta?.error_user_msg ||
     err?.metaDebug?.meta?.message ||
     err?.response?.data?.error?.error_user_msg ||
