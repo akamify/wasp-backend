@@ -1,4 +1,4 @@
-require("dotenv").config();
+require("./config/loadEnv").loadEnv();
 
 const { Worker } = require("bullmq");
 const { connectDB } = require("./config/db");

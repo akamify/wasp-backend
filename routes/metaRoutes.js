@@ -9,10 +9,13 @@ const { metaStatus } = require("../controllers/metaStatusController");
 const { metaSubscriptionHealth } = require("../controllers/metaSubscriptionHealthController");
 const { updateBusinessProfile, uploadProfilePicture } = require("../controllers/metaProfileController");
 const { listFlows, createFlow } = require("../controllers/metaFlowsController");
-const multer = require("multer");
+const { buildMemoryUpload } = require("../utils/multerUpload");
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const upload = buildMemoryUpload({
+  maxFileSizeBytes: 5 * 1024 * 1024,
+  allowedMimeTypes: ["image/jpeg", "image/png", "image/webp"],
+});
 
 router.get("/status", auth, requireWorkspace, asyncHandler(metaStatus));
 router.get("/subscription-health", auth, requireWorkspace, asyncHandler(metaSubscriptionHealth));

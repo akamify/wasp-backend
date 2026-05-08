@@ -88,8 +88,14 @@ async function ensureWorkspaceIndexes(db) {
 }
 
 async function connectDB(mongoUri) {
+  const uri = String(mongoUri || "").trim();
+  if (!uri || !/^mongodb(\+srv)?:\/\//i.test(uri)) {
+    throw new Error(
+      'MONGODB_URI is missing/invalid. Set a valid Mongo connection string in backend/.env.local (recommended) or backend/.env (e.g. "mongodb+srv://...").'
+    );
+  }
   mongoose.set("strictQuery", true);
-  await mongoose.connect(mongoUri);
+  await mongoose.connect(uri);
   await cleanupLegacyIndexes(mongoose.connection.db);
   await ensureWorkspaceIndexes(mongoose.connection.db);
 }

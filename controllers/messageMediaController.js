@@ -1,5 +1,6 @@
 const axios = require("axios");
 const FormData = require("form-data");
+const crypto = require("crypto");
 const { HttpError } = require("../utils/httpError");
 const { getCredentialsForUser } = require("../services/credentialsService");
 
@@ -18,7 +19,8 @@ async function uploadMessageMedia(req, res) {
 
     const form = new FormData();
     form.append("messaging_product", "whatsapp");
-    form.append("file", file.buffer, { filename: file.originalname || "file", contentType: file.mimetype });
+    const safeName = `${crypto.randomUUID()}${file.mimetype === "application/pdf" ? ".pdf" : ""}`;
+    form.append("file", file.buffer, { filename: safeName, contentType: file.mimetype });
 
     const uploadRes = await client.post(`/${creds.phoneNumberId}/media`, form, {
       headers: {

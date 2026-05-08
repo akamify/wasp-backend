@@ -70,6 +70,12 @@ function isEnvAdminLogin(email, password) {
   );
 }
 
+function shouldReturnAuthDebugTokens() {
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  if (isProd) return false;
+  return String(process.env.AUTH_DEV_RETURN_EMAIL_TOKENS || "").toLowerCase() === "true";
+}
+
 function buildOtpEmailHtml({ code, title, subtitle }) {
   return `
     <div style="font-family: Inter, Arial, sans-serif; max-width: 520px; margin: 0 auto; color: #0f172a;">
@@ -158,7 +164,7 @@ async function login(req, res) {
     user.loginOtpCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 
-    await sendEmail({
+    const delivery = await sendEmail({
       toEmail: user.email,
       toName: user.name || "",
       subject: "Your login OTP code",
@@ -170,10 +176,16 @@ async function login(req, res) {
       textContent: `Your login OTP code is ${otp}. It expires in 10 minutes.`,
     });
 
+    const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+    if (isProd && (delivery?.skipped || delivery?.failed)) {
+      throw new HttpError(500, "Email service is not configured");
+    }
+
     return res.json({
       success: true,
       requires2fa: true,
       challengeToken: signLoginChallengeToken(user._id),
+      ...(shouldReturnAuthDebugTokens() ? { debugOtp: otp, emailDelivery: delivery } : {}),
       user: {
         id: user._id,
         email: user.email,
@@ -337,7 +349,7 @@ async function requestEnable2fa(req, res) {
   user.twoFactorCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
   await user.save();
 
-  await sendEmail({
+  const delivery = await sendEmail({
     toEmail: user.email,
     toName: user.name || "",
     subject: "Enable 2FA OTP code",
@@ -349,7 +361,15 @@ async function requestEnable2fa(req, res) {
     textContent: `Your code to enable 2FA is ${otp}. It expires in 10 minutes.`,
   });
 
-  res.json({ success: true });
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  if (isProd && (delivery?.skipped || delivery?.failed)) {
+    throw new HttpError(500, "Email service is not configured");
+  }
+
+  res.json({
+    success: true,
+    ...(shouldReturnAuthDebugTokens() ? { debugOtp: otp, emailDelivery: delivery } : {}),
+  });
 }
 
 async function verifyEnable2fa(req, res) {
@@ -398,7 +418,7 @@ async function forgotPassword(req, res) {
     );
 
     const resetLink = `${appBaseUrl}/reset-password?token=${encodeURIComponent(rawToken)}`;
-    await sendEmail({
+    const delivery = await sendEmail({
       toEmail: user.email,
       toName: user.name || "",
       subject: "Reset your password",
@@ -412,6 +432,11 @@ async function forgotPassword(req, res) {
       `,
       textContent: `Reset your password using this link: ${resetLink}`,
     });
+
+    if (shouldReturnAuthDebugTokens()) {
+      res.set("X-Debug-Reset-Link", resetLink);
+      res.set("X-Debug-Email-Delivery", String(delivery?.sent ? "sent" : delivery?.skipped ? "skipped" : "failed"));
+    }
   }
 
   res.json({ success: true, message: "If your email is registered, a reset link has been sent." });

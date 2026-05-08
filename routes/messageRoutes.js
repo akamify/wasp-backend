@@ -14,10 +14,21 @@ const {
 } = require("../controllers/messageController");
 const { listWebhookDebugEvents } = require("../controllers/webhookController");
 const { uploadMessageMedia, downloadMessageMedia } = require("../controllers/messageMediaController");
-const multer = require("multer");
+const { buildMemoryUpload } = require("../utils/multerUpload");
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const upload = buildMemoryUpload({
+  maxFileSizeBytes: 20 * 1024 * 1024,
+  allowedMimeTypes: [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "video/mp4",
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ],
+});
 
 router.post("/media", auth, requireWorkspace, upload.single("file"), asyncHandler(uploadMessageMedia));
 router.get("/media/:id", auth, requireWorkspace, asyncHandler(downloadMessageMedia));

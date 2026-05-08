@@ -10,6 +10,7 @@ const app = express();
 
 // If you're behind a reverse proxy (Render, Heroku, Nginx), this helps IP-based rate limits/logging.
 app.set("trust proxy", 1);
+app.disable("x-powered-by");
 
 // Capture raw body for webhook signature verification.
 app.use(
@@ -21,8 +22,28 @@ app.use(
 );
 app.use(express.urlencoded({ extended: false }));
 
-app.use(helmet());
 const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        "default-src": ["'none'"],
+        "frame-ancestors": ["'none'"],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+  })
+);
+if (isProd) {
+  app.use(
+    helmet.hsts({
+      maxAge: 15552000,
+      includeSubDomains: true,
+      preload: true,
+    })
+  );
+}
 app.use(
   cors({
     origin(origin, cb) {

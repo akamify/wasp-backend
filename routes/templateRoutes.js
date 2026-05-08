@@ -15,10 +15,19 @@ const {
   syncMetaTemplates,
 } = require("../controllers/templateController");
 const { uploadTemplateMedia, downloadTemplateMediaByHandle } = require("../controllers/templateMediaController");
-const multer = require("multer");
+const { buildMemoryUpload } = require("../utils/multerUpload");
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const upload = buildMemoryUpload({
+  maxFileSizeBytes: 20 * 1024 * 1024,
+  allowedMimeTypes: [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "video/mp4",
+    "application/pdf",
+  ],
+});
 
 const templateSchema = Joi.object({
   name: Joi.string().regex(/^[a-z0-9_]+$/).min(3).max(512).required(),
