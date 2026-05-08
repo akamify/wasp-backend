@@ -104,14 +104,15 @@ async function getCampaignMetrics(req, res) {
   // Best-effort replied detection:
   // Any inbound message from the same phone after campaign createdAt counts as a reply.
   const phones = await Message.distinct("phone", match);
-  const repliesCount = phones.length
-    ? await Message.countDocuments({
+  const repliedPhones = phones.length
+    ? await Message.distinct("phone", {
       workspaceId: campaign.workspaceId,
       direction: "inbound",
       phone: { $in: phones },
       createdAt: { $gte: campaign.createdAt },
     })
-    : 0;
+    : [];
+  const repliesCount = repliedPhones.length;
 
   res.json({
     success: true,
