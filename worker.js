@@ -22,10 +22,7 @@ async function finalizeCampaignIfDone({ workspaceId, campaignId }) {
     if (queued > 0) return;
     const status = String(campaign.status || "");
     if (!["draft", "queued", "running"].includes(status)) return;
-    const sent = Number(campaign?.totals?.sent || 0);
-    const failed = Number(campaign?.totals?.failed || 0);
-    const nextStatus = sent === 0 && failed > 0 ? "failed" : "completed";
-    await Campaign.updateOne({ _id: campaignId, workspaceId }, { $set: { status: nextStatus } });
+    await Campaign.updateOne({ _id: campaignId, workspaceId }, { $set: { status: "completed" } });
   } catch { }
 }
 

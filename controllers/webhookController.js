@@ -86,19 +86,22 @@ async function refreshCampaignFromMessage(workspaceId, messageDoc) {
   const total = Number(campaign.totals?.total || 0);
   const queued = Math.max(total - sentLike - failedLike, 0);
 
-  let nextStatus = String(campaign.status || "queued");
+  const currentStatus = String(campaign.status || "queued");
+  let nextStatus = currentStatus;
   const isApiCampaign = String(campaign.type || "") === "api";
-  if (!isApiCampaign) {
-    if (queued === 0) {
-      if (failedLike > 0 && sentLike === 0) nextStatus = "failed";
-      else nextStatus = "completed";
-    } else if (sentLike > 0 || failedLike > 0) {
+  const isTerminal = ["canceled", "cancelled", "completed"].includes(currentStatus);
+  if (!isTerminal && currentStatus !== "paused") {
+    if (!isApiCampaign) {
+      if (queued === 0) {
+        nextStatus = "completed";
+      } else if (sentLike > 0 || failedLike > 0) {
+        nextStatus = "running";
+      } else {
+        nextStatus = "queued";
+      }
+    } else if (currentStatus === "queued" && (sentLike > 0 || failedLike > 0)) {
       nextStatus = "running";
-    } else {
-      nextStatus = "queued";
     }
-  } else if (nextStatus === "queued" && (sentLike > 0 || failedLike > 0)) {
-    nextStatus = "running";
   }
 
   await Campaign.updateOne(

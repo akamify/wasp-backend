@@ -373,17 +373,17 @@ async function updateCampaignStatus(req, res) {
 
   const currentStatus = String(campaign.status || "").toLowerCase();
   const isStopped = currentStatus === "canceled" || currentStatus === "cancelled";
-  const isFailed = currentStatus === "failed";
   const isPaused = currentStatus === "paused";
   const isLive = currentStatus === "running";
+  const isApiCampaign = String(campaign.type || "") === "api";
 
   const allowedActions = isLive
-    ? new Set(["pause", "stop", "complete"])
+    ? new Set(["pause", "stop", ...(isApiCampaign ? ["complete"] : [])])
     : isPaused
       ? new Set(["resume", "stop"])
       : new Set([]);
 
-  if (isStopped || isFailed || !allowedActions.has(action)) {
+  if (isStopped || !allowedActions.has(action)) {
     throw new HttpError(400, "Action not allowed for current campaign status");
   }
 
