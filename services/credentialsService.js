@@ -3,6 +3,12 @@ const { decryptString } = require("../utils/crypto");
 const { hashForLookup } = require("../utils/hash");
 const { HttpError } = require("../utils/httpError");
 
+async function resolveSingleTenantFallback() {
+  const docs = await WhatsAppCredentials.find({}).select("workspaceId").limit(2);
+  if (docs.length === 1) return docs[0];
+  return null;
+}
+
 async function getCredentialsForUser(userId) {
   const doc = await WhatsAppCredentials.findOne({ workspaceId: userId }).select(
     "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid"
@@ -48,6 +54,12 @@ async function findTenantByPhoneNumberId(phoneNumberId) {
       // Ignore corrupted rows and continue scanning.
     }
   }
+
+  // Safe fallback for single-tenant deployments:
+  // if there is exactly one credentials record in the system, route unresolved
+  // webhook events to that workspace to prevent lost inbound/status updates.
+  const single = await resolveSingleTenantFallback();
+  if (single) return single;
   return null;
 }
 
@@ -71,6 +83,9 @@ async function findTenantByWabaId(wabaId) {
       // Ignore corrupted rows and continue scanning.
     }
   }
+
+  const single = await resolveSingleTenantFallback();
+  if (single) return single;
   return null;
 }
 
