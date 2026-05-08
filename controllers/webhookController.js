@@ -215,17 +215,14 @@ async function receive(req, res) {
         continue;
       }
 
-      // 2) Message + status webhooks (canonical) - route by phone number id
-      const phoneNumberId = value?.metadata?.phone_number_id;
-      if (!phoneNumberId) {
-        if (debug) {
-          // eslint-disable-next-line no-console
-          console.warn("Webhook change missing metadata.phone_number_id.", { field });
-        }
-        continue;
+      // 2) Message + status webhooks (canonical) - prefer routing by phone number id
+      const phoneNumberId = value?.metadata?.phone_number_id ? String(value.metadata.phone_number_id) : "";
+      if (!phoneNumberId && debug) {
+        // eslint-disable-next-line no-console
+        console.warn("Webhook change missing metadata.phone_number_id.", { field });
       }
 
-      let tenant = await findTenantByPhoneNumberId(phoneNumberId);
+      let tenant = phoneNumberId ? await findTenantByPhoneNumberId(phoneNumberId) : null;
       if (!tenant) {
         const wabaIdFromEntry = entry?.id ? String(entry.id) : "";
         if (wabaIdFromEntry) {
@@ -235,9 +232,9 @@ async function receive(req, res) {
             if (mongoose.Types.ObjectId.isValid(tenantWorkspaceId)) {
               pushWebhookDebugEvent(tenantWorkspaceId, {
               type: "tenant_resolved_by_waba_fallback",
-              phoneNumberId: String(phoneNumberId),
-              wabaId: wabaIdFromEntry,
-              });
+                  phoneNumberId: phoneNumberId || null,
+                  wabaId: wabaIdFromEntry,
+                  });
             }
           }
         }
@@ -264,6 +261,21 @@ async function receive(req, res) {
         object: body?.object || null,
         entries: Array.isArray(body?.entry) ? body.entry.length : 0,
       });
+
+       // Telemetry: record that we received a webhook for this workspace.
+       // Useful to debug "incoming messages not showing" when the callback URL isn't being hit.
+       try {
+         await WhatsAppCredentials.updateOne(
+           { workspaceId: workspaceIdRaw },
+           {
+             $set: {
+               lastWebhookAt: new Date(),
+               lastWebhookField: field || null,
+               lastWebhookObject: body?.object || null,
+             },
+           }
+         );
+       } catch {}
 
       const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
       if (statuses.length) {

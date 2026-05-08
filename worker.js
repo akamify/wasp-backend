@@ -13,6 +13,21 @@ const { isCustomerServiceWindowOpen } = require("./services/pricingService");
 const concurrency = Math.max(Number(process.env.CAMPAIGN_WORKER_CONCURRENCY || 5), 1);
 const ratePerSec = Math.max(Number(process.env.CAMPAIGN_RATE_LIMIT_PER_SEC || 10), 1);
 
+async function finalizeCampaignIfDone({ workspaceId, campaignId }) {
+  try {
+    const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals").lean();
+    if (!campaign) return;
+    const queued = Number(campaign?.totals?.queued || 0);
+    if (queued > 0) return;
+    const status = String(campaign.status || "");
+    if (!["draft", "queued", "running"].includes(status)) return;
+    const sent = Number(campaign?.totals?.sent || 0);
+    const failed = Number(campaign?.totals?.failed || 0);
+    const nextStatus = sent === 0 && failed > 0 ? "failed" : "completed";
+    await Campaign.updateOne({ _id: campaignId, workspaceId }, { $set: { status: nextStatus } });
+  } catch { }
+}
+
 async function startWorker() {
   await connectDB(mongoUri);
 
@@ -44,7 +59,12 @@ async function startWorker() {
           { _id: campaignId, workspaceId },
           { $inc: { "totals.queued": -1 } }
         );
+        await finalizeCampaignIfDone({ workspaceId, campaignId });
         return { ok: true, skipped: true, status };
+      }
+
+      if (status === "draft" || status === "queued") {
+        await Campaign.updateOne({ _id: campaignId, workspaceId }, { $set: { status: "running" } });
       }
 
       const template = await Template.findOne({ _id: templateId, workspaceId });
@@ -78,6 +98,7 @@ async function startWorker() {
           { _id: campaignId, workspaceId },
           { $inc: { "totals.queued": -1, "totals.sent": 1 } }
         );
+        await finalizeCampaignIfDone({ workspaceId, campaignId });
         return { ok: true };
       } catch (err) {
         try {
@@ -125,6 +146,7 @@ async function startWorker() {
             $set: { lastError: { message: err.message } },
           }
         );
+        await finalizeCampaignIfDone({ workspaceId, campaignId });
         throw err;
       }
     },

@@ -281,6 +281,10 @@ async function listLogs(req, res) {
 }
 
 async function messagesByPhone(req, res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+
   const phone = normalizePhone(req.params.phone);
   if (!phone) throw new HttpError(400, "Invalid phone number");
   const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 500);

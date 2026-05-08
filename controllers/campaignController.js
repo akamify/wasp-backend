@@ -417,6 +417,12 @@ async function createCampaign(req, res) {
   const normalizedRecipients = normalizeRecipientsForCampaign(recipients);
 
   const normalizedType = String(type || "broadcast").toLowerCase();
+  if (normalizedType === "api" && normalizedRecipients.length > 0) {
+    throw new HttpError(
+      400,
+      "API campaigns are definitions only. Do not pass recipients when type=api; send recipients via the integrations API instead."
+    );
+  }
   if (normalizedRecipients.length === 0) {
     if (normalizedType !== "api") {
       throw new HttpError(400, "At least one recipient required");

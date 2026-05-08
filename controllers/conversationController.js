@@ -52,6 +52,10 @@ function previewFromMessage(message, fallback = "") {
 }
 
 async function listConversations(req, res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+
   const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
   const conversations = await Conversation.find({ workspaceId: req.workspace.id })
     .sort({ lastMessageAt: -1 })
@@ -107,6 +111,10 @@ async function listConversations(req, res) {
 }
 
 async function getConversation(req, res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+
   const phone = normalizePhone(req.params.phone);
   if (!phone) throw new HttpError(400, "Invalid phone number");
 

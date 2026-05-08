@@ -34,6 +34,11 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
     messagingLimitCurrentCached: { type: Number, default: null },
     messagingLimitNextCached: { type: Number, default: null },
     lastLimitsUpdateAt: { type: Date, default: null },
+
+    // Webhook telemetry (helps detect misconfigured callback URLs / signature failures).
+    lastWebhookAt: { type: Date, default: null, index: true },
+    lastWebhookField: { type: String, default: null },
+    lastWebhookObject: { type: String, default: null },
   },
   { timestamps: true }
 );

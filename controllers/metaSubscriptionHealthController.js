@@ -1,5 +1,6 @@
 const axios = require("axios");
 const { getCredentialsForUser } = require("../services/credentialsService");
+const { WhatsAppCredentials } = require("../models/WhatsAppCredentials");
 
 function graphBaseUrl(graphApiVersion) {
   const version = graphApiVersion || process.env.META_GRAPH_VERSION || "v22.0";
@@ -29,7 +30,10 @@ function normalizeMetaError(err) {
 async function metaSubscriptionHealth(req, res) {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
 
-  const creds = await getCredentialsForUser(req.workspace.id);
+  const [creds, credsDoc] = await Promise.all([
+    getCredentialsForUser(req.workspace.id),
+    WhatsAppCredentials.findOne({ workspaceId: req.workspace.id }).select("lastWebhookAt lastWebhookField lastWebhookObject"),
+  ]);
   const baseURL = graphBaseUrl(creds.graphApiVersion);
   const client = axios.create({ baseURL, timeout: 20000 });
   const headers = { Authorization: `Bearer ${creds.accessToken}` };
@@ -101,6 +105,11 @@ async function metaSubscriptionHealth(req, res) {
     healthy: issues.length === 0,
     checks,
     issues,
+    webhook: {
+      lastWebhookAt: credsDoc?.lastWebhookAt ? credsDoc.lastWebhookAt.toISOString() : null,
+      lastWebhookField: credsDoc?.lastWebhookField || null,
+      lastWebhookObject: credsDoc?.lastWebhookObject || null,
+    },
     config: {
       graphApiVersion: creds.graphApiVersion,
       wabaId: mask(creds.wabaId),

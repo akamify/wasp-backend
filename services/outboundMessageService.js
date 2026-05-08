@@ -3,6 +3,7 @@ const { getCredentialsForUser } = require("./credentialsService");
 const { sendTemplateMessage, sendTextMessage } = require("../utils/whatsappSender");
 const { touchConversation } = require("./conversationService");
 const { touchContactFromMessage } = require("./contactService");
+const { Campaign } = require("../models/Campaign");
 const {
   buildComponentsFromTemplate,
   normalizeTemplate,
@@ -65,8 +66,8 @@ async function sendTemplateMessageForUser({
     phone: resolvedPhone,
     direction: "outbound",
     whatsappMessageId: waMessageId,
-    status: "accepted",
-    statusTimestamps: { acceptedAt: now },
+    status: "sent",
+    statusTimestamps: { acceptedAt: now, sentAt: now },
     text: previewText,
     payload: {
       to,
@@ -102,6 +103,16 @@ async function sendTemplateMessageForUser({
     occurredAt: now,
   });
 
+  // Best-effort: mark campaign as running as soon as we create the outbound message.
+  if (campaignId) {
+    try {
+      await Campaign.updateOne(
+        { _id: campaignId, workspaceId: userId, status: { $in: ["draft", "queued"] } },
+        { $set: { status: "running" } }
+      );
+    } catch {}
+  }
+
   return { message, apiResponse };
 }
 
@@ -125,8 +136,8 @@ async function sendTextMessageForUser({ userId, to, text }) {
     phone: resolvedPhone,
     direction: "outbound",
     whatsappMessageId: waMessageId,
-    status: "accepted",
-    statusTimestamps: { acceptedAt: now },
+    status: "sent",
+    statusTimestamps: { acceptedAt: now, sentAt: now },
     text,
     payload: { to, text },
   });
