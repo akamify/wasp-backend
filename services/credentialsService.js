@@ -36,9 +36,10 @@ async function findTenantByPhoneNumberId(phoneNumberId) {
   if (byHash) return byHash;
 
   // Fallback path: if lookup secret changed across environments, compare decrypted values.
-  const docs = await WhatsAppCredentials.find({ isValid: true }).select(
-    "workspaceId +phoneNumberIdEnc"
-  );
+  // NOTE: We intentionally do NOT filter by isValid here.
+  // Webhooks should still route to the right workspace even if the connection is mid-setup
+  // or a validation flag drifted.
+  const docs = await WhatsAppCredentials.find({}).select("workspaceId +phoneNumberIdEnc");
   for (const doc of docs) {
     try {
       const raw = decryptString(doc.phoneNumberIdEnc);
@@ -60,9 +61,8 @@ async function findTenantByWabaId(wabaId) {
   );
   if (byHash) return byHash;
 
-  const docs = await WhatsAppCredentials.find({ isValid: true }).select(
-    "workspaceId +businessAccountIdEnc"
-  );
+  // NOTE: We intentionally do NOT filter by isValid here for webhook routing resiliency.
+  const docs = await WhatsAppCredentials.find({}).select("workspaceId +businessAccountIdEnc");
   for (const doc of docs) {
     try {
       const raw = decryptString(doc.businessAccountIdEnc);
