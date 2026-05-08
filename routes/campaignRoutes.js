@@ -1,6 +1,7 @@
 const express = require("express");
 const Joi = require("joi");
 const { auth } = require("../middleware/auth");
+const { authOrApiKey } = require("../middleware/authOrApiKey");
 const { requireWorkspace } = require("../middleware/requireWorkspace");
 const { validate } = require("../middleware/validate");
 const { asyncHandler } = require("../utils/asyncHandler");
@@ -39,7 +40,7 @@ router.post(
 );
 router.post(
   "/estimate",
-  auth,
+  authOrApiKey,
   requireWorkspace,
   validate(
     Joi.object({
@@ -70,7 +71,7 @@ router.post(
 
 router.post(
   "/",
-  auth,
+  authOrApiKey,
   requireWorkspace,
   validate(
     Joi.object({
@@ -93,9 +94,8 @@ router.post(
             })
           )
         )
-        .min(1)
         .max(50000)
-        .required(),
+        .optional(),
       scheduledAt: Joi.date().iso().optional(),
     })
   ),

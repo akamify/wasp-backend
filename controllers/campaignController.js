@@ -416,7 +416,28 @@ async function createCampaign(req, res) {
 
   const normalizedRecipients = normalizeRecipientsForCampaign(recipients);
 
-  if (normalizedRecipients.length === 0) throw new HttpError(400, "At least one recipient required");
+  const normalizedType = String(type || "broadcast").toLowerCase();
+  if (normalizedRecipients.length === 0) {
+    if (normalizedType !== "api") {
+      throw new HttpError(400, "At least one recipient required");
+    }
+
+    const campaign = await Campaign.create({
+      workspaceId: req.workspace.id,
+      name,
+      templateId: template._id,
+      status: "draft",
+      type: "api",
+      scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
+      totals: { total: 0, queued: 0, sent: 0, failed: 0 },
+    });
+
+    return res.status(201).json({
+      success: true,
+      campaign,
+      message: "API campaign created. Contacts will be provided by integrations at send time.",
+    });
+  }
 
   const estimate = await computeCampaignCreditEstimate({
     workspaceId: req.workspace.id,
@@ -450,7 +471,7 @@ async function createCampaign(req, res) {
     name,
     templateId: template._id,
     status: "queued",
-    type: type || "broadcast",
+    type: normalizedType || "broadcast",
     scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
     totals: {
       total: normalizedRecipients.length,

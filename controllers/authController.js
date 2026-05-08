@@ -15,6 +15,8 @@ const { Workspace } = require("../models/Workspace");
 const { HttpError } = require("../utils/httpError");
 const { sha256Hex } = require("../utils/hash");
 const { sendEmail } = require("../services/emailService");
+const { WhatsAppCredentials } = require("../models/WhatsAppCredentials");
+const { encryptString, decryptString } = require("../utils/crypto");
 
 function base64Url(bytes) {
   return Buffer.from(bytes)
@@ -53,9 +55,22 @@ function signLoginChallengeToken(userId) {
   });
 }
 
+function signRegisterChallengeToken(userId) {
+  return jwt.sign({ role: "user", purpose: "register_verify" }, jwtSecret, {
+    subject: String(userId),
+    expiresIn: "15m",
+  });
+}
+
 function verifyLoginChallengeToken(token) {
   const payload = jwt.verify(token, jwtSecret);
   if (payload?.purpose !== "login_2fa") throw new Error("Invalid challenge token");
+  return payload;
+}
+
+function verifyRegisterChallengeToken(token) {
+  const payload = jwt.verify(token, jwtSecret);
+  if (payload?.purpose !== "register_verify") throw new Error("Invalid challenge token");
   return payload;
 }
 
@@ -74,6 +89,20 @@ function shouldReturnAuthDebugTokens() {
   const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
   if (isProd) return false;
   return String(process.env.AUTH_DEV_RETURN_EMAIL_TOKENS || "").toLowerCase() === "true";
+}
+
+async function ensureMetaSetupForWorkspace(workspaceId) {
+  const hasValid = await WhatsAppCredentials.exists({ workspaceId, isValid: true });
+  if (!hasValid) {
+    throw new HttpError(409, "Meta/WhatsApp is not set up for this workspace yet. Connect WhatsApp first.");
+  }
+}
+
+function normalizeApiKeyOtpPurpose(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "rotate") return "rotate";
+  if (v === "reveal") return "reveal";
+  return "";
 }
 
 function buildOtpEmailHtml({ code, title, subtitle }) {
@@ -111,20 +140,37 @@ async function register(req, res) {
   if (existing) throw new HttpError(409, "Email already registered");
 
   const passwordHash = await bcrypt.hash(password, 12);
-  const apiKey = generateApiKey();
-  const apiKeyHash = sha256Hex(apiKey);
-
-  const user = await User.create({ email, passwordHash, name, phone, apiKeyHash });
+  const user = await User.create({ email, passwordHash, name, phone });
   const workspace = await Workspace.create({
     ownerId: user._id,
     name: name ? `${String(name).trim()}'s workspace` : "My workspace",
   });
-  const token = signToken({ user, workspaceId: workspace._id });
+  const otp = generateOtpCode();
+  user.registerOtpCodeHash = sha256Hex(otp);
+  user.registerOtpCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  await user.save();
+
+  const delivery = await sendEmail({
+    toEmail: user.email,
+    toName: user.name || "",
+    subject: "Verify your account",
+    htmlContent: buildOtpEmailHtml({
+      code: otp,
+      title: "Verify your email",
+      subtitle: "Enter this OTP to finish creating your account.",
+    }),
+    textContent: `Your verification OTP is ${otp}. It expires in 10 minutes.`,
+  });
+
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  if (isProd && (delivery?.skipped || delivery?.failed)) {
+    throw new HttpError(500, "Email service is not configured");
+  }
 
   res.status(201).json({
     success: true,
-    token,
-    apiKey,
+    requiresOtp: true,
+    challengeToken: signRegisterChallengeToken(user._id),
     workspace: { id: workspace._id, name: workspace.name, plan: workspace.plan },
     user: {
       id: user._id,
@@ -134,6 +180,7 @@ async function register(req, res) {
       role: user.role,
       twoFactorEnabled: !!user.twoFactorEnabled,
     },
+    ...(shouldReturnAuthDebugTokens() ? { debugOtp: otp, emailDelivery: delivery } : {}),
   });
 }
 
@@ -254,6 +301,129 @@ async function verifyLoginOtp(req, res) {
   });
 }
 
+async function resendLoginOtp(req, res) {
+  const { challengeToken } = req.body;
+  let payload = null;
+  try {
+    payload = verifyLoginChallengeToken(challengeToken);
+  } catch {
+    throw new HttpError(401, "Invalid or expired login challenge");
+  }
+
+  const user = await User.findById(payload.sub).select("email name twoFactorEnabled +loginOtpCodeHash +loginOtpCodeExpiresAt");
+  if (!user) throw new HttpError(404, "User not found");
+  if (!user.twoFactorEnabled) throw new HttpError(400, "2FA is not enabled for this account");
+
+  const otp = generateOtpCode();
+  user.loginOtpCodeHash = sha256Hex(otp);
+  user.loginOtpCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  await user.save();
+
+  const delivery = await sendEmail({
+    toEmail: user.email,
+    toName: user.name || "",
+    subject: "Your login OTP code",
+    htmlContent: buildOtpEmailHtml({
+      code: otp,
+      title: "Two-factor verification",
+      subtitle: "Enter this one-time code to complete your sign-in.",
+    }),
+    textContent: `Your login OTP code is ${otp}. It expires in 10 minutes.`,
+  });
+
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  if (isProd && (delivery?.skipped || delivery?.failed)) {
+    throw new HttpError(500, "Email service is not configured");
+  }
+
+  res.json({
+    success: true,
+    message: "OTP resent to your registered email.",
+    ...(shouldReturnAuthDebugTokens() ? { debugOtp: otp, emailDelivery: delivery } : {}),
+  });
+}
+
+async function verifyRegisterOtp(req, res) {
+  const { challengeToken, otp } = req.body;
+  let payload = null;
+  try {
+    payload = verifyRegisterChallengeToken(challengeToken);
+  } catch {
+    throw new HttpError(401, "Invalid or expired registration challenge");
+  }
+
+  const user = await User.findById(payload.sub).select(
+    "+passwordHash role email name phone twoFactorEnabled +registerOtpCodeHash +registerOtpCodeExpiresAt"
+  );
+  if (!user) throw new HttpError(404, "User not found");
+  if (!user.registerOtpCodeHash || !user.registerOtpCodeExpiresAt || user.registerOtpCodeExpiresAt < new Date()) {
+    throw new HttpError(400, "OTP expired. Request a new code.");
+  }
+  if (sha256Hex(String(otp || "")) !== user.registerOtpCodeHash) throw new HttpError(401, "Invalid OTP code");
+
+  user.registerOtpCodeHash = undefined;
+  user.registerOtpCodeExpiresAt = undefined;
+  await user.save();
+
+  const workspace = await ensureDefaultWorkspace(user);
+  const token = signToken({ user, workspaceId: workspace._id });
+
+  res.json({
+    success: true,
+    token,
+    workspace: { id: workspace._id, name: workspace.name, plan: workspace.plan },
+    user: {
+      id: user._id,
+      email: user.email,
+      name: user.name,
+      phone: user.phone,
+      role: user.role,
+      twoFactorEnabled: !!user.twoFactorEnabled,
+    },
+  });
+}
+
+async function resendRegisterOtp(req, res) {
+  const { challengeToken } = req.body;
+  let payload = null;
+  try {
+    payload = verifyRegisterChallengeToken(challengeToken);
+  } catch {
+    throw new HttpError(401, "Invalid or expired registration challenge");
+  }
+
+  const user = await User.findById(payload.sub).select("email name +registerOtpCodeHash +registerOtpCodeExpiresAt");
+  if (!user) throw new HttpError(404, "User not found");
+
+  const otp = generateOtpCode();
+  user.registerOtpCodeHash = sha256Hex(otp);
+  user.registerOtpCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  await user.save();
+
+  const delivery = await sendEmail({
+    toEmail: user.email,
+    toName: user.name || "",
+    subject: "Verify your account",
+    htmlContent: buildOtpEmailHtml({
+      code: otp,
+      title: "Verify your email",
+      subtitle: "Enter this OTP to finish creating your account.",
+    }),
+    textContent: `Your verification OTP is ${otp}. It expires in 10 minutes.`,
+  });
+
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  if (isProd && (delivery?.skipped || delivery?.failed)) {
+    throw new HttpError(500, "Email service is not configured");
+  }
+
+  res.json({
+    success: true,
+    message: "OTP resent to your registered email.",
+    ...(shouldReturnAuthDebugTokens() ? { debugOtp: otp, emailDelivery: delivery } : {}),
+  });
+}
+
 async function me(req, res) {
   if (req.user.role === "admin" && req.user.id === "env-admin") {
     return res.json({
@@ -293,12 +463,124 @@ async function me(req, res) {
   });
 }
 
-async function rotateApiKey(req, res) {
-  const apiKey = generateApiKey();
-  const apiKeyHash = sha256Hex(apiKey);
+async function apiKeyStatus(req, res) {
+  await ensureMetaSetupForWorkspace(req.workspace.id);
+  const user = await User.findById(req.user.id).select("+apiKeyEnc");
+  if (!user) throw new HttpError(404, "User not found");
+  const hasApiKey = !!user.apiKeyEnc;
+  let maskedKey = "";
+  if (hasApiKey) {
+    try {
+      const key = decryptString(user.apiKeyEnc);
+      const start = key.slice(0, 4);
+      const end = key.slice(-3);
+      maskedKey = `${start}***${end}`;
+    } catch {
+      maskedKey = "";
+    }
+  }
+  res.json({ success: true, hasApiKey, maskedKey });
+}
 
-  await User.updateOne({ _id: req.user.id }, { $set: { apiKeyHash } });
-  res.json({ success: true, apiKey });
+async function requestApiKeyOtp(req, res) {
+  const purpose = normalizeApiKeyOtpPurpose(req.body?.purpose);
+  if (!purpose) throw new HttpError(400, "Invalid purpose");
+
+  await ensureMetaSetupForWorkspace(req.workspace.id);
+
+  const user = await User.findById(req.user.id).select(
+    "email name +apiKeyEnc +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose"
+  );
+  if (!user) throw new HttpError(404, "User not found");
+
+  if (purpose === "reveal" && !user.apiKeyEnc) {
+    throw new HttpError(404, "No API key exists yet. Generate one first.");
+  }
+
+  const otp = generateOtpCode();
+  user.apiKeyOtpCodeHash = sha256Hex(otp);
+  user.apiKeyOtpCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  user.apiKeyOtpPurpose = purpose;
+  await user.save();
+
+  const subject = purpose === "rotate" ? "Your API key generation OTP" : "Your API key reveal OTP";
+  const title = purpose === "rotate" ? "API key verification" : "Reveal API key verification";
+  const subtitle =
+    purpose === "rotate"
+      ? "Enter this OTP code to generate a new API key. The old key will stop working."
+      : "Enter this OTP code to view your API key.";
+
+  const delivery = await sendEmail({
+    toEmail: user.email,
+    toName: user.name || "",
+    subject,
+    htmlContent: buildOtpEmailHtml({ code: otp, title, subtitle }),
+    textContent: `Your OTP code is ${otp}. It expires in 10 minutes.`,
+  });
+
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  if (isProd && (delivery?.skipped || delivery?.failed)) {
+    throw new HttpError(500, "Email service is not configured");
+  }
+
+  res.json({
+    success: true,
+    message: "OTP sent to your registered email.",
+    ...(shouldReturnAuthDebugTokens() ? { debugOtp: otp, emailDelivery: delivery } : {}),
+  });
+}
+
+async function verifyApiKeyOtp(req, res) {
+  const purpose = normalizeApiKeyOtpPurpose(req.body?.purpose);
+  const otp = String(req.body?.otp || "").trim();
+  if (!purpose) throw new HttpError(400, "Invalid purpose");
+  if (!/^\d{6}$/.test(otp)) throw new HttpError(400, "Invalid OTP code");
+
+  await ensureMetaSetupForWorkspace(req.workspace.id);
+
+  const user = await User.findById(req.user.id).select(
+    "email name +apiKeyHash +apiKeyEnc +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose"
+  );
+  if (!user) throw new HttpError(404, "User not found");
+
+  if (!user.apiKeyOtpCodeHash || !user.apiKeyOtpCodeExpiresAt || user.apiKeyOtpCodeExpiresAt < new Date()) {
+    throw new HttpError(400, "OTP expired. Request a new code.");
+  }
+  if (String(user.apiKeyOtpPurpose || "") !== purpose) {
+    throw new HttpError(400, "OTP purpose mismatch. Request a new code.");
+  }
+  if (sha256Hex(otp) !== user.apiKeyOtpCodeHash) {
+    throw new HttpError(401, "Invalid OTP code");
+  }
+
+  user.apiKeyOtpCodeHash = undefined;
+  user.apiKeyOtpCodeExpiresAt = undefined;
+  user.apiKeyOtpPurpose = undefined;
+
+  if (purpose === "rotate") {
+    const apiKey = generateApiKey();
+    user.apiKeyHash = sha256Hex(apiKey);
+    user.apiKeyEnc = encryptString(apiKey);
+    await user.save();
+    return res.json({
+      success: true,
+      message: "API key generated successfully.",
+      apiKey,
+    });
+  }
+
+  if (!user.apiKeyEnc) {
+    await user.save();
+    throw new HttpError(404, "No API key exists yet. Generate one first.");
+  }
+
+  const apiKey = decryptString(user.apiKeyEnc);
+  await user.save();
+  return res.json({
+    success: true,
+    message: "API key revealed successfully.",
+    apiKey,
+  });
 }
 
 async function updateProfile(req, res) {
@@ -464,8 +746,13 @@ module.exports = {
   register,
   login,
   verifyLoginOtp,
+  resendLoginOtp,
+  verifyRegisterOtp,
+  resendRegisterOtp,
   me,
-  rotateApiKey,
+  apiKeyStatus,
+  requestApiKeyOtp,
+  verifyApiKeyOtp,
   updateProfile,
   changePassword,
   requestEnable2fa,

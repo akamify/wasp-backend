@@ -94,12 +94,14 @@ function mountRoutes(basePath = "") {
   app.use(`${basePath}/templates`, require("./routes/templateRoutes"));
   app.use(`${basePath}/messages`, require("./routes/messageRoutes"));
   app.use(`${basePath}/analytics`, require("./routes/analyticsRoutes"));
+  app.use(`${basePath}/reports`, require("./routes/reportsRoutes"));
   app.use(`${basePath}/links`, require("./routes/linkRoutes"));
   app.use(`${basePath}/conversations`, require("./routes/conversationRoutes"));
   app.use(`${basePath}/contacts`, require("./routes/contactRoutes"));
   app.use(`${basePath}/meta`, require("./routes/metaRoutes"));
   app.use(`${basePath}/campaigns`, require("./routes/campaignRoutes"));
   app.use(`${basePath}/wallet`, require("./routes/walletRoutes"));
+  app.use(`${basePath}/integrations`, require("./routes/integrationRoutes"));
   app.use(`${basePath}`, require("./routes/automationRoutes")); // mounts POST /trigger-event
 }
 

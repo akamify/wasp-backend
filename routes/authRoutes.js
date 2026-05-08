@@ -4,12 +4,18 @@ const { asyncHandler } = require("../utils/asyncHandler");
 const { validate } = require("../middleware/validate");
 const rateLimiters = require("../middleware/rateLimiters");
 const { auth } = require("../middleware/auth");
+const { requireWorkspace } = require("../middleware/requireWorkspace");
 const {
   register,
   login,
   verifyLoginOtp,
+  resendLoginOtp,
+  verifyRegisterOtp,
+  resendRegisterOtp,
   me,
-  rotateApiKey,
+  apiKeyStatus,
+  requestApiKeyOtp,
+  verifyApiKeyOtp,
   updateProfile,
   changePassword,
   requestEnable2fa,
@@ -60,6 +66,40 @@ router.post(
 );
 
 router.post(
+  "/login/resend-otp",
+  rateLimiters.auth,
+  validate(
+    Joi.object({
+      challengeToken: Joi.string().required(),
+    })
+  ),
+  asyncHandler(resendLoginOtp)
+);
+
+router.post(
+  "/register/verify-otp",
+  rateLimiters.auth,
+  validate(
+    Joi.object({
+      challengeToken: Joi.string().required(),
+      otp: Joi.string().pattern(/^\d{6}$/).required(),
+    })
+  ),
+  asyncHandler(verifyRegisterOtp)
+);
+
+router.post(
+  "/register/resend-otp",
+  rateLimiters.auth,
+  validate(
+    Joi.object({
+      challengeToken: Joi.string().required(),
+    })
+  ),
+  asyncHandler(resendRegisterOtp)
+);
+
+router.post(
   "/forgot-password",
   rateLimiters.auth,
   validate(
@@ -83,7 +123,28 @@ router.post(
 );
 
 router.get("/me", auth, asyncHandler(me));
-router.post("/api-key/rotate", auth, asyncHandler(rotateApiKey));
+router.get("/api-key", auth, requireWorkspace, asyncHandler(apiKeyStatus));
+router.post(
+  "/api-key/request-otp",
+  rateLimiters.auth,
+  auth,
+  requireWorkspace,
+  validate(Joi.object({ purpose: Joi.string().valid("rotate", "reveal").required() })),
+  asyncHandler(requestApiKeyOtp)
+);
+router.post(
+  "/api-key/verify-otp",
+  rateLimiters.auth,
+  auth,
+  requireWorkspace,
+  validate(
+    Joi.object({
+      purpose: Joi.string().valid("rotate", "reveal").required(),
+      otp: Joi.string().pattern(/^\d{6}$/).required(),
+    })
+  ),
+  asyncHandler(verifyApiKeyOtp)
+);
 router.put(
   "/profile",
   auth,
