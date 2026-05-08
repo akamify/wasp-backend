@@ -45,6 +45,8 @@ async function saveMetaCredentials(req, res) {
           businessAccountIdEnc: encryptString(wabaId),
           phoneNumberIdHash: hashForLookup(phoneNumberId),
           businessAccountIdHash: hashForLookup(wabaId),
+          phoneNumberIdPlain: String(phoneNumberId),
+          businessAccountIdPlain: String(wabaId),
           graphApiVersion: graphApiVersion || metaGraphVersion,
           isValid: true,
           lastValidatedAt: new Date(),

@@ -3,12 +3,6 @@ const { decryptString } = require("../utils/crypto");
 const { hashForLookup } = require("../utils/hash");
 const { HttpError } = require("../utils/httpError");
 
-async function resolveSingleTenantFallback() {
-  const docs = await WhatsAppCredentials.find({}).select("workspaceId").limit(2);
-  if (docs.length === 1) return docs[0];
-  return null;
-}
-
 async function getCredentialsForUser(userId) {
   const doc = await WhatsAppCredentials.findOne({ workspaceId: userId }).select(
     "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid"
@@ -34,11 +28,22 @@ async function findTenantByPhoneNumberId(phoneNumberId) {
   const normalized = String(phoneNumberId || "").trim();
   if (!normalized) return null;
 
-  // Fast path: deterministic hash lookup.
-  const phoneNumberIdHash = hashForLookup(normalized);
-  const byHash = await WhatsAppCredentials.findOne({ phoneNumberIdHash }).select(
-    "workspaceId phoneNumberIdHash"
+  // Stable fast path for multi-tenant routing.
+  const byPlain = await WhatsAppCredentials.findOne({ phoneNumberIdPlain: normalized }).select(
+    "workspaceId phoneNumberIdHash phoneNumberIdPlain"
   );
+  if (byPlain) return byPlain;
+
+  // Secondary path: deterministic hash lookup (if secret is configured and aligned).
+  let byHash = null;
+  try {
+    const phoneNumberIdHash = hashForLookup(normalized);
+    byHash = await WhatsAppCredentials.findOne({ phoneNumberIdHash }).select(
+      "workspaceId phoneNumberIdHash phoneNumberIdPlain"
+    );
+  } catch {
+    byHash = null;
+  }
   if (byHash) return byHash;
 
   // Fallback path: if lookup secret changed across environments, compare decrypted values.
@@ -49,17 +54,19 @@ async function findTenantByPhoneNumberId(phoneNumberId) {
   for (const doc of docs) {
     try {
       const raw = decryptString(doc.phoneNumberIdEnc);
-      if (String(raw).trim() === normalized) return doc;
+      if (String(raw).trim() === normalized) {
+        // Self-heal stale routing fields after key/secret drift.
+        const set = { phoneNumberIdPlain: normalized };
+        try {
+          set.phoneNumberIdHash = hashForLookup(normalized);
+        } catch {}
+        await WhatsAppCredentials.updateOne({ _id: doc._id }, { $set: set });
+        return doc;
+      }
     } catch {
       // Ignore corrupted rows and continue scanning.
     }
   }
-
-  // Safe fallback for single-tenant deployments:
-  // if there is exactly one credentials record in the system, route unresolved
-  // webhook events to that workspace to prevent lost inbound/status updates.
-  const single = await resolveSingleTenantFallback();
-  if (single) return single;
   return null;
 }
 
@@ -67,10 +74,20 @@ async function findTenantByWabaId(wabaId) {
   const normalized = String(wabaId || "").trim();
   if (!normalized) return null;
 
-  const businessAccountIdHash = hashForLookup(normalized);
-  const byHash = await WhatsAppCredentials.findOne({ businessAccountIdHash }).select(
-    "workspaceId businessAccountIdHash"
+  const byPlain = await WhatsAppCredentials.findOne({ businessAccountIdPlain: normalized }).select(
+    "workspaceId businessAccountIdHash businessAccountIdPlain"
   );
+  if (byPlain) return byPlain;
+
+  let byHash = null;
+  try {
+    const businessAccountIdHash = hashForLookup(normalized);
+    byHash = await WhatsAppCredentials.findOne({ businessAccountIdHash }).select(
+      "workspaceId businessAccountIdHash businessAccountIdPlain"
+    );
+  } catch {
+    byHash = null;
+  }
   if (byHash) return byHash;
 
   // NOTE: We intentionally do NOT filter by isValid here for webhook routing resiliency.
@@ -78,14 +95,18 @@ async function findTenantByWabaId(wabaId) {
   for (const doc of docs) {
     try {
       const raw = decryptString(doc.businessAccountIdEnc);
-      if (String(raw).trim() === normalized) return doc;
+      if (String(raw).trim() === normalized) {
+        const set = { businessAccountIdPlain: normalized };
+        try {
+          set.businessAccountIdHash = hashForLookup(normalized);
+        } catch {}
+        await WhatsAppCredentials.updateOne({ _id: doc._id }, { $set: set });
+        return doc;
+      }
     } catch {
       // Ignore corrupted rows and continue scanning.
     }
   }
-
-  const single = await resolveSingleTenantFallback();
-  if (single) return single;
   return null;
 }
 

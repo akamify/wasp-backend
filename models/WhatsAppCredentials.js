@@ -18,6 +18,9 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
     // Deterministic lookup for multi-tenant webhook routing.
     phoneNumberIdHash: { type: String, required: true, index: true },
     businessAccountIdHash: { type: String, required: true, index: true },
+    // Plain IDs are not secrets; keep them indexed for stable webhook routing across env hash/key changes.
+    phoneNumberIdPlain: { type: String, default: null, index: true },
+    businessAccountIdPlain: { type: String, default: null, index: true },
 
     graphApiVersion: { type: String, default: "v22.0" },
     isValid: { type: Boolean, default: false },
