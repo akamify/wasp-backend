@@ -61,7 +61,7 @@ async function refreshCampaignFromMessage(workspaceId, messageDoc) {
   if (!campaignId || !workspaceId) return;
 
   const [campaign, grouped] = await Promise.all([
-    Campaign.findOne({ _id: campaignId, workspaceId }).select("_id totals status"),
+    Campaign.findOne({ _id: campaignId, workspaceId }).select("_id totals status type"),
     Message.aggregate([
       {
         $match: {
@@ -87,13 +87,18 @@ async function refreshCampaignFromMessage(workspaceId, messageDoc) {
   const queued = Math.max(total - sentLike - failedLike, 0);
 
   let nextStatus = String(campaign.status || "queued");
-  if (queued === 0) {
-    if (failedLike > 0 && sentLike === 0) nextStatus = "failed";
-    else nextStatus = "completed";
-  } else if (sentLike > 0 || failedLike > 0) {
+  const isApiCampaign = String(campaign.type || "") === "api";
+  if (!isApiCampaign) {
+    if (queued === 0) {
+      if (failedLike > 0 && sentLike === 0) nextStatus = "failed";
+      else nextStatus = "completed";
+    } else if (sentLike > 0 || failedLike > 0) {
+      nextStatus = "running";
+    } else {
+      nextStatus = "queued";
+    }
+  } else if (nextStatus === "queued" && (sentLike > 0 || failedLike > 0)) {
     nextStatus = "running";
-  } else {
-    nextStatus = "queued";
   }
 
   await Campaign.updateOne(
@@ -231,10 +236,10 @@ async function receive(req, res) {
             const tenantWorkspaceId = tenant?.workspaceId ? String(tenant.workspaceId) : "";
             if (mongoose.Types.ObjectId.isValid(tenantWorkspaceId)) {
               pushWebhookDebugEvent(tenantWorkspaceId, {
-              type: "tenant_resolved_by_waba_fallback",
-                  phoneNumberId: phoneNumberId || null,
-                  wabaId: wabaIdFromEntry,
-                  });
+                type: "tenant_resolved_by_waba_fallback",
+                phoneNumberId: phoneNumberId || null,
+                wabaId: wabaIdFromEntry,
+              });
             }
           }
         }
@@ -262,20 +267,20 @@ async function receive(req, res) {
         entries: Array.isArray(body?.entry) ? body.entry.length : 0,
       });
 
-       // Telemetry: record that we received a webhook for this workspace.
-       // Useful to debug "incoming messages not showing" when the callback URL isn't being hit.
-       try {
-         await WhatsAppCredentials.updateOne(
-           { workspaceId: workspaceIdRaw },
-           {
-             $set: {
-               lastWebhookAt: new Date(),
-               lastWebhookField: field || null,
-               lastWebhookObject: body?.object || null,
-             },
-           }
-         );
-       } catch {}
+      // Telemetry: record that we received a webhook for this workspace.
+      // Useful to debug "incoming messages not showing" when the callback URL isn't being hit.
+      try {
+        await WhatsAppCredentials.updateOne(
+          { workspaceId: workspaceIdRaw },
+          {
+            $set: {
+              lastWebhookAt: new Date(),
+              lastWebhookField: field || null,
+              lastWebhookObject: body?.object || null,
+            },
+          }
+        );
+      } catch { }
 
       const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
       if (statuses.length) {
@@ -320,16 +325,16 @@ async function receive(req, res) {
             : { whatsappMessageId: waId };
           const update = hasValidWorkspaceId
             ? {
-                $set: set,
-                $setOnInsert: {
-                  workspaceId: workspaceIdRaw,
-                  // Keep phone only in $set to avoid Mongo conflicting update operators.
-                  // When recipient_id is missing in status webhook, fallback to placeholder.
-                  ...(phone ? {} : { phone: "unknown" }),
-                  direction: "outbound",
-                  "statusTimestamps.acceptedAt": new Date(),
-                },
-              }
+              $set: set,
+              $setOnInsert: {
+                workspaceId: workspaceIdRaw,
+                // Keep phone only in $set to avoid Mongo conflicting update operators.
+                // When recipient_id is missing in status webhook, fallback to placeholder.
+                ...(phone ? {} : { phone: "unknown" }),
+                direction: "outbound",
+                "statusTimestamps.acceptedAt": new Date(),
+              },
+            }
             : { $set: set };
 
           const updated = await Message.findOneAndUpdate(
@@ -418,13 +423,13 @@ async function receive(req, res) {
           ...(m.video?.id ? { video: { id: String(m.video.id), mime_type: m.video.mime_type || null, sha256: m.video.sha256 || null } } : {}),
           ...(m.document?.id
             ? {
-                document: {
-                  id: String(m.document.id),
-                  mime_type: m.document.mime_type || null,
-                  sha256: m.document.sha256 || null,
-                  filename: m.document.filename || null,
-                },
-              }
+              document: {
+                id: String(m.document.id),
+                mime_type: m.document.mime_type || null,
+                sha256: m.document.sha256 || null,
+                filename: m.document.filename || null,
+              },
+            }
             : {}),
           ...(Array.isArray(m.contacts) ? { contacts: m.contacts } : {}),
         };

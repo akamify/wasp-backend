@@ -94,12 +94,26 @@ async function getCampaignMetrics(req, res) {
     direction: "outbound",
   };
 
-  const countsAgg = await Message.aggregate([
+  const statusRankExpr = {
+    $switch: {
+      branches: [
+        { case: { $in: ["$status", ["failed", "timeout_unknown"]] }, then: 0 },
+        { case: { $in: ["$status", ["sent", "accepted"]] }, then: 1 },
+        { case: { $eq: ["$status", "delivered"] }, then: 2 },
+        { case: { $eq: ["$status", "read"] }, then: 3 },
+      ],
+      default: 1,
+    },
+  };
+
+  const contactAgg = await Message.aggregate([
     { $match: match },
-    { $group: { _id: "$status", count: { $sum: 1 } } },
+    { $addFields: { statusRank: statusRankExpr } },
+    { $group: { _id: "$phone", statusRank: { $max: "$statusRank" } } },
+    { $group: { _id: "$statusRank", count: { $sum: 1 } } },
   ]);
 
-  const counts = Object.fromEntries(countsAgg.map((row) => [String(row._id), Number(row.count || 0)]));
+  const countsByRank = Object.fromEntries(contactAgg.map((row) => [String(row._id), Number(row.count || 0)]));
 
   // Best-effort replied detection:
   // Any inbound message from the same phone after campaign createdAt counts as a reply.
@@ -119,12 +133,12 @@ async function getCampaignMetrics(req, res) {
     campaignId: String(campaign._id),
     audienceTotal: campaign.totals?.total || phones.length || 0,
     counts: {
-      queued: counts.queued || 0,
-      accepted: counts.accepted || 0,
-      sent: counts.sent || 0,
-      delivered: counts.delivered || 0,
-      read: counts.read || 0,
-      failed: (counts.failed || 0) + (counts.timeout_unknown || 0),
+      queued: Number(campaign.totals?.queued || 0),
+      accepted: 0,
+      sent: countsByRank["1"] || 0,
+      delivered: countsByRank["2"] || 0,
+      read: countsByRank["3"] || 0,
+      failed: countsByRank["0"] || 0,
       replied: repliesCount || 0,
     },
     updatedAt: new Date().toISOString(),
@@ -153,23 +167,84 @@ async function listCampaignMessages(req, res) {
   const page = Math.min(Math.max(Number(req.query.page || 1), 1), 50000);
   const skip = (page - 1) * limit;
 
-  const filter = {
+  const tabRankMap = {
+    sent: 1,
+    delivered: 2,
+    read: 3,
+    failed: 0,
+  };
+  const tabRank = tabRankMap[String(tab || "").toLowerCase()];
+
+  if (typeof tabRank !== "number") {
+    return res.json({ success: true, tab, page, limit, total: 0, items: [] });
+  }
+
+  const baseMatch = {
     workspaceId: campaign.workspaceId,
     campaignId: campaign._id,
     direction: "outbound",
-    ...statusFilterForTab(tab),
   };
 
-  const [total, items] = await Promise.all([
-    Message.countDocuments(filter),
-    Message.find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .select("phone status createdAt whatsappMessageId error statusTimestamps"),
+  const statusRankExpr = {
+    $switch: {
+      branches: [
+        { case: { $in: ["$status", ["failed", "timeout_unknown"]] }, then: 0 },
+        { case: { $in: ["$status", ["sent", "accepted"]] }, then: 1 },
+        { case: { $eq: ["$status", "delivered"] }, then: 2 },
+        { case: { $eq: ["$status", "read"] }, then: 3 },
+      ],
+      default: 1,
+    },
+  };
+
+  const statusFromRankExpr = {
+    $switch: {
+      branches: [
+        { case: { $eq: ["$statusRank", 0] }, then: "failed" },
+        { case: { $eq: ["$statusRank", 1] }, then: "sent" },
+        { case: { $eq: ["$statusRank", 2] }, then: "delivered" },
+        { case: { $eq: ["$statusRank", 3] }, then: "read" },
+      ],
+      default: "sent",
+    },
+  };
+
+  const basePipeline = [
+    { $match: baseMatch },
+    { $addFields: { statusRank: statusRankExpr } },
+    { $sort: { createdAt: -1 } },
+    {
+      $group: {
+        _id: "$phone",
+        phone: { $first: "$phone" },
+        statusRank: { $max: "$statusRank" },
+        createdAt: { $first: "$createdAt" },
+        whatsappMessageId: { $first: "$whatsappMessageId" },
+        error: { $first: "$error" },
+        statusTimestamps: { $first: "$statusTimestamps" },
+      },
+    },
+    { $addFields: { status: statusFromRankExpr } },
+  ];
+
+  const [countAgg, itemsAgg] = await Promise.all([
+    Message.aggregate([
+      ...basePipeline,
+      { $match: { statusRank: tabRank } },
+      { $count: "total" },
+    ]),
+    Message.aggregate([
+      ...basePipeline,
+      { $match: { statusRank: tabRank } },
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+    ]),
   ]);
 
-  const phones = items.map((m) => m.phone).filter(Boolean);
+  const total = Number(countAgg?.[0]?.total || 0);
+
+  const phones = itemsAgg.map((m) => m.phone).filter(Boolean);
   const contacts = phones.length
     ? await Contact.find({ workspaceId: campaign.workspaceId, phone: { $in: phones } }).select("phone name")
     : [];
@@ -181,8 +256,8 @@ async function listCampaignMessages(req, res) {
     page,
     limit,
     total,
-    items: items.map((m) => ({
-      id: String(m._id),
+    items: itemsAgg.map((m) => ({
+      id: String(m._id || m.phone || ""),
       phone: m.phone,
       name: contactMap.get(String(m.phone)) || "",
       status: m.status,
@@ -300,10 +375,10 @@ async function updateCampaignStatus(req, res) {
   const isStopped = currentStatus === "canceled" || currentStatus === "cancelled";
   const isFailed = currentStatus === "failed";
   const isPaused = currentStatus === "paused";
-  const isLive = currentStatus === "queued" || currentStatus === "running";
+  const isLive = currentStatus === "running";
 
   const allowedActions = isLive
-    ? new Set(["pause", "stop"])
+    ? new Set(["pause", "stop", "complete"])
     : isPaused
       ? new Set(["resume", "stop"])
       : new Set([]);
@@ -319,7 +394,9 @@ async function updateCampaignStatus(req, res) {
         ? "queued"
         : action === "stop"
           ? "canceled"
-          : null;
+          : action === "complete"
+            ? "completed"
+            : null;
   if (!nextStatus) throw new HttpError(400, "Invalid action");
 
   if (action === "pause" || action === "resume" || action === "stop") {
@@ -417,22 +494,18 @@ async function createCampaign(req, res) {
   const normalizedRecipients = normalizeRecipientsForCampaign(recipients);
 
   const normalizedType = String(type || "broadcast").toLowerCase();
-  if (normalizedType === "api" && normalizedRecipients.length > 0) {
-    throw new HttpError(
-      400,
-      "API campaigns are definitions only. Do not pass recipients when type=api; send recipients via the integrations API instead."
-    );
-  }
-  if (normalizedRecipients.length === 0) {
-    if (normalizedType !== "api") {
-      throw new HttpError(400, "At least one recipient required");
+  if (normalizedType === "api") {
+    if (normalizedRecipients.length > 0) {
+      throw new HttpError(
+        400,
+        "API campaigns should not include recipients. Provide contacts when sending via integrations."
+      );
     }
-
     const campaign = await Campaign.create({
       workspaceId: req.workspace.id,
       name,
       templateId: template._id,
-      status: "draft",
+      status: "running",
       type: "api",
       scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
       totals: { total: 0, queued: 0, sent: 0, failed: 0 },
@@ -444,6 +517,8 @@ async function createCampaign(req, res) {
       message: "API campaign created. Contacts will be provided by integrations at send time.",
     });
   }
+
+  if (normalizedRecipients.length === 0) throw new HttpError(400, "At least one recipient required");
 
   const estimate = await computeCampaignCreditEstimate({
     workspaceId: req.workspace.id,
@@ -476,7 +551,7 @@ async function createCampaign(req, res) {
     workspaceId: req.workspace.id,
     name,
     templateId: template._id,
-    status: "queued",
+    status: normalizedType === "api" && !scheduledAt ? "running" : "queued",
     type: normalizedType || "broadcast",
     scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
     totals: {

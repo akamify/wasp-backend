@@ -35,7 +35,7 @@ router.post(
   "/:id/action",
   auth,
   requireWorkspace,
-  validate(Joi.object({ action: Joi.string().valid("pause", "resume", "stop").required() })),
+  validate(Joi.object({ action: Joi.string().valid("pause", "resume", "stop", "complete").required() })),
   asyncHandler(updateCampaignStatus)
 );
 router.post(

@@ -15,8 +15,9 @@ const ratePerSec = Math.max(Number(process.env.CAMPAIGN_RATE_LIMIT_PER_SEC || 10
 
 async function finalizeCampaignIfDone({ workspaceId, campaignId }) {
   try {
-    const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals").lean();
+    const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals type").lean();
     if (!campaign) return;
+    if (String(campaign.type || "") === "api") return;
     const queued = Number(campaign?.totals?.queued || 0);
     if (queued > 0) return;
     const status = String(campaign.status || "");
@@ -54,7 +55,7 @@ async function startWorker() {
       const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals");
       if (!campaign) throw new Error("Campaign not found");
       const status = String(campaign.status || "");
-      if (status === "paused" || status === "canceled" || status === "cancelled") {
+      if (status === "paused" || status === "canceled" || status === "cancelled" || status === "completed" || status === "failed") {
         await Campaign.updateOne(
           { _id: campaignId, workspaceId },
           { $inc: { "totals.queued": -1 } }
@@ -63,8 +64,18 @@ async function startWorker() {
         return { ok: true, skipped: true, status };
       }
 
-      if (status === "draft" || status === "queued") {
+      if (status === "queued") {
         await Campaign.updateOne({ _id: campaignId, workspaceId }, { $set: { status: "running" } });
+      }
+
+      const updatedStatus = status === "queued" ? "running" : status;
+      if (updatedStatus !== "running") {
+        await Campaign.updateOne(
+          { _id: campaignId, workspaceId },
+          { $inc: { "totals.queued": -1 } }
+        );
+        await finalizeCampaignIfDone({ workspaceId, campaignId });
+        return { ok: true, skipped: true, status: updatedStatus };
       }
 
       const template = await Template.findOne({ _id: templateId, workspaceId });
