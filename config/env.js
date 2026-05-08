@@ -8,6 +8,13 @@ function requiredInProd(name, fallback = "") {
   return value;
 }
 
+function parseCsvEnv(value) {
+  return String(value || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 const port = Number(process.env.PORT || 3000);
 
 module.exports = {
@@ -29,6 +36,7 @@ module.exports = {
   metaAppSecret: process.env.META_APP_SECRET || "",
   lookupSecret: process.env.LOOKUP_SECRET || process.env.CREDENTIALS_LOOKUP_SECRET || "",
   defaultWorkspaceId: process.env.DEFAULT_WORKSPACE_ID || "",
+  corsOrigins: parseCsvEnv(process.env.CORS_ORIGINS || process.env.FRONTEND_BASE_URL || ""),
   trackingBaseUrl:
     process.env.TRACKING_BASE_URL || process.env.APP_BASE_URL || `http://localhost:${port}`,
 };

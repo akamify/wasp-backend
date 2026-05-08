@@ -61,6 +61,9 @@ function verifyLoginChallengeToken(token) {
 
 function isEnvAdminLogin(email, password) {
   if (!adminEmail || !adminPassword) return false;
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  const allowInProd = String(process.env.ALLOW_ENV_ADMIN_LOGIN || "").toLowerCase() === "true";
+  if (isProd && !allowInProd) return false;
   return (
     String(email || "").trim().toLowerCase() === String(adminEmail).trim().toLowerCase() &&
     String(password || "") === String(adminPassword)

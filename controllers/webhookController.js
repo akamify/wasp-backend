@@ -1,4 +1,4 @@
-const { metaWebhookVerifyToken, defaultWorkspaceId } = require("../config/env");
+const { metaWebhookVerifyToken } = require("../config/env");
 const { findTenantByPhoneNumberId, findTenantByWabaId } = require("../services/credentialsService");
 const { Message } = require("../models/Message");
 const mongoose = require("mongoose");
@@ -6,18 +6,24 @@ const { touchConversation } = require("../services/conversationService");
 const { normalizePhone, touchContactFromMessage } = require("../services/contactService");
 const { WhatsAppCredentials } = require("../models/WhatsAppCredentials");
 const { Campaign } = require("../models/Campaign");
+const { HttpError } = require("../utils/httpError");
 
 const WEBHOOK_DEBUG_LIMIT = 40;
-const webhookDebugEvents = [];
+const webhookDebugEventsByWorkspace = new Map();
 
-function pushWebhookDebugEvent(event) {
-  webhookDebugEvents.unshift({
+function pushWebhookDebugEvent(workspaceId, event) {
+  const key = String(workspaceId || "").trim();
+  if (!key) return;
+
+  const list = webhookDebugEventsByWorkspace.get(key) || [];
+  list.unshift({
     at: new Date().toISOString(),
     ...event,
   });
-  if (webhookDebugEvents.length > WEBHOOK_DEBUG_LIMIT) {
-    webhookDebugEvents.length = WEBHOOK_DEBUG_LIMIT;
+  if (list.length > WEBHOOK_DEBUG_LIMIT) {
+    list.length = WEBHOOK_DEBUG_LIMIT;
   }
+  webhookDebugEventsByWorkspace.set(key, list);
 }
 
 function asDateFromSeconds(seconds) {
@@ -125,11 +131,6 @@ async function verify(req, res) {
 async function receive(req, res) {
   const body = req.body;
   if (!body) return res.sendStatus(400);
-  pushWebhookDebugEvent({
-    type: "incoming",
-    object: body?.object || null,
-    entries: Array.isArray(body?.entry) ? body.entry.length : 0,
-  });
 
   const debug = String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true";
   if (debug) {
@@ -230,47 +231,27 @@ async function receive(req, res) {
         if (wabaIdFromEntry) {
           tenant = await findTenantByWabaId(wabaIdFromEntry);
           if (tenant) {
-            pushWebhookDebugEvent({
+            const tenantWorkspaceId = tenant?.workspaceId ? String(tenant.workspaceId) : "";
+            if (mongoose.Types.ObjectId.isValid(tenantWorkspaceId)) {
+              pushWebhookDebugEvent(tenantWorkspaceId, {
               type: "tenant_resolved_by_waba_fallback",
               phoneNumberId: String(phoneNumberId),
               wabaId: wabaIdFromEntry,
-            });
+              });
+            }
           }
         }
       }
 
       const resolvedWorkspaceId = tenant?.workspaceId ? String(tenant.workspaceId) : "";
-      const fallbackWorkspaceId = String(defaultWorkspaceId || "");
-      let workspaceIdRaw =
-        mongoose.Types.ObjectId.isValid(resolvedWorkspaceId)
-          ? resolvedWorkspaceId
-          : mongoose.Types.ObjectId.isValid(fallbackWorkspaceId)
-            ? fallbackWorkspaceId
-            : "";
-
-      // Last-resort fallback: pick the most recently validated WhatsApp connection.
-      // This keeps inbound ingest alive even when tenant lookup hashes drift across envs.
-      if (!workspaceIdRaw) {
-        const recentCred = await WhatsAppCredentials.findOne({ isValid: true })
-          .sort({ lastValidatedAt: -1, updatedAt: -1, createdAt: -1 })
-          .select("workspaceId");
-        const recentWorkspaceId = String(recentCred?.workspaceId || "");
-        if (mongoose.Types.ObjectId.isValid(recentWorkspaceId)) {
-          workspaceIdRaw = recentWorkspaceId;
-          pushWebhookDebugEvent({
-            type: "tenant_recent_credentials_fallback",
-            phoneNumberId: String(phoneNumberId),
-            workspaceId: workspaceIdRaw,
-          });
-        }
-      }
+      const workspaceIdRaw = mongoose.Types.ObjectId.isValid(resolvedWorkspaceId) ? resolvedWorkspaceId : "";
 
       if (!workspaceIdRaw) {
         if (debug) {
           // eslint-disable-next-line no-console
           console.warn("Webhook: workspace not resolved for phone_number_id.", phoneNumberId);
         }
-        pushWebhookDebugEvent({
+        pushWebhookDebugEvent("unresolved", {
           type: "tenant_workspace_missing",
           phoneNumberId: String(phoneNumberId),
         });
@@ -278,10 +259,15 @@ async function receive(req, res) {
       }
 
       const hasValidWorkspaceId = mongoose.Types.ObjectId.isValid(workspaceIdRaw);
+      pushWebhookDebugEvent(workspaceIdRaw, {
+        type: "incoming",
+        object: body?.object || null,
+        entries: Array.isArray(body?.entry) ? body.entry.length : 0,
+      });
 
       const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
       if (statuses.length) {
-        pushWebhookDebugEvent({
+        pushWebhookDebugEvent(workspaceIdRaw, {
           type: "statuses",
           field,
           phoneNumberId: String(phoneNumberId),
@@ -348,14 +334,14 @@ async function receive(req, res) {
           }
 
           if (!hasValidWorkspaceId) {
-            pushWebhookDebugEvent({
+            pushWebhookDebugEvent("unresolved", {
               type: "tenant_workspace_missing",
               waId,
               phoneNumberId: String(phoneNumberId),
             });
           }
         } catch (statusErr) {
-          pushWebhookDebugEvent({
+          pushWebhookDebugEvent(workspaceIdRaw, {
             type: "status_update_error",
             waId,
             workspaceId: workspaceIdRaw || null,
@@ -384,7 +370,7 @@ async function receive(req, res) {
           .filter(Boolean)
       );
       if (messages.length) {
-        pushWebhookDebugEvent({
+        pushWebhookDebugEvent(workspaceIdRaw, {
           type: "messages",
           field,
           phoneNumberId: String(phoneNumberId),
@@ -468,7 +454,7 @@ async function receive(req, res) {
             name: nameByWaId.get(from) || undefined,
           });
         } catch (messageErr) {
-          pushWebhookDebugEvent({
+          pushWebhookDebugEvent(workspaceIdRaw, {
             type: "inbound_update_error",
             waId,
             workspaceId: workspaceIdRaw || null,
@@ -491,16 +477,27 @@ async function receive(req, res) {
 }
 
 async function listWebhookDebugEvents(req, res) {
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  const feedEnabled = String(process.env.META_WEBHOOK_DEBUG_FEED_ENABLED || "").toLowerCase() === "true";
+  if (isProd && !feedEnabled) {
+    throw new HttpError(404, "Not found");
+  }
+
+  const workspaceId = req.workspace?.id ? String(req.workspace.id) : String(req.query.workspaceId || "");
+  if (!workspaceId) throw new HttpError(400, "Missing workspaceId");
+  if (!mongoose.Types.ObjectId.isValid(workspaceId)) throw new HttpError(400, "Invalid workspaceId");
+
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
   res.set("Surrogate-Control", "no-store");
 
   const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), WEBHOOK_DEBUG_LIMIT);
+  const events = webhookDebugEventsByWorkspace.get(workspaceId) || [];
   return res.json({
     success: true,
-    count: Math.min(limit, webhookDebugEvents.length),
-    events: webhookDebugEvents.slice(0, limit),
+    count: Math.min(limit, events.length),
+    events: events.slice(0, limit),
   });
 }
 

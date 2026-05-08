@@ -4,7 +4,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimiters = require("./middleware/rateLimiters");
 const { notFound, errorHandler } = require("./middleware/errorHandler");
-const { appBrandName } = require("./config/env");
+const { appBrandName, corsOrigins } = require("./config/env");
 
 const app = express();
 
@@ -22,7 +22,19 @@ app.use(
 app.use(express.urlencoded({ extended: false }));
 
 app.use(helmet());
-app.use(cors());
+const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true); // non-browser clients
+      if (!isProd) return cb(null, true);
+      return cb(null, Array.isArray(corsOrigins) && corsOrigins.includes(origin));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-workspace-id"],
+    maxAge: 86400,
+  })
+);
 app.use(morgan("dev"));
 
 app.get("/", (req, res) =>

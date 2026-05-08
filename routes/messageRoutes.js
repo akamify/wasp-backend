@@ -92,7 +92,11 @@ router.post(
 
 router.get("/logs", auth, requireWorkspace, asyncHandler(listLogs));
 router.get("/status/:waId", auth, requireWorkspace, asyncHandler(messageStatusByWaId));
-router.get("/webhook-debug", auth, requireWorkspace, asyncHandler(listWebhookDebugEvents));
+const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+const debugFeedEnabled = String(process.env.META_WEBHOOK_DEBUG_FEED_ENABLED || "").toLowerCase() === "true";
+if (!isProd || debugFeedEnabled) {
+  router.get("/webhook-debug", auth, requireWorkspace, asyncHandler(listWebhookDebugEvents));
+}
 router.get("/:phone", auth, requireWorkspace, asyncHandler(messagesByPhone));
 
 module.exports = router;

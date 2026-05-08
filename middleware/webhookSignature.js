@@ -12,14 +12,20 @@ function safeEqualHex(a, b) {
 function verifyWebhookSignature(req, res, next) {
   // Allow bypassing signature verification for local debugging only.
   // Never enable this in production.
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
   if (String(process.env.META_WEBHOOK_SKIP_SIGNATURE || "").toLowerCase() === "true") {
+    if (isProd) {
+      return next(new HttpError(500, "META_WEBHOOK_SKIP_SIGNATURE cannot be enabled in production"));
+    }
     return next();
   }
 
   // In non-production, signature validation is best-effort to avoid blocking local dev
   // when the callback URL is proxied / test tools omit signature headers.
-  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
-  if (!metaAppSecret) return next(); // signature verification optional
+  if (!metaAppSecret) {
+    if (!isProd) return next(); // signature verification optional in dev/test
+    return next(new HttpError(500, "META_APP_SECRET is required to verify webhook signatures"));
+  }
 
   const signature = req.headers["x-hub-signature-256"];
   if (!signature || typeof signature !== "string") {

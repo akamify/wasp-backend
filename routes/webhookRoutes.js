@@ -11,8 +11,12 @@ const router = express.Router();
 router.get("/ping", (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 router.get("/debug/last", (req, res, next) => {
   const token = String(req.query.token || "");
+  const workspaceId = String(req.query.workspaceId || "");
   if (!lookupSecret || token !== lookupSecret) {
     return res.status(403).json({ success: false, message: "Forbidden" });
+  }
+  if (!workspaceId) {
+    return res.status(400).json({ success: false, message: "Missing workspaceId" });
   }
   return next();
 }, asyncHandler(listWebhookDebugEvents));
