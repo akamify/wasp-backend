@@ -106,11 +106,11 @@ async function getCampaignMetrics(req, res) {
   const phones = await Message.distinct("phone", match);
   const repliesCount = phones.length
     ? await Message.countDocuments({
-        workspaceId: campaign.workspaceId,
-        direction: "inbound",
-        phone: { $in: phones },
-        createdAt: { $gte: campaign.createdAt },
-      })
+      workspaceId: campaign.workspaceId,
+      direction: "inbound",
+      phone: { $in: phones },
+      createdAt: { $gte: campaign.createdAt },
+    })
     : 0;
 
   res.json({
@@ -295,15 +295,79 @@ async function updateCampaignStatus(req, res) {
   const campaign = await Campaign.findOne({ _id: id, workspaceId: req.workspace.id });
   if (!campaign) throw new HttpError(404, "Campaign not found");
 
+  const currentStatus = String(campaign.status || "").toLowerCase();
+  const isStopped = currentStatus === "canceled" || currentStatus === "cancelled";
+  const isFailed = currentStatus === "failed";
+  const isPaused = currentStatus === "paused";
+  const isLive = currentStatus === "queued" || currentStatus === "running";
+
+  const allowedActions = isLive
+    ? new Set(["pause", "stop"])
+    : isPaused
+      ? new Set(["resume", "stop"])
+      : new Set([]);
+
+  if (isStopped || isFailed || !allowedActions.has(action)) {
+    throw new HttpError(400, "Action not allowed for current campaign status");
+  }
+
   const nextStatus =
     action === "pause"
       ? "paused"
       : action === "resume"
-        ? "running"
+        ? "queued"
         : action === "stop"
-          ? "cancelled"
+          ? "canceled"
           : null;
   if (!nextStatus) throw new HttpError(400, "Invalid action");
+
+  if (action === "pause" || action === "resume" || action === "stop") {
+    try {
+      const campaignQueue = getCampaignQueue();
+      const campaignId = String(campaign._id);
+
+      if (action === "pause") {
+        const jobs = await campaignQueue.getJobs(["waiting", "prioritized"], 0, 5000);
+        await Promise.all(
+          jobs
+            .filter((job) => String(job?.data?.campaignId || "") === campaignId)
+            .map((job) => job.moveToDelayed(Date.now() + 365 * 24 * 60 * 60 * 1000))
+        );
+      }
+
+      if (action === "resume") {
+        const jobs = await campaignQueue.getJobs(["delayed"], 0, 5000);
+        await Promise.all(
+          jobs
+            .filter((job) => String(job?.data?.campaignId || "") === campaignId)
+            .map((job) => job.promote())
+        );
+      }
+
+      if (action === "stop") {
+        const jobs = await campaignQueue.getJobs(
+          ["waiting", "delayed", "active", "prioritized", "paused"],
+          0,
+          5000
+        );
+        let removed = 0;
+        await Promise.all(
+          jobs
+            .filter((job) => String(job?.data?.campaignId || "") === campaignId)
+            .map(async (job) => {
+              try {
+                await job.remove();
+                removed += 1;
+              } catch { }
+            })
+        );
+
+        if (campaign.totals?.queued && removed > 0) {
+          campaign.totals.queued = Math.max(Number(campaign.totals.queued || 0) - removed, 0);
+        }
+      }
+    } catch { }
+  }
 
   campaign.status = nextStatus;
   await campaign.save();
@@ -518,7 +582,7 @@ async function createCampaign(req, res) {
               },
               error: err?.response?.data || err?.message || err || { message: String(lastFailure) },
             });
-          } catch {}
+          } catch { }
           try {
             const chargeAmount = openNowSet.has(String(recipient.to))
               ? 0
@@ -530,7 +594,7 @@ async function createCampaign(req, res) {
                 to: recipient.to,
               });
             }
-          } catch {}
+          } catch { }
         }
       }
 
@@ -716,10 +780,10 @@ async function deleteCampaign(req, res) {
         .map(async (job) => {
           try {
             await job.remove();
-          } catch {}
+          } catch { }
         })
     );
-  } catch {}
+  } catch { }
 
   const [msgDelete, campDelete] = await Promise.all([
     Message.deleteMany({ workspaceId: req.workspace.id, campaignId: campaign._id }),

@@ -18,7 +18,7 @@ const CampaignSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["draft", "queued", "running", "completed", "failed", "paused", "cancelled"],
+      enum: ["draft", "queued", "running", "completed", "failed", "paused", "canceled", "cancelled"],
       default: "draft",
       index: true,
     },

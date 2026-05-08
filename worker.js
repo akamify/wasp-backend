@@ -39,7 +39,7 @@ async function startWorker() {
       const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals");
       if (!campaign) throw new Error("Campaign not found");
       const status = String(campaign.status || "");
-      if (status === "paused" || status === "canceled") {
+      if (status === "paused" || status === "canceled" || status === "cancelled") {
         await Campaign.updateOne(
           { _id: campaignId, workspaceId },
           { $inc: { "totals.queued": -1 } }
@@ -106,7 +106,7 @@ async function startWorker() {
             },
             error: err?.response?.data || err?.message || err,
           });
-        } catch {}
+        } catch { }
         if (err?.response) {
           try {
             if (chargeAmount > 0) {
@@ -116,7 +116,7 @@ async function startWorker() {
                 to,
               });
             }
-          } catch {}
+          } catch { }
         }
         await Campaign.updateOne(
           { _id: campaignId, workspaceId },
@@ -135,7 +135,7 @@ async function startWorker() {
     }
   );
 
-  worker.on("completed", async () => {});
+  worker.on("completed", async () => { });
   worker.on("failed", async (job, err) => {
     console.error("Job failed:", job?.id, err?.message || err);
   });
