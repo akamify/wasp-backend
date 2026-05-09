@@ -23,6 +23,9 @@ app.use(
 app.use(express.urlencoded({ extended: false }));
 
 const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+const normalizedCorsOrigins = Array.isArray(corsOrigins)
+  ? corsOrigins.map((origin) => String(origin || "").trim().replace(/\/+$/, "")).filter(Boolean)
+  : [];
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -49,7 +52,8 @@ app.use(
     origin(origin, cb) {
       if (!origin) return cb(null, true); // non-browser clients
       if (!isProd) return cb(null, true);
-      return cb(null, Array.isArray(corsOrigins) && corsOrigins.includes(origin));
+      const normalizedOrigin = String(origin || "").trim().replace(/\/+$/, "");
+      return cb(null, normalizedCorsOrigins.includes(normalizedOrigin));
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "x-workspace-id"],

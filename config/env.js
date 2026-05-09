@@ -11,7 +11,8 @@ function requiredInProd(name, fallback = "") {
 function parseCsvEnv(value) {
   return String(value || "")
     .split(",")
-    .map((s) => s.trim())
+    .map((s) => s.trim().replace(/^['"]|['"]$/g, ""))
+    .map((s) => s.replace(/\/+$/, ""))
     .filter(Boolean);
 }
 

@@ -13,6 +13,8 @@ const generalAuthLimit = toNumber(process.env.RATE_LIMIT_GENERAL_MAX_AUTH, isPro
 
 const authWindowMs = toNumber(process.env.RATE_LIMIT_AUTH_WINDOW_MS, 15 * 60 * 1000);
 const authLimit = toNumber(process.env.RATE_LIMIT_AUTH_MAX, isProd ? 5 : 50);
+const loginLimit = toNumber(process.env.RATE_LIMIT_LOGIN_MAX, isProd ? 20 : 100);
+const otpLimit = toNumber(process.env.RATE_LIMIT_OTP_MAX, isProd ? 10 : 60);
 
 function authKeyFromHeader(header = "") {
   const token = String(header || "").trim();
@@ -50,4 +52,20 @@ const auth = rateLimit({
   legacyHeaders: false,
 });
 
-module.exports = { general, auth };
+const login = rateLimit({
+  windowMs: authWindowMs,
+  limit: loginLimit,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Legit successful logins should not consume the abuse budget.
+  skipSuccessfulRequests: true,
+});
+
+const otp = rateLimit({
+  windowMs: authWindowMs,
+  limit: otpLimit,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+module.exports = { general, auth, login, otp };

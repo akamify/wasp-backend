@@ -29,7 +29,7 @@ const router = express.Router();
 
 router.post(
   "/register",
-  rateLimiters.auth,
+  rateLimiters.login,
   validate(
     Joi.object({
       email: Joi.string().email().required(),
@@ -43,7 +43,7 @@ router.post(
 
 router.post(
   "/login",
-  rateLimiters.auth,
+  rateLimiters.login,
   validate(
     Joi.object({
       email: Joi.string().email().required(),
@@ -55,7 +55,7 @@ router.post(
 
 router.post(
   "/login/verify-otp",
-  rateLimiters.auth,
+  rateLimiters.otp,
   validate(
     Joi.object({
       challengeToken: Joi.string().required(),
@@ -67,7 +67,7 @@ router.post(
 
 router.post(
   "/login/resend-otp",
-  rateLimiters.auth,
+  rateLimiters.otp,
   validate(
     Joi.object({
       challengeToken: Joi.string().required(),
@@ -78,7 +78,7 @@ router.post(
 
 router.post(
   "/register/verify-otp",
-  rateLimiters.auth,
+  rateLimiters.otp,
   validate(
     Joi.object({
       challengeToken: Joi.string().required(),
@@ -90,7 +90,7 @@ router.post(
 
 router.post(
   "/register/resend-otp",
-  rateLimiters.auth,
+  rateLimiters.otp,
   validate(
     Joi.object({
       challengeToken: Joi.string().required(),
@@ -101,7 +101,7 @@ router.post(
 
 router.post(
   "/forgot-password",
-  rateLimiters.auth,
+  rateLimiters.otp,
   validate(
     Joi.object({
       email: Joi.string().email().required(),
@@ -112,7 +112,7 @@ router.post(
 
 router.post(
   "/reset-password",
-  rateLimiters.auth,
+  rateLimiters.otp,
   validate(
     Joi.object({
       token: Joi.string().required(),
@@ -183,4 +183,3 @@ router.post(
 router.post("/2fa/disable", auth, asyncHandler(disable2fa));
 
 module.exports = router;
-
