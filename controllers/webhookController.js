@@ -7,6 +7,7 @@ const { normalizePhone, touchContactFromMessage } = require("../services/contact
 const { WhatsAppCredentials } = require("../models/WhatsAppCredentials");
 const { Campaign } = require("../models/Campaign");
 const { HttpError } = require("../utils/httpError");
+const { publishWorkspaceEvent } = require("../services/realtimeService");
 
 const WEBHOOK_DEBUG_LIMIT = 40;
 const webhookDebugEventsByWorkspace = new Map();
@@ -351,6 +352,12 @@ async function receive(req, res) {
           );
           if (updated) {
             await refreshCampaignFromMessage(workspaceIdRaw, updated);
+            publishWorkspaceEvent(workspaceIdRaw, {
+              type: "message_status",
+              phone: updated.phone || phone || null,
+              whatsappMessageId: waId,
+              status: newStatus,
+            });
           }
 
           if (!hasValidWorkspaceId) {
@@ -477,6 +484,11 @@ async function receive(req, res) {
             preview: text.slice(0, 160),
             occurredAt: ts,
             name: nameByWaId.get(from) || undefined,
+          });
+          publishWorkspaceEvent(workspaceIdRaw, {
+            type: "message_inbound",
+            phone: from,
+            whatsappMessageId: waId,
           });
         } catch (messageErr) {
           pushWebhookDebugEvent(workspaceIdRaw, {

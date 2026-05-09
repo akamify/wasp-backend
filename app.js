@@ -110,6 +110,7 @@ function mountRoutes(basePath = "") {
   app.use(`${basePath}/campaigns`, require("./routes/campaignRoutes"));
   app.use(`${basePath}/wallet`, require("./routes/walletRoutes"));
   app.use(`${basePath}/integrations`, require("./routes/integrationRoutes"));
+  app.use(`${basePath}/realtime`, require("./routes/realtimeRoutes"));
   app.use(`${basePath}`, require("./routes/automationRoutes")); // mounts POST /trigger-event
 }
 

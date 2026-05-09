@@ -7,6 +7,7 @@ const { assertNormalizedPhone, normalizePhone } = require("../services/contactSe
 const { chargeForMessaging, refundMessagingCharge, messageCostForTemplateCategory } = require("../services/walletService");
 const { isCustomerServiceWindowOpen } = require("../services/pricingService");
 const { renderTemplatePreviewParts } = require("../utils/templateStructure");
+const { publishWorkspaceEvent } = require("../services/realtimeService");
 
 function isDuplicateKeyError(err) {
   return err?.code === 11000 || err?.name === "MongoServerError";
@@ -110,6 +111,12 @@ async function sendTemplate(req, res) {
       success: true,
       message: result.message,
       meta: result.apiResponse,
+    });
+    publishWorkspaceEvent(req.workspace.id, {
+      type: "message_outbound",
+      phone: normalizedPhone,
+      messageId: result?.message?._id ? String(result.message._id) : null,
+      whatsappMessageId: result?.message?.whatsappMessageId || null,
     });
   } catch (err) {
     if (!err?.statusCode && err?.response) {
@@ -243,6 +250,12 @@ async function sendText(req, res) {
       text: body,
     });
     res.json({ success: true, message: result.message, meta: result.apiResponse });
+    publishWorkspaceEvent(req.workspace.id, {
+      type: "message_outbound",
+      phone: normalizedPhone,
+      messageId: result?.message?._id ? String(result.message._id) : null,
+      whatsappMessageId: result?.message?.whatsappMessageId || null,
+    });
   } catch (err) {
     if (err.statusCode) throw err;
     await safeLogFailedOutboundMessage({
@@ -428,6 +441,12 @@ async function sendMedia(req, res) {
       filename,
     });
     res.json({ success: true, message: result.message, meta: result.apiResponse });
+    publishWorkspaceEvent(req.workspace.id, {
+      type: "message_outbound",
+      phone: normalizedPhone,
+      messageId: result?.message?._id ? String(result.message._id) : null,
+      whatsappMessageId: result?.message?.whatsappMessageId || null,
+    });
   } catch (err) {
     if (err.statusCode) throw err;
     await safeLogFailedOutboundMessage({
