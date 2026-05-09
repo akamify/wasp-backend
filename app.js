@@ -53,7 +53,11 @@ app.use(
       if (!origin) return cb(null, true); // non-browser clients
       if (!isProd) return cb(null, true);
       const normalizedOrigin = String(origin || "").trim().replace(/\/+$/, "");
-      return cb(null, normalizedCorsOrigins.includes(normalizedOrigin));
+      const allowed = normalizedCorsOrigins.includes(normalizedOrigin);
+      if (!allowed) {
+        console.warn(`[CORS] Blocked origin: ${normalizedOrigin}. Allowed: ${normalizedCorsOrigins.join(", ") || "(none)"}`);
+      }
+      return cb(null, allowed);
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "x-workspace-id"],
