@@ -20,12 +20,12 @@ async function attachContacts(userId, conversations) {
       ...conversation.toObject(),
       contact: contact
         ? {
-            _id: contact._id,
-            phone: contact.phone,
-            name: contact.name,
-            company: contact.company,
-            tags: contact.tags || [],
-          }
+          _id: contact._id,
+          phone: contact.phone,
+          name: contact.name,
+          company: contact.company,
+          tags: contact.tags || [],
+        }
         : null,
     };
   });
