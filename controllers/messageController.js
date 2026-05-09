@@ -1,7 +1,7 @@
 const { Template } = require("../models/Template");
 const { Message } = require("../models/Message");
 const { HttpError } = require("../utils/httpError");
-const { sendTemplateMessageForUser, sendTextMessageForUser } = require("../services/outboundMessageService");
+const { sendTemplateMessageForUser, sendTextMessageForUser, sendMediaMessageForUser } = require("../services/outboundMessageService");
 const { getCredentialsForUser } = require("../services/credentialsService");
 const { assertNormalizedPhone, normalizePhone } = require("../services/contactService");
 const { chargeForMessaging, refundMessagingCharge, messageCostForTemplateCategory } = require("../services/walletService");
@@ -342,6 +342,16 @@ async function messagesByPhone(req, res) {
         obj.display = { kind: "text", body: obj.text };
       }
 
+      // Render media messages without leaking bracket placeholders like "[audio]" into the UI.
+      if (!obj.display && obj?.payload?.type) {
+        const t = String(obj.payload.type || "").toLowerCase();
+        const mediaKinds = ["image", "video", "audio", "document"];
+        if (mediaKinds.includes(t)) {
+          obj.text = null;
+          obj.display = { kind: "media", mediaType: t };
+        }
+      }
+
       return obj;
     });
 
@@ -379,4 +389,38 @@ async function messageStatusByWaId(req, res) {
   });
 }
 
-module.exports = { sendTemplate, sendText, bulkSend, listLogs, messagesByPhone, messageStatusByWaId };
+async function sendMedia(req, res) {
+  const { to, type, mediaId, link, caption, filename } = req.body;
+  const normalizedPhone = assertNormalizedPhone(to);
+
+  try {
+    const windowOpen = await isCustomerServiceWindowOpen({ workspaceId: req.workspace.id, phone: normalizedPhone });
+    if (!windowOpen) {
+      throw new HttpError(400, "Customer service window is closed. Ask the user to message first (24h window).", {
+        phone: normalizedPhone,
+      });
+    }
+    await getCredentialsForUser(req.workspace.id);
+    const result = await sendMediaMessageForUser({
+      userId: req.workspace.id,
+      to: normalizedPhone,
+      type,
+      mediaId,
+      link,
+      caption,
+      filename,
+    });
+    res.json({ success: true, message: result.message, meta: result.apiResponse });
+  } catch (err) {
+    if (err.statusCode) throw err;
+    await safeLogFailedOutboundMessage({
+      userId: req.workspace.id,
+      templateId: null,
+      phone: normalizedPhone,
+      err,
+    });
+    throw new HttpError(err?.response?.status || 502, "Failed to send media message", buildDetails(err));
+  }
+}
+
+module.exports = { sendTemplate, sendText, sendMedia, bulkSend, listLogs, messagesByPhone, messageStatusByWaId };

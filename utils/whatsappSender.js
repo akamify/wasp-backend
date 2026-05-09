@@ -495,6 +495,61 @@ async function sendTextMessage({
   }
 }
 
+async function sendMediaMessage({
+  accessToken,
+  phoneNumberId,
+  to,
+  type,
+  mediaId,
+  link,
+  caption,
+  filename,
+  graphApiVersion,
+}) {
+  const baseURL = graphBaseUrl(graphApiVersion);
+  const client = axios.create({ baseURL, timeout: 20000 });
+
+  const normalizedType = String(type || "").toLowerCase();
+  if (!["image", "video", "audio", "document"].includes(normalizedType)) {
+    throw new Error("Unsupported media type");
+  }
+  if (!mediaId && !link) {
+    throw new Error("mediaId or link is required");
+  }
+
+  const media = {};
+  if (mediaId) media.id = String(mediaId);
+  if (link) media.link = String(link);
+  if (caption && ["image", "video", "document"].includes(normalizedType)) {
+    media.caption = String(caption);
+  }
+  if (filename && normalizedType === "document") {
+    media.filename = String(filename);
+  }
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: normalizedType,
+    [normalizedType]: media,
+  };
+
+  try {
+    const res = await client.post(`/${phoneNumberId}/messages`, payload, {
+      headers: authHeaders(accessToken),
+    });
+    return res.data;
+  } catch (err) {
+    throw Object.assign(new Error("Meta send media message failed"), {
+      metaDebug: toMetaErrorInfo(err, "send_media_message", {
+        method: "POST",
+        url: `/${phoneNumberId}/messages`,
+        body: payload,
+      }),
+    });
+  }
+}
+
 async function markMessageAsRead({
   accessToken,
   phoneNumberId,
@@ -556,6 +611,7 @@ module.exports = {
   fetchAllMessageTemplates,
   sendTemplateMessage,
   sendTextMessage,
+  sendMediaMessage,
   markMessageAsRead,
   deleteMessageTemplate,
 };

@@ -45,6 +45,7 @@ function previewFromMessage(message, fallback = "") {
 
   if (payload.image?.id || payload.image?.link) return "Image";
   if (payload.video?.id || payload.video?.link) return "Video";
+  if (payload.audio?.id || payload.audio?.link) return "Audio";
   if (payload.document?.id || payload.document?.link) return String(payload.document?.filename || "Document").slice(0, 160);
   if (Array.isArray(payload.contacts) && payload.contacts.length) return "Contact";
 
@@ -121,7 +122,7 @@ async function getConversation(req, res) {
   const [conversation, contact] = await Promise.all([
     Conversation.findOne({ workspaceId: req.workspace.id, phone }),
     Contact.findOne({ workspaceId: req.workspace.id, phone }).select(
-      "_id phone name company email notes tags"
+      "_id phone name company email language notes tags"
     ),
   ]);
 
@@ -186,4 +187,20 @@ async function readConversation(req, res) {
   res.json({ success: true, conversation: conversation || null, phone });
 }
 
-module.exports = { listConversations, getConversation, readConversation };
+async function clearConversation(req, res) {
+  const phone = normalizePhone(req.params.phone);
+  if (!phone) throw new HttpError(400, "Invalid phone number");
+
+  // Delete messages for this conversation but keep the Contact record intact.
+  await Message.deleteMany({ workspaceId: req.workspace.id, phone });
+
+  // Reset or remove the Conversation entry so it no longer shows recent activity.
+  await Conversation.updateOne(
+    { workspaceId: req.workspace.id, phone },
+    { $set: { lastMessageAt: null, lastMessagePreview: "", unreadCount: 0 } }
+  );
+
+  res.json({ success: true, phone });
+}
+
+module.exports = { listConversations, getConversation, readConversation, clearConversation };

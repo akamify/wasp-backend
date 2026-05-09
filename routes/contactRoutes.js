@@ -20,6 +20,7 @@ const contactSchema = Joi.object({
   name: Joi.string().max(120).allow("").optional(),
   email: Joi.string().email().allow("").optional(),
   company: Joi.string().max(120).allow("").optional(),
+  language: Joi.string().max(20).allow("").optional(),
   notes: Joi.string().max(5000).allow("").optional(),
   tags: Joi.array().items(Joi.string().max(40)).max(25).optional(),
 });
@@ -38,6 +39,7 @@ router.put(
       name: Joi.string().max(120).allow("").optional(),
       email: Joi.string().email().allow("").optional(),
       company: Joi.string().max(120).allow("").optional(),
+      language: Joi.string().max(20).allow("").optional(),
       notes: Joi.string().max(5000).allow("").optional(),
       tags: Joi.array().items(Joi.string().max(40)).max(25).optional(),
     })

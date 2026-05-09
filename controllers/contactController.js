@@ -52,6 +52,7 @@ async function createContact(req, res) {
     name: req.body.name || undefined,
     email: req.body.email ? String(req.body.email).trim().toLowerCase() : undefined,
     company: req.body.company || undefined,
+    language: req.body.language ? String(req.body.language).trim() : undefined,
     notes: req.body.notes || undefined,
     tags: Array.from(new Set((req.body.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean))),
     source: "manual",
@@ -83,6 +84,7 @@ async function updateContact(req, res) {
     existing.email = req.body.email ? String(req.body.email).trim().toLowerCase() : undefined;
   }
   if (req.body.company !== undefined) existing.company = req.body.company || undefined;
+  if (req.body.language !== undefined) existing.language = req.body.language ? String(req.body.language).trim() : undefined;
   if (req.body.notes !== undefined) existing.notes = req.body.notes || undefined;
   if (req.body.tags !== undefined) {
     existing.tags = Array.from(

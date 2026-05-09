@@ -7,6 +7,7 @@ const { requireWorkspace } = require("../middleware/requireWorkspace");
 const {
   sendTemplate,
   sendText,
+  sendMedia,
   bulkSend,
   listLogs,
   messagesByPhone,
@@ -24,6 +25,12 @@ const upload = buildMemoryUpload({
     "image/png",
     "image/webp",
     "video/mp4",
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/ogg",
+    "audio/wav",
+    "audio/aac",
     "application/pdf",
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -70,6 +77,23 @@ router.post(
     })
   ),
   asyncHandler(sendText)
+);
+
+router.post(
+  "/send-media",
+  auth,
+  requireWorkspace,
+  validate(
+    Joi.object({
+      to: Joi.string().min(8).max(20).required(),
+      type: Joi.string().valid("image", "video", "audio", "document").required(),
+      mediaId: Joi.string().min(3).optional(),
+      link: Joi.string().uri().optional(),
+      caption: Joi.string().allow("").max(1024).optional(),
+      filename: Joi.string().allow("").max(200).optional(),
+    }).or("mediaId", "link")
+  ),
+  asyncHandler(sendMedia)
 );
 
 router.post(

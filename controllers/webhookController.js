@@ -424,11 +424,12 @@ async function receive(req, res) {
           ...(m.text?.body ? { text: { body: String(m.text.body) } } : {}),
           ...(m.image?.id ? { image: { id: String(m.image.id), mime_type: m.image.mime_type || null, sha256: m.image.sha256 || null } } : {}),
           ...(m.video?.id ? { video: { id: String(m.video.id), mime_type: m.video.mime_type || null, sha256: m.video.sha256 || null } } : {}),
+          ...(m.audio?.id ? { audio: { id: String(m.audio.id), mime_type: m.audio.mime_type || null, sha256: m.audio.sha256 || null } } : {}),
           ...(m.document?.id
             ? {
-              document: {
-                id: String(m.document.id),
-                mime_type: m.document.mime_type || null,
+                document: {
+                  id: String(m.document.id),
+                  mime_type: m.document.mime_type || null,
                 sha256: m.document.sha256 || null,
                 filename: m.document.filename || null,
               },
@@ -437,7 +438,11 @@ async function receive(req, res) {
           ...(Array.isArray(m.contacts) ? { contacts: m.contacts } : {}),
         };
 
-        const text = isDeletedOrUnsupported ? "[deleted]" : m.text?.body || (type ? `[${type}]` : "");
+        // Avoid bracket placeholders like "[audio]" in UI; prefer empty text for media types.
+        const mediaTypes = new Set(["image", "video", "audio", "document", "contacts", "location"]);
+        const text = isDeletedOrUnsupported
+          ? "[deleted]"
+          : m.text?.body || (type && !mediaTypes.has(type) ? `[${type}]` : "");
 
         try {
           await Message.findOneAndUpdate(

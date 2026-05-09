@@ -12,6 +12,7 @@ const ContactSchema = new mongoose.Schema(
     name: { type: String, trim: true },
     email: { type: String, trim: true, lowercase: true },
     company: { type: String, trim: true },
+    language: { type: String, trim: true, default: null },
     notes: { type: String, trim: true },
     tags: [{ type: String, trim: true }],
     source: {
