@@ -352,6 +352,23 @@ async function messagesByPhone(req, res) {
         }
       }
 
+      // Backward-compat for older rows where payload.type was not stored.
+      if (!obj.display && obj?.payload) {
+        if (obj.payload.audio?.id || obj.payload.audio?.link) {
+          obj.text = null;
+          obj.display = { kind: "media", mediaType: "audio" };
+        } else if (obj.payload.video?.id || obj.payload.video?.link) {
+          obj.text = null;
+          obj.display = { kind: "media", mediaType: "video" };
+        } else if (obj.payload.image?.id || obj.payload.image?.link) {
+          obj.text = null;
+          obj.display = { kind: "media", mediaType: "image" };
+        } else if (obj.payload.document?.id || obj.payload.document?.link) {
+          obj.text = null;
+          obj.display = { kind: "media", mediaType: "document" };
+        }
+      }
+
       return obj;
     });
 
