@@ -15,6 +15,10 @@ const authWindowMs = toNumber(process.env.RATE_LIMIT_AUTH_WINDOW_MS, 15 * 60 * 1
 const authLimit = toNumber(process.env.RATE_LIMIT_AUTH_MAX, isProd ? 5 : 50);
 const loginLimit = toNumber(process.env.RATE_LIMIT_LOGIN_MAX, isProd ? 20 : 100);
 const otpLimit = toNumber(process.env.RATE_LIMIT_OTP_MAX, isProd ? 10 : 60);
+const automationWindowMs = toNumber(process.env.RATE_LIMIT_AUTOMATION_WINDOW_MS, 60 * 1000);
+const automationLimit = toNumber(process.env.RATE_LIMIT_AUTOMATION_MAX, isProd ? 30 : 200);
+const metaFlowWindowMs = toNumber(process.env.RATE_LIMIT_META_FLOW_WINDOW_MS, 60 * 1000);
+const metaFlowLimit = toNumber(process.env.RATE_LIMIT_META_FLOW_MAX, isProd ? 20 : 120);
 
 function authKeyFromHeader(header = "") {
   const token = String(header || "").trim();
@@ -68,4 +72,28 @@ const otp = rateLimit({
   legacyHeaders: false,
 });
 
-module.exports = { general, auth, login, otp };
+const automationTrigger = rateLimit({
+  windowMs: automationWindowMs,
+  limit: automationLimit,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    code: "AUTOMATION_RATE_LIMITED",
+    message: "Too many automation triggers. Please retry shortly.",
+  },
+});
+
+const metaFlowOps = rateLimit({
+  windowMs: metaFlowWindowMs,
+  limit: metaFlowLimit,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    code: "FLOW_RATE_LIMITED",
+    message: "Flow operation rate limit reached. Please retry in a minute.",
+  },
+});
+
+module.exports = { general, auth, login, otp, automationTrigger, metaFlowOps };

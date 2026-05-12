@@ -5,6 +5,7 @@ const { validate } = require("../middleware/validate");
 const { authOrApiKey } = require("../middleware/authOrApiKey");
 const { requireWorkspace } = require("../middleware/requireWorkspace");
 const { triggerEvent } = require("../controllers/automationController");
+const rateLimiters = require("../middleware/rateLimiters");
 
 const router = express.Router();
 
@@ -12,6 +13,7 @@ router.post(
   "/trigger-event",
   authOrApiKey,
   requireWorkspace,
+  rateLimiters.automationTrigger,
   validate(
     Joi.object({
       eventName: Joi.string().min(1).max(200).required(),

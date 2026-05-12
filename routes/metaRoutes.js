@@ -8,8 +8,9 @@ const { saveMetaCredentials } = require("../controllers/metaCredentialsControlle
 const { metaStatus } = require("../controllers/metaStatusController");
 const { metaSubscriptionHealth } = require("../controllers/metaSubscriptionHealthController");
 const { updateBusinessProfile, uploadProfilePicture } = require("../controllers/metaProfileController");
-const { listFlows, createFlow } = require("../controllers/metaFlowsController");
+const { listFlows, createFlow, uploadFlowJson, publishFlow } = require("../controllers/metaFlowsController");
 const { buildMemoryUpload } = require("../utils/multerUpload");
+const rateLimiters = require("../middleware/rateLimiters");
 
 const router = express.Router();
 const upload = buildMemoryUpload({
@@ -63,11 +64,12 @@ router.post(
   asyncHandler(uploadProfilePicture)
 );
 
-router.get("/flows", auth, requireWorkspace, asyncHandler(listFlows));
+router.get("/flows", auth, requireWorkspace, rateLimiters.metaFlowOps, asyncHandler(listFlows));
 router.post(
   "/flows",
   auth,
   requireWorkspace,
+  rateLimiters.metaFlowOps,
   validate(
     Joi.object({
       name: Joi.string().trim().min(2).max(128).required(),
@@ -75,6 +77,25 @@ router.post(
     })
   ),
   asyncHandler(createFlow)
+);
+router.post(
+  "/flows/:flowId/assets",
+  auth,
+  requireWorkspace,
+  rateLimiters.metaFlowOps,
+  validate(
+    Joi.object({
+      flowJson: Joi.object().required(),
+    })
+  ),
+  asyncHandler(uploadFlowJson)
+);
+router.post(
+  "/flows/:flowId/publish",
+  auth,
+  requireWorkspace,
+  rateLimiters.metaFlowOps,
+  asyncHandler(publishFlow)
 );
 
 module.exports = router;
