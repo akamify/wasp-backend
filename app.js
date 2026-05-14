@@ -77,6 +77,9 @@ app.get("/", (req, res) =>
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 function mountRoutes(basePath = "") {
+  // Public content (CMS pages, help center, careers forms)
+  app.use(`${basePath}/public`, require("./routes/publicRoutes"));
+
   // Public tracking + webhooks
   app.use(`${basePath}`, require("./routes/trackingRoutes"));
   app.use(`${basePath}/webhooks`, require("./routes/webhookRoutes"));

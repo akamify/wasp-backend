@@ -17,6 +17,8 @@ const { sha256Hex } = require("../utils/hash");
 const { sendEmail } = require("../services/emailService");
 const { WhatsAppCredentials } = require("../models/WhatsAppCredentials");
 const { encryptString, decryptString } = require("../utils/crypto");
+const { AdminAccount } = require("../models/AdminAccount");
+const { AdminLoginEvent } = require("../models/AdminLoginEvent");
 
 function base64Url(bytes) {
   return Buffer.from(bytes)
@@ -41,9 +43,9 @@ function signToken({ user, workspaceId }) {
   });
 }
 
-function signAdminToken() {
+function signAdminToken(adminId) {
   return jwt.sign({ role: "admin", workspaceId: "admin" }, jwtSecret, {
-    subject: "env-admin",
+    subject: String(adminId),
     expiresIn: adminSessionExpiresIn,
   });
 }
@@ -74,15 +76,39 @@ function verifyRegisterChallengeToken(token) {
   return payload;
 }
 
-function isEnvAdminLogin(email, password) {
+async function isEnvAdminLogin(email, password) {
   if (!adminEmail || !adminPassword) return false;
   const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
   const allowInProd = String(process.env.ALLOW_ENV_ADMIN_LOGIN || "").toLowerCase() === "true";
   if (isProd && !allowInProd) return false;
+
+  // If admin has ever changed password in-app, env admin login must be disabled.
+  try {
+    const existing = await AdminAccount.findOne({ username: "admin" }).select("envLoginDisabled username");
+    if (existing?.envLoginDisabled) return false;
+  } catch {
+    // ignore
+  }
   return (
     String(email || "").trim().toLowerCase() === String(adminEmail).trim().toLowerCase() &&
     String(password || "") === String(adminPassword)
   );
+}
+
+async function ensureLocalAdminAccount() {
+  const username = "admin";
+  const existing = await AdminAccount.findOne({ username }).select("+passwordHash username displayName envLoginDisabled");
+  if (existing) return existing;
+
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  const seedPassword = String(adminPassword || "").trim();
+  if (isProd && !seedPassword) {
+    throw new HttpError(500, "Admin account is not initialized. Set ADMIN_PASSWORD and restart the server.");
+  }
+
+  const passwordToUse = seedPassword || "admin";
+  const passwordHash = await bcrypt.hash(passwordToUse, 12);
+  return AdminAccount.create({ username, displayName: adminName || "Demo Admin", passwordHash, envLoginDisabled: false });
 }
 
 function shouldReturnAuthDebugTokens() {
@@ -140,7 +166,7 @@ async function register(req, res) {
   if (existing) throw new HttpError(409, "Email already registered");
 
   const passwordHash = await bcrypt.hash(password, 12);
-  const user = await User.create({ email, passwordHash, name, phone });
+  const user = await User.create({ email, passwordHash, name, phone, status: "active" });
   const workspace = await Workspace.create({
     ownerId: user._id,
     name: name ? `${String(name).trim()}'s workspace` : "My workspace",
@@ -187,13 +213,48 @@ async function register(req, res) {
 async function login(req, res) {
   const { email, password } = req.body;
 
-  if (isEnvAdminLogin(email, password)) {
-    const token = signAdminToken();
+  const identifier = String(email || "").trim().toLowerCase();
+
+  const isAdminIdentifier =
+    identifier === "admin" ||
+    (adminEmail && identifier === String(adminEmail).trim().toLowerCase());
+
+  if (isAdminIdentifier) {
+    const adminAccount = await ensureLocalAdminAccount();
+    // Prefer DB password. If not set yet (fresh install) allow env password once.
+    const okDb = await bcrypt.compare(String(password || ""), adminAccount.passwordHash);
+    const okEnv = await isEnvAdminLogin(email, password);
+    if (!okDb && !okEnv) throw new HttpError(401, "Invalid credentials");
+
+    // If env login was used, also upgrade the AdminAccount password hash to match env password
+    // so subsequent logins consistently use the DB credential.
+    if (!okDb && okEnv) {
+      adminAccount.passwordHash = await bcrypt.hash(String(password || ""), 12);
+      await adminAccount.save();
+    }
+
+    const token = signAdminToken(adminAccount._id);
+    try {
+      const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+      const ip = forwarded || String(req.ip || "").trim();
+      const userAgent = String(req.headers["user-agent"] || "").trim();
+      await AdminLoginEvent.create({
+        adminAccountId: adminAccount._id,
+        ip,
+        userAgent,
+        method: okEnv && !okDb ? "env" : "password",
+      });
+    } catch {}
     return res.json({
       success: true,
       token,
       workspace: null,
-      user: { id: "env-admin", email: adminEmail, name: adminName, role: "admin" },
+      user: {
+        id: String(adminAccount._id),
+        email: adminEmail || "admin",
+        name: adminAccount.displayName || "Admin",
+        role: "admin",
+      },
     });
   }
 
@@ -201,6 +262,7 @@ async function login(req, res) {
     "+passwordHash role email name phone twoFactorEnabled +loginOtpCodeHash +loginOtpCodeExpiresAt"
   );
   if (!user) throw new HttpError(401, "Invalid credentials");
+  if (String(user.status || "active") === "banned") throw new HttpError(403, "Account is banned");
 
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) throw new HttpError(401, "Invalid credentials");
@@ -432,6 +494,21 @@ async function me(req, res) {
         id: "env-admin",
         email: adminEmail,
         name: adminName,
+        role: "admin",
+      },
+      workspace: null,
+    });
+  }
+
+  if (req.user.role === "admin") {
+    const adminAccount = await AdminAccount.findById(req.user.id).select("username displayName");
+    if (!adminAccount) throw new HttpError(401, "Invalid or expired token");
+    return res.json({
+      success: true,
+      user: {
+        id: String(adminAccount._id),
+        email: adminAccount.username,
+        name: adminAccount.displayName || "Admin",
         role: "admin",
       },
       workspace: null,
@@ -742,6 +819,68 @@ async function resetPassword(req, res) {
   res.json({ success: true });
 }
 
+async function adminForgotPassword(req, res) {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const configured = String(adminEmail || "").trim().toLowerCase();
+
+  // Always respond success to avoid leaking info.
+  if (!configured || email !== configured) {
+    return res.json({ success: true, message: "If the email is valid, a reset link has been sent." });
+  }
+
+  const adminAccount = await ensureLocalAdminAccount();
+  const rawToken = base64Url(crypto.randomBytes(32));
+  const tokenHash = sha256Hex(rawToken);
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+  adminAccount.passwordResetTokenHash = tokenHash;
+  adminAccount.passwordResetTokenExpiresAt = expiresAt;
+  await adminAccount.save();
+
+  const resetLink = `${appBaseUrl}/admin/reset-password?token=${encodeURIComponent(rawToken)}`;
+  const delivery = await sendEmail({
+    toEmail: configured,
+    toName: adminName || "Admin",
+    subject: "Reset your admin password",
+    htmlContent: `
+      <div style="font-family: Inter, Arial, sans-serif; max-width: 520px; margin: 0 auto; color: #0f172a;">
+        <h2 style="margin-bottom: 8px;">Admin password reset</h2>
+        <p style="margin: 0 0 16px; color: #475569;">Click the button below to reset your admin password.</p>
+        <a href="${resetLink}" style="display:inline-block; background:#06b77e; color:white; text-decoration:none; padding:12px 16px; border-radius:8px; font-weight:700;">Reset Admin Password</a>
+        <p style="margin-top: 16px; color: #64748b; font-size: 13px;">This link expires in 30 minutes.</p>
+      </div>
+    `,
+    textContent: `Reset your admin password using this link: ${resetLink}`,
+  });
+
+  if (shouldReturnAuthDebugTokens()) {
+    res.set("X-Debug-Admin-Reset-Link", resetLink);
+    res.set("X-Debug-Email-Delivery", String(delivery?.sent ? "sent" : delivery?.skipped ? "skipped" : "failed"));
+  }
+
+  res.json({ success: true, message: "If the email is valid, a reset link has been sent." });
+}
+
+async function adminResetPassword(req, res) {
+  const { token, password } = req.body;
+  const tokenHash = sha256Hex(String(token || ""));
+  const adminAccount = await AdminAccount.findOne({
+    username: "admin",
+    passwordResetTokenHash: tokenHash,
+    passwordResetTokenExpiresAt: { $gt: new Date() },
+  }).select("+passwordHash passwordResetTokenHash passwordResetTokenExpiresAt envLoginDisabled");
+
+  if (!adminAccount) throw new HttpError(400, "Invalid or expired reset token");
+
+  adminAccount.passwordHash = await bcrypt.hash(String(password), 12);
+  adminAccount.passwordResetTokenHash = undefined;
+  adminAccount.passwordResetTokenExpiresAt = undefined;
+  adminAccount.envLoginDisabled = true;
+  await adminAccount.save();
+
+  res.json({ success: true });
+}
+
 module.exports = {
   register,
   login,
@@ -760,4 +899,6 @@ module.exports = {
   disable2fa,
   forgotPassword,
   resetPassword,
+  adminForgotPassword,
+  adminResetPassword,
 };

@@ -23,6 +23,8 @@ const {
   disable2fa,
   forgotPassword,
   resetPassword,
+  adminForgotPassword,
+  adminResetPassword,
 } = require("../controllers/authController");
 
 const router = express.Router();
@@ -46,7 +48,7 @@ router.post(
   rateLimiters.login,
   validate(
     Joi.object({
-      email: Joi.string().email().required(),
+      email: Joi.alternatives().try(Joi.string().email(), Joi.string().valid("admin")).required(),
       password: Joi.string().required(),
     })
   ),
@@ -120,6 +122,30 @@ router.post(
     })
   ),
   asyncHandler(resetPassword)
+);
+
+// Admin password reset (sends email to ADMIN_EMAIL)
+router.post(
+  "/admin/forgot-password",
+  rateLimiters.otp,
+  validate(
+    Joi.object({
+      email: Joi.string().email().required(),
+    })
+  ),
+  asyncHandler(adminForgotPassword)
+);
+
+router.post(
+  "/admin/reset-password",
+  rateLimiters.otp,
+  validate(
+    Joi.object({
+      token: Joi.string().required(),
+      password: Joi.string().min(8).required(),
+    })
+  ),
+  asyncHandler(adminResetPassword)
 );
 
 router.get("/me", auth, asyncHandler(me));

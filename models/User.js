@@ -7,6 +7,7 @@ const UserSchema = new mongoose.Schema(
     name: { type: String, trim: true },
     phone: { type: String, trim: true },
     role: { type: String, enum: ["user", "admin"], default: "user" },
+    status: { type: String, enum: ["active", "banned"], default: "active", index: true },
     apiKeyHash: { type: String, default: null, select: false, index: true },
     apiKeyEnc: { type: String, default: null, select: false },
     apiKeyOtpCodeHash: { type: String, select: false },
@@ -28,4 +29,3 @@ const UserSchema = new mongoose.Schema(
 const User = mongoose.model("User", UserSchema);
 
 module.exports = { User };
-

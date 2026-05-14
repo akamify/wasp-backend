@@ -7,6 +7,9 @@ const { Transaction } = require("../models/Transaction");
 const { Message } = require("../models/Message");
 const { ClickLog } = require("../models/ClickLog");
 const { decryptString } = require("../utils/crypto");
+const bcrypt = require("bcryptjs");
+const { HttpError } = require("../utils/httpError");
+const { AdminAccount } = require("../models/AdminAccount");
 
 function mask(value) {
   const source = String(value || "");
@@ -16,8 +19,20 @@ function mask(value) {
 }
 
 async function adminOverview(req, res) {
+  const rangeRaw = String(req.query.range || "week").trim().toLowerCase();
+  const range =
+    rangeRaw === "7d" || rangeRaw === "week" || rangeRaw === "weekly"
+      ? "week"
+      : rangeRaw === "30d" || rangeRaw === "month" || rangeRaw === "monthly"
+        ? "month"
+        : rangeRaw === "365d" || rangeRaw === "12m" || rangeRaw === "year" || rangeRaw === "yearly"
+          ? "year"
+          : "week";
+
   const since = new Date();
-  since.setDate(since.getDate() - 6);
+  if (range === "week") since.setDate(since.getDate() - 6);
+  else if (range === "month") since.setDate(since.getDate() - 29);
+  else since.setMonth(since.getMonth() - 11);
   since.setHours(0, 0, 0, 0);
 
   const [
@@ -47,29 +62,45 @@ async function adminOverview(req, res) {
     Message.countDocuments({ direction: "outbound", status: "read" }),
     Message.countDocuments({ direction: "outbound", status: "failed" }),
     ClickLog.countDocuments(),
-    Message.aggregate([
-      {
-        $match: {
-          direction: "outbound",
-          createdAt: { $gte: since },
-        },
-      },
-      {
-        $group: {
-          _id: {
-            year: { $year: "$createdAt" },
-            month: { $month: "$createdAt" },
-            day: { $dayOfMonth: "$createdAt" },
-          },
-          count: { $sum: 1 },
-        },
-      },
-      { $sort: { "_id.year": 1, "_id.month": 1, "_id.day": 1 } },
-    ]),
+    Message.aggregate(
+      range === "year"
+        ? [
+            { $match: { direction: "outbound", createdAt: { $gte: since } } },
+            {
+              $group: {
+                _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" } },
+                count: { $sum: 1 },
+              },
+            },
+            { $sort: { "_id.year": 1, "_id.month": 1 } },
+          ]
+        : [
+            { $match: { direction: "outbound", createdAt: { $gte: since } } },
+            {
+              $group: {
+                _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" }, day: { $dayOfMonth: "$createdAt" } },
+                count: { $sum: 1 },
+              },
+            },
+            { $sort: { "_id.year": 1, "_id.month": 1, "_id.day": 1 } },
+          ]
+    ),
   ]);
+
+  const points =
+    range === "year"
+      ? dailyMessages.map((item) => ({
+          label: `${item._id.year}-${String(item._id.month).padStart(2, "0")}`,
+          count: item.count,
+        }))
+      : dailyMessages.map((item) => ({
+          label: `${item._id.year}-${String(item._id.month).padStart(2, "0")}-${String(item._id.day).padStart(2, "0")}`,
+          count: item.count,
+        }));
 
   res.json({
     success: true,
+    range,
     overview: {
       users: totalUsers,
       workspaces: totalWorkspaces,
@@ -84,10 +115,15 @@ async function adminOverview(req, res) {
       failedMessages,
       clicks: totalClicks,
     },
-    dailyMessages: dailyMessages.map((item) => ({
-      date: `${item._id.year}-${String(item._id.month).padStart(2, "0")}-${String(item._id.day).padStart(2, "0")}`,
-      count: item.count,
-    })),
+    series: {
+      group: range === "year" ? "month" : "day",
+      points,
+    },
+    // Back-compat: keep dailyMessages even when range is monthly/yearly.
+    dailyMessages:
+      range === "year"
+        ? points.map((p) => ({ date: p.label, count: p.count }))
+        : points.map((p) => ({ date: p.label, count: p.count })),
   });
 }
 
@@ -262,4 +298,24 @@ module.exports = {
   adminTemplates,
   adminCredentials,
   adminWallets,
+  adminChangePassword,
 };
+
+async function adminChangePassword(req, res) {
+  const { currentPassword, newPassword } = req.body || {};
+  const adminAccount = await AdminAccount.findById(req.user.id).select("+passwordHash username displayName envLoginDisabled");
+  if (!adminAccount) throw new HttpError(404, "Admin account not found");
+
+  const ok = await bcrypt.compare(String(currentPassword || ""), adminAccount.passwordHash);
+  if (!ok) throw new HttpError(401, "Current password is incorrect");
+
+  const next = String(newPassword || "");
+  if (next.length < 8) throw new HttpError(400, "New password must be at least 8 characters");
+
+  adminAccount.passwordHash = await bcrypt.hash(next, 12);
+  adminAccount.envLoginDisabled = true;
+  adminAccount.passwordResetTokenHash = undefined;
+  adminAccount.passwordResetTokenExpiresAt = undefined;
+  await adminAccount.save();
+  res.json({ success: true });
+}
