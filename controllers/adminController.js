@@ -21,17 +21,20 @@ function mask(value) {
 async function adminOverview(req, res) {
   const rangeRaw = String(req.query.range || "week").trim().toLowerCase();
   const range =
-    rangeRaw === "7d" || rangeRaw === "week" || rangeRaw === "weekly"
+    rangeRaw === "today" || rangeRaw === "day" || rangeRaw === "1d"
+      ? "today"
+      : rangeRaw === "7d" || rangeRaw === "week" || rangeRaw === "weekly"
       ? "week"
       : rangeRaw === "30d" || rangeRaw === "month" || rangeRaw === "monthly"
-        ? "month"
+        ? "30d"
         : rangeRaw === "365d" || rangeRaw === "12m" || rangeRaw === "year" || rangeRaw === "yearly"
           ? "year"
           : "week";
 
   const since = new Date();
-  if (range === "week") since.setDate(since.getDate() - 6);
-  else if (range === "month") since.setDate(since.getDate() - 29);
+  if (range === "today") since.setDate(since.getDate());
+  else if (range === "week") since.setDate(since.getDate() - 6);
+  else if (range === "30d") since.setDate(since.getDate() - 29);
   else since.setMonth(since.getMonth() - 11);
   since.setHours(0, 0, 0, 0);
 
@@ -63,7 +66,13 @@ async function adminOverview(req, res) {
     Message.countDocuments({ direction: "outbound", status: "failed" }),
     ClickLog.countDocuments(),
     Message.aggregate(
-      range === "year"
+      range === "today"
+        ? [
+            { $match: { direction: "outbound", createdAt: { $gte: since } } },
+            { $group: { _id: { hour: { $hour: "$createdAt" } }, count: { $sum: 1 } } },
+            { $sort: { "_id.hour": 1 } },
+          ]
+        : range === "year"
         ? [
             { $match: { direction: "outbound", createdAt: { $gte: since } } },
             {
@@ -88,7 +97,12 @@ async function adminOverview(req, res) {
   ]);
 
   const points =
-    range === "year"
+    range === "today"
+      ? dailyMessages.map((item) => ({
+          label: `${String(item._id.hour).padStart(2, "0")}:00`,
+          count: item.count,
+        }))
+      : range === "year"
       ? dailyMessages.map((item) => ({
           label: `${item._id.year}-${String(item._id.month).padStart(2, "0")}`,
           count: item.count,
@@ -116,7 +130,7 @@ async function adminOverview(req, res) {
       clicks: totalClicks,
     },
     series: {
-      group: range === "year" ? "month" : "day",
+      group: range === "today" ? "hour" : range === "year" ? "month" : "day",
       points,
     },
     // Back-compat: keep dailyMessages even when range is monthly/yearly.

@@ -11,6 +11,8 @@ const app = express();
 // If you're behind a reverse proxy (Render, Heroku, Nginx), this helps IP-based rate limits/logging.
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
+// API is dynamic; avoid 304/ETag surprises that can lead to empty bodies in XHR clients.
+app.set("etag", false);
 
 // Capture raw body for webhook signature verification.
 app.use(
@@ -65,6 +67,16 @@ app.use(
   })
 );
 app.use(morgan("dev"));
+
+// Disable caching for API JSON responses (prevents stale UI + 304 with empty body on some clients).
+app.use((req, res, next) => {
+  // Keep media endpoints cacheable by browsers/CDNs.
+  if (req.path.includes("/messages/media/") || req.path.includes("/tracking/")) return next();
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  return next();
+});
 
 app.get("/", (req, res) =>
   res.json({
