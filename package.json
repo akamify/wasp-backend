@@ -26,12 +26,23 @@
     "ioredis": "^5.7.0",
     "joi": "^18.1.2",
     "jsonwebtoken": "^9.0.3",
+    "module-alias": "^2.3.4",
     "mongoose": "^9.4.1",
     "morgan": "^1.10.1",
     "multer": "^1.4.5-lts.1",
-    "nanoid": "^5.1.11",
+    "package-lock.json": "^1.0.0",
     "qrcode": "^1.5.4",
     "razorpay": "^2.9.6",
-    "redis": "^5.12.1"
+    "socket.io": "^4.8.1"
+  },
+  "_moduleAliases": {
+    "@modules": "src/modules",
+    "@shared": "src/shared",
+    "@infra": "src/infra",
+    "@core": "src/core"
+  },
+  "devDependencies": {
+    "depcheck": "^1.4.7",
+    "madge": "^8.0.0"
   }
 }

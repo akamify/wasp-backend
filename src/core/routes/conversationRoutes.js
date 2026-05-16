@@ -1,0 +1,20 @@
+const express = require("express");
+const { authOrApiKey } = require("@core/middleware/authOrApiKey");
+const { requireWorkspace } = require("@core/middleware/requireWorkspace");
+const { asyncHandler } = require("@shared/utils/asyncHandler");
+const { requireApiPermission } = require("@modules/api-keys/middleware/requireApiPermission");
+const {
+  listConversations,
+  getConversation,
+  readConversation,
+  clearConversation,
+} = require("@modules/conversations/controllers/conversation.controller");
+
+const router = express.Router();
+
+router.get("/", authOrApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(listConversations));
+router.post("/:phone/read", authOrApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(readConversation));
+router.get("/:phone", authOrApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(getConversation));
+router.delete("/:phone", authOrApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(clearConversation));
+module.exports = router;
+

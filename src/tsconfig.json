@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@app/*": ["./app/*"],
+      "@src/*": ["./*"],
+      "@modules/*": ["./modules/*"],
+      "@core/*": ["./core/*"],
+      "@shared/*": ["./shared/*"],
+      "@infra/*": ["./infra/*"],
+      "@workspaces/*": ["./modules/workspaces/*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["../node_modules"]
+}

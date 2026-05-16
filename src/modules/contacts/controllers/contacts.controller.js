@@ -1,0 +1,36 @@
+const contactsService = require("@modules/contacts/services/contacts.service");
+
+async function listContacts(req, res) {
+  res.json(await contactsService.listContacts(req));
+}
+
+async function getContact(req, res) {
+  res.json(await contactsService.getContact(req));
+}
+
+async function lookupContactByPhone(req, res) {
+  res.json(await contactsService.lookupContactByPhone(req));
+}
+
+async function createContact(req, res) {
+  const body = await contactsService.createContact(req);
+  res.status(201).json(body);
+}
+
+async function updateContact(req, res) {
+  res.json(await contactsService.updateContact(req));
+}
+
+async function deleteContact(req, res) {
+  res.json(await contactsService.deleteContact(req));
+}
+
+module.exports = {
+  listContacts,
+  getContact,
+  lookupContactByPhone,
+  createContact,
+  updateContact,
+  deleteContact,
+};
+

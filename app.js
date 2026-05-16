@@ -1,10 +1,13 @@
+require("module-alias/register");
+
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
-const rateLimiters = require("./middleware/rateLimiters");
-const { notFound, errorHandler } = require("./middleware/errorHandler");
-const { appBrandName, corsOrigins } = require("./config/env");
+const rateLimiters = require("@core/middleware/rateLimiters");
+const { notFound, errorHandler } = require("@core/middleware/errorHandler");
+const { appBrandName, corsOrigins } = require("@core/config/env");
+const { registerRoutes } = require("@core/routes/registerRoutes");
 
 const app = express();
 
@@ -88,51 +91,10 @@ app.get("/", (req, res) =>
 );
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-function mountRoutes(basePath = "") {
-  // Public content (CMS pages, help center, careers forms)
-  app.use(`${basePath}/public`, require("./routes/publicRoutes"));
-
-  // Public tracking + webhooks
-  app.use(`${basePath}`, require("./routes/trackingRoutes"));
-  app.use(`${basePath}/webhooks`, require("./routes/webhookRoutes"));
-
-  // Common webhook callback aliases (many setups use `/webhook` directly).
-  // These must remain public (no auth) and support the Meta verification handshake.
-  // Mounted for both `/` and `/api` base paths.
-  // NOTE: We mount handlers directly (instead of re-mounting the router) so that
-  // `GET/POST {basePath}/webhook` works (not `{basePath}/webhook/webhook`).
-  // eslint-disable-next-line global-require
-  const { verifyWebhookSignature } = require("./middleware/webhookSignature");
-  // eslint-disable-next-line global-require
-  const { verify, receive } = require("./controllers/webhookController");
-  app.get(`${basePath}/webhook`, verify);
-  app.post(`${basePath}/webhook`, verifyWebhookSignature, receive);
-
-  
-  // Auth + tenant routes
-  app.use(`${basePath}/auth`, require("./routes/authRoutes"));
-  app.use(`${basePath}/admin`, require("./routes/adminRoutes"));
-  app.use(`${basePath}/workspaces`, require("./routes/workspaceRoutes"));
-  app.use(`${basePath}/credentials`, require("./routes/credentialRoutes"));
-  app.use(`${basePath}/templates`, require("./routes/templateRoutes"));
-  app.use(`${basePath}/messages`, require("./routes/messageRoutes"));
-  app.use(`${basePath}/analytics`, require("./routes/analyticsRoutes"));
-  app.use(`${basePath}/reports`, require("./routes/reportsRoutes"));
-  app.use(`${basePath}/links`, require("./routes/linkRoutes"));
-  app.use(`${basePath}/conversations`, require("./routes/conversationRoutes"));
-  app.use(`${basePath}/contacts`, require("./routes/contactRoutes"));
-  app.use(`${basePath}/meta`, require("./routes/metaRoutes"));
-  app.use(`${basePath}/campaigns`, require("./routes/campaignRoutes"));
-  app.use(`${basePath}/wallet`, require("./routes/walletRoutes"));
-  app.use(`${basePath}/integrations`, require("./routes/integrationRoutes"));
-  app.use(`${basePath}/realtime`, require("./routes/realtimeRoutes"));
-  app.use(`${basePath}`, require("./routes/automationRoutes")); // mounts POST /trigger-event
-}
-
 app.use(rateLimiters.general);
-mountRoutes("");
+registerRoutes(app, "");
 app.get("/api/health", (req, res) => res.json({ ok: true }));
-mountRoutes("/api");
+registerRoutes(app, "/api");
 
 app.use(notFound);
 app.use(errorHandler);
