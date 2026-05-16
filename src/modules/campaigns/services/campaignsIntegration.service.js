@@ -78,7 +78,7 @@ async function sendApiCampaignByName(req) {
     await require("@infra/database/Campaign").Campaign.updateOne(
         { _id: apiCampaign._id, workspaceId },
         {
-            $set: { status: "queued" },
+            $set: { status: "running" },
             $inc: {
                 "totals.total": recipients.length,
                 "totals.queued": recipients.length,
@@ -187,7 +187,7 @@ async function sendApiCampaignByName(req) {
 
             const done = await require("@infra/database/Campaign").Campaign.findOne({ _id: apiCampaign._id, workspaceId }).select("totals");
             const queued = Number(done?.totals?.queued || 0);
-            const nextStatus = queued === 0 ? (failedCount > 0 && sentCount === 0 ? "failed" : "completed") : "running";
+            const nextStatus = queued === 0 && failedCount > 0 && sentCount === 0 ? "failed" : "running";
             await require("@infra/database/Campaign").Campaign.updateOne(
                 { _id: apiCampaign._id, workspaceId },
                 { $set: { status: nextStatus, ...(lastFailure ? { lastError: { message: lastFailure?.message || "Failed" } } : {}) } }

@@ -4,6 +4,7 @@ const { asyncHandler } = require("@shared/utils/asyncHandler");
 const rateLimiters = require("@core/middleware/rateLimiters");
 const { validate } = require("@core/middleware/validate");
 const { apiKeyAuth } = require("@core/middleware/apiKeyAuth");
+const { requireApiPermission } = require("@modules/api-keys/middleware/requireApiPermission");
 const { sendApiCampaignByName } = require("@modules/integrations/controllers/integrationCampaign.controller");
 
 const router = express.Router();
@@ -12,6 +13,7 @@ router.post(
   "/campaigns/send",
   rateLimiters.general,
   apiKeyAuth,
+  requireApiPermission("campaignSend"),
   validate(
     Joi.object({
       campaignName: Joi.string().trim().min(2).max(140).required(),

@@ -37,7 +37,12 @@ async function authOrApiKey(req, res, next) {
       ? user.apiKeys.find((k) => String(k.keyHash || "") === String(apiKeyHash))
       : null;
     if (keyDoc && keyDoc.revoked) return next(new HttpError(403, "API key revoked"));
-    const permissions = keyDoc?.permissions || user.allowedApiPermissions || { campaignSend: true, chatAccess: false };
+    const userAllowedPermissions = user.allowedApiPermissions || { campaignSend: true, chatAccess: false };
+    const keyPermissions = keyDoc?.permissions || userAllowedPermissions;
+    const permissions = {
+      campaignSend: Boolean(userAllowedPermissions?.campaignSend) && Boolean(keyPermissions?.campaignSend),
+      chatAccess: Boolean(userAllowedPermissions?.chatAccess) && Boolean(keyPermissions?.chatAccess),
+    };
     if (keyDoc) {
       keyDoc.lastUsedAt = new Date();
       await user.save();
@@ -47,8 +52,8 @@ async function authOrApiKey(req, res, next) {
       userId: String(user._id),
       apiKeyId: keyDoc ? String(keyDoc._id) : null,
       permissions: {
-        campaignSend: Boolean(permissions?.campaignSend),
-        chatAccess: Boolean(permissions?.chatAccess),
+        campaignSend: permissions.campaignSend,
+        chatAccess: permissions.chatAccess,
       },
       isApiKey: true,
     };
