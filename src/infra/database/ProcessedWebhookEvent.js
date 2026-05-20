@@ -5,7 +5,7 @@ const ProcessedWebhookEventSchema = new mongoose.Schema(
     workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: "Workspace", required: true, index: true },
     provider: { type: String, required: true, trim: true, default: "meta", index: true },
     eventKey: { type: String, required: true, trim: true },
-    processedAt: { type: Date, required: true, default: Date.now, index: true },
+    processedAt: { type: Date, required: true, default: Date.now },
   },
   { timestamps: false }
 );
@@ -16,4 +16,3 @@ ProcessedWebhookEventSchema.index({ processedAt: 1 }, { expireAfterSeconds: 7 * 
 const ProcessedWebhookEvent = mongoose.model("ProcessedWebhookEvent", ProcessedWebhookEventSchema);
 
 module.exports = { ProcessedWebhookEvent };
-
