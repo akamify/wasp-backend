@@ -12,6 +12,7 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/auth`, require("@core/routes/authRoutes"));
   app.use(`${basePath}/api-keys`, require("@modules/api-keys/routes/apiKey.routes"));
   app.use(`${basePath}/admin`, require("@core/routes/adminRoutes"));
+  app.use(`${basePath}/super-admin`, require("@modules/super-admin/routes/superAdmin.routes"));
   app.use(`${basePath}/workspaces`, require("@core/routes/workspaceRoutes"));
   app.use(`${basePath}/credentials`, require("@core/routes/credentialRoutes"));
   app.use(`${basePath}/templates`, require("@core/routes/templateRoutes"));
@@ -26,6 +27,7 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/wallet`, require("@core/routes/walletRoutes"));
   app.use(`${basePath}/integrations`, require("@core/routes/integrationRoutes"));
   app.use(`${basePath}/realtime`, require("@core/routes/realtimeRoutes"));
+  app.use(`${basePath}/crm`, require("@core/routes/crmRoutes"));
   app.use(`${basePath}`, require("@core/routes/automationRoutes"));
 }
 

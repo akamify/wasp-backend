@@ -31,6 +31,7 @@ module.exports = {
   adminEmail: process.env.ADMIN_EMAIL || "",
   adminPassword: process.env.ADMIN_PASSWORD || "",
   adminName: process.env.ADMIN_NAME || "Whasp Admin",
+  superAdminEmail: String(process.env.SUPER_ADMIN_EMAIL || "").trim().toLowerCase(),
   appBrandName: process.env.APP_BRAND_NAME || "DigitalWhasp",
   appBaseUrl:
     process.env.FRONTEND_BASE_URL ||

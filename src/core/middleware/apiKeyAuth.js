@@ -1,6 +1,7 @@
 const { HttpError } = require("@shared/utils/httpError");
 const { sha256Hex } = require("@shared/utils/hash");
 const { User } = require("@infra/database/User");
+const { canLoginStatus, getBlockedLoginMessage } = require("@shared/utils/userStatus");
 
 async function apiKeyAuth(req, res, next) {
   const apiKey = req.headers["x-api-key"];
@@ -13,9 +14,8 @@ async function apiKeyAuth(req, res, next) {
     $or: [{ apiKeyHash }, { "apiKeys.keyHash": apiKeyHash }],
   }).select("_id role accountBlocked allowedApiPermissions apiKeys");
   if (!user) return next(new HttpError(401, "Invalid API key"));
-  if (user.accountBlocked || String(user.status || "") === "banned") {
-    return next(new HttpError(403, "Account blocked"));
-  }
+  if (!canLoginStatus(user.status)) return next(new HttpError(403, getBlockedLoginMessage(user.status)));
+  if (user.accountBlocked) return next(new HttpError(403, "This user is inactive"));
 
   const keyDoc = Array.isArray(user.apiKeys)
     ? user.apiKeys.find((k) => String(k.keyHash || "") === String(apiKeyHash))

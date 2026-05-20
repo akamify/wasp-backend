@@ -33,7 +33,7 @@ async function requireWorkspace(req, res, next) {
       _id: workspaceId,
       ownerId: req.user.id,
       isActive: true,
-    }).select("_id ownerId name plan isActive createdAt");
+    }).select("_id ownerId name plan isActive createdAt crmEnabled crmSettings allowedApiPermissions");
 
     if (!workspace) return next(new HttpError(404, "Workspace not found"));
 
@@ -41,7 +41,22 @@ async function requireWorkspace(req, res, next) {
       id: String(workspace._id),
       name: workspace.name,
       plan: workspace.plan,
+      crmEnabled: Boolean(workspace.crmEnabled),
+      crmSettings: workspace.crmSettings || {},
+      allowedApiPermissions: {
+        campaignSend: Boolean(workspace?.allowedApiPermissions?.campaignSend ?? true),
+        chatAccess: Boolean(workspace?.allowedApiPermissions?.chatAccess ?? false),
+      },
     };
+
+    // Effective API permissions are always a strict intersection of
+    // user/key-level permissions and workspace-level permissions.
+    if (req.auth?.permissions) {
+      req.auth.permissions = {
+        campaignSend: Boolean(req.auth.permissions.campaignSend) && Boolean(req.workspace.allowedApiPermissions.campaignSend),
+        chatAccess: Boolean(req.auth.permissions.chatAccess) && Boolean(req.workspace.allowedApiPermissions.chatAccess),
+      };
+    }
 
     return next();
   } catch (err) {

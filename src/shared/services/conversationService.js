@@ -16,16 +16,29 @@ async function touchConversation({
     $set: {
       lastMessageAt: lastMessageAt || new Date(),
       ...(lastInboundAt ? { lastInboundAt } : {}),
+      ...(lastInboundAt ? { lastCustomerMessageAt: lastInboundAt } : {}),
       ...(lastMessagePreview !== undefined ? { lastMessagePreview } : {}),
+      normalizedPhone,
     },
   };
-  if (incrementUnread) update.$inc = { unreadCount: 1 };
+  if (incrementUnread) update.$inc = { unreadCount: 1, ownerUnreadCount: 1 };
 
-  return Conversation.findOneAndUpdate({ workspaceId: userId, phone: normalizedPhone }, update, {
+  const conversation = await Conversation.findOneAndUpdate({ workspaceId: userId, phone: normalizedPhone }, update, {
     upsert: true,
     returnDocument: "after",
     setDefaultsOnInsert: true,
   });
+
+  if (incrementUnread && conversation?.assignedEmployeeId) {
+    await Conversation.updateOne(
+      { _id: conversation._id },
+      { $inc: { employeeUnreadCount: 1 } }
+    );
+    // Keep returned snapshot consistent-ish for immediate callers.
+    conversation.employeeUnreadCount = Number(conversation.employeeUnreadCount || 0) + 1;
+  }
+
+  return conversation;
 }
 
 async function markConversationRead({ userId, phone }) {
@@ -34,10 +47,21 @@ async function markConversationRead({ userId, phone }) {
 
   return Conversation.findOneAndUpdate(
     { workspaceId: userId, phone: normalizedPhone },
-    { $set: { unreadCount: 0 } },
+    { $set: { unreadCount: 0, ownerUnreadCount: 0 } },
     { returnDocument: "after" }
   );
 }
 
-module.exports = { touchConversation, markConversationRead };
+async function markConversationEmployeeRead({ workspaceId, phone, employeeId }) {
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) return null;
+
+  return Conversation.findOneAndUpdate(
+    { workspaceId, phone: normalizedPhone, assignedEmployeeId: employeeId },
+    { $set: { employeeUnreadCount: 0 } },
+    { returnDocument: "after" }
+  );
+}
+
+module.exports = { touchConversation, markConversationRead, markConversationEmployeeRead };
 

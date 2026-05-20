@@ -1,6 +1,7 @@
 const { metaWebhookVerifyToken } = require("@core/config/env");
 const { findTenantByPhoneNumberId, findTenantByWabaId } = require("@shared/services/credentialsService");
 const { Message } = require("@infra/database/Message");
+const { ProcessedWebhookEvent } = require("@infra/database/ProcessedWebhookEvent");
 const mongoose = require("mongoose");
 const { touchConversation } = require("@shared/services/conversationService");
 const { normalizePhone, touchContactFromMessage } = require("@shared/services/contactService");
@@ -8,9 +9,24 @@ const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { Campaign } = require("@infra/database/Campaign");
 const { HttpError } = require("@shared/utils/httpError");
 const { publishWorkspaceEvent } = require("@shared/services/realtimeService");
+const { getCrmLeadAssignmentQueue } = require("@infra/queues/crmLeadAssignment.queue");
+const { Workspace } = require("@infra/database/Workspace");
 
 const WEBHOOK_DEBUG_LIMIT = 40;
 const webhookDebugEventsByWorkspace = new Map();
+const crmEnabledCache = new Map();
+
+async function isCrmEnabled(workspaceId) {
+  const key = String(workspaceId || "");
+  if (!key) return false;
+  const cached = crmEnabledCache.get(key);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.value;
+  const w = await Workspace.findById(key).select("crmEnabled isActive").lean();
+  const value = Boolean(w?.isActive) && Boolean(w?.crmEnabled);
+  crmEnabledCache.set(key, { value, expiresAt: now + 60_000 });
+  return value;
+}
 
 function pushWebhookDebugEvent(workspaceId, event) {
   const key = String(workspaceId || "").trim();
@@ -452,7 +468,16 @@ async function receive(req, res) {
           : m.text?.body || (type && !mediaTypes.has(type) ? `[${type}]` : "");
 
         try {
-          await Message.findOneAndUpdate(
+          const eventKey = `inbound:${waId}`;
+          const dedupe = await ProcessedWebhookEvent.updateOne(
+            { provider: "meta", workspaceId: workspaceIdRaw, eventKey },
+            { $setOnInsert: { provider: "meta", workspaceId: workspaceIdRaw, eventKey, processedAt: new Date() } },
+            { upsert: true }
+          );
+          const isDuplicate = Number(dedupe?.upsertedCount || 0) === 0;
+          if (isDuplicate) continue;
+
+          const msgDoc = await Message.findOneAndUpdate(
             { workspaceId: workspaceIdRaw, whatsappMessageId: waId },
             {
               $set: {
@@ -461,6 +486,7 @@ async function receive(req, res) {
                 direction: "inbound",
                 status: "received",
                 "statusTimestamps.receivedAt": ts,
+                sentBy: { kind: "system" },
                 text,
                 payload,
               },
@@ -469,7 +495,7 @@ async function receive(req, res) {
             { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
           );
 
-          await touchConversation({
+          const convo = await touchConversation({
             userId: workspaceIdRaw,
             phone: from,
             lastMessageAt: ts,
@@ -477,6 +503,21 @@ async function receive(req, res) {
             lastMessagePreview: text.slice(0, 160),
             incrementUnread: true,
           });
+
+          // Snapshot CRM ownership/status at inbound time (best-effort; do not block webhook).
+          if (msgDoc && convo) {
+            await Message.updateOne(
+              { _id: msgDoc._id },
+              {
+                $set: {
+                  lastAssignedEmployeeId: convo.assignedEmployeeId || null,
+                  lastAssignedAt: convo.assignedAt || null,
+                  leadStatusSnapshot: convo.leadStatus || null,
+                },
+              }
+            ).catch(() => {});
+          }
+
           await touchContactFromMessage({
             userId: workspaceIdRaw,
             phone: from,
@@ -490,6 +531,22 @@ async function receive(req, res) {
             phone: from,
             whatsappMessageId: waId,
           });
+
+          // CRM lead detection/assignment is strictly async and must not affect webhook latency.
+          try {
+            if (await isCrmEnabled(workspaceIdRaw)) {
+              const q = getCrmLeadAssignmentQueue();
+              const bucket = Math.floor(ts.getTime() / (5 * 60 * 1000));
+              const jobId = `lead:${String(workspaceIdRaw)}:${String(from)}:${bucket}`;
+              await q.add(
+                "crm.lead.detect_and_assign",
+                { workspaceId: String(workspaceIdRaw), phone: String(from), inboundAt: ts.toISOString() },
+                { jobId }
+              );
+            }
+          } catch {
+            // Never break webhook delivery for CRM enqueue failures.
+          }
         } catch (messageErr) {
           pushWebhookDebugEvent(workspaceIdRaw, {
             type: "inbound_update_error",

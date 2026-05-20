@@ -8,6 +8,9 @@ const { resolveUploadsPath } = require("@shared/utils/fileStorage");
 const { sendEmail } = require("@shared/services/emailService");
 const { buildTicketResolvedEmailHtml } = require("@shared/utils/emailTemplates");
 const { normalizeSlug } = require("@modules/public/controllers/publicContent.controller");
+const DOC_PREFIX = "docs-";
+const LEGACY_DOC_PATH_PREFIX = "docs/";
+const DOC_BRAND_SLUG = "__docs_brand__";
 
 function parsePaging(req) {
   const page = Math.max(1, Number(req.query.page || 1) || 1);
@@ -35,17 +38,48 @@ function listResponse({ items, total, page, limit }) {
   return { success: true, items, page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) };
 }
 
+function isDocsManagedSlug(slugValue) {
+  const slug = String(slugValue || "").trim().toLowerCase();
+  return slug === DOC_BRAND_SLUG || slug.startsWith(DOC_PREFIX) || slug.startsWith(LEGACY_DOC_PATH_PREFIX);
+}
+
+function isDocLikePayload(data) {
+  if (!data || typeof data !== "object") return false;
+  const hasDocSlug = Boolean(String(data.slug || "").trim());
+  const hasDocStatus = ["draft", "published"].includes(String(data.status || "").trim().toLowerCase());
+  const content = String(data.content || "").trim();
+  const title = String(data.title || "").trim();
+  const description = String(data.description || "").trim();
+  const hasContent = Object.prototype.hasOwnProperty.call(data, "content");
+  const hasKeywords = Array.isArray(data.keywords);
+  const hasSidebar = !!(data.sidebar && typeof data.sidebar === "object");
+  const hasSeo = !!(data.seo && typeof data.seo === "object");
+  const hasMeaningfulDocFields =
+    Boolean(title) ||
+    Boolean(description) ||
+    Boolean(content) ||
+    (Array.isArray(data.keywords) && data.keywords.length > 0);
+  return hasDocSlug && hasDocStatus && (hasContent || hasKeywords || hasSidebar || hasSeo) && hasMeaningfulDocFields;
+}
+
 async function adminListPages(req, res) {
-  const pages = await PublicPage.find({}).sort({ slug: 1 }).select("slug title updatedAt");
+  const pages = await PublicPage.find({ slug: { $nin: [DOC_BRAND_SLUG] } })
+    .sort({ slug: 1 })
+    .select("slug title updatedAt");
+  const filtered = pages.filter((p) => !isDocsManagedSlug(p.slug) && String(p?.data?.__type || "") !== "doc" && !isDocLikePayload(p?.data || {}));
   res.json({
     success: true,
-    items: pages.map((p) => ({ slug: p.slug, title: p.title || "", updatedAt: p.updatedAt })),
+    items: filtered.map((p) => ({ slug: p.slug, title: p.title || "", updatedAt: p.updatedAt })),
   });
 }
 
 async function adminGetPage(req, res) {
   const slug = normalizeSlug(req.params.slug);
+  if (isDocsManagedSlug(slug)) throw new HttpError(403, "This slug is managed from Docs module");
   let page = await PublicPage.findOne({ slug }).select("slug title data updatedAt");
+  if (page && (String(page?.data?.__type || "") === "doc" || isDocLikePayload(page?.data || {}))) {
+    throw new HttpError(403, "This slug is managed from Docs module");
+  }
   if (!page) {
     page = await PublicPage.create({ slug, title: "", data: {}, updatedByAdminId: String(req.user?.id || "admin") });
   }
@@ -59,8 +93,14 @@ const upsertSchema = Joi.object({
 
 async function adminUpsertPage(req, res) {
   const slug = normalizeSlug(req.params.slug);
+  if (isDocsManagedSlug(slug)) throw new HttpError(403, "This slug is managed from Docs module");
   const payload = await upsertSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
   const adminId = String(req.user?.id || "admin");
+
+  const existing = await PublicPage.findOne({ slug }).select("data");
+  if (String(existing?.data?.__type || "") === "doc" || isDocLikePayload(existing?.data || {})) {
+    throw new HttpError(403, "This slug is managed from Docs module");
+  }
 
   const page = await PublicPage.findOneAndUpdate(
     { slug },

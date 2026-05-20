@@ -6,7 +6,7 @@ const userRegisterService = require("@modules/auth/auth.service.user.register");
 const userLoginService = require("@modules/auth/auth.service.user.login");
 const userOtpService = require("@modules/auth/auth.service.user.otp");
 const userMeService = require("@modules/auth/auth.service.user.me");
-const { adminEmail } = require("@core/config/env");
+const { writeAuditLog } = require("@shared/services/auditLog.service");
 
 function applyHeaders(res, headers) {
   if (!headers) return;
@@ -19,15 +19,46 @@ async function register(req, res) {
 }
 
 async function login(req, res) {
-  const { email, password } = req.body;
-  const identifier = String(email || "").trim().toLowerCase();
-  const isAdminIdentifier = identifier === "admin" || (adminEmail && identifier === String(adminEmail).trim().toLowerCase());
-  if (isAdminIdentifier) return res.json(await adminService.adminLogin({ email, password, req }));
-  return res.json((await userLoginService.loginUser({ email, password })).body);
+  try {
+    const out = (await userLoginService.loginUser({ email: req.body?.email, password: req.body?.password })).body;
+    if (!out?.requires2fa && out?.user?.id) {
+      await writeAuditLog(req, {
+        action: "auth.login.success",
+        actorId: out.user.id,
+        targetId: out.user.id,
+        resourceType: "auth",
+        resourceId: String(out.user.id),
+        metadata: { role: out?.user?.role || "", status: "success", reason: "password_verified" },
+      });
+    }
+    return res.json(out);
+  } catch (error) {
+    await writeAuditLog(req, {
+      action: "auth.login.failed",
+      resourceType: "auth",
+      metadata: {
+        status: "failed",
+        reason: String(error?.message || "login_failed"),
+        email: String(req.body?.email || "").trim().toLowerCase(),
+      },
+    });
+    throw error;
+  }
 }
 
 async function verifyLoginOtp(req, res) {
-  res.json((await userOtpService.verifyLoginOtp(req.body)).body);
+  const out = (await userOtpService.verifyLoginOtp(req.body)).body;
+  if (out?.user?.id) {
+    await writeAuditLog(req, {
+      action: "auth.login.success",
+      actorId: out.user.id,
+      targetId: out.user.id,
+      resourceType: "auth",
+      resourceId: String(out.user.id),
+      metadata: { role: out?.user?.role || "", via: "otp", status: "success", reason: "otp_verified" },
+    });
+  }
+  res.json(out);
 }
 
 async function resendLoginOtp(req, res) {
@@ -104,6 +135,18 @@ async function changePassword(req, res) {
   );
 }
 
+async function logout(req, res) {
+  await writeAuditLog(req, {
+    action: "auth.logout",
+    actorId: req.user?.id,
+    targetId: req.user?.id,
+    resourceType: "auth",
+    resourceId: String(req.user?.id || ""),
+    metadata: { status: "success", reason: "user_logout" },
+  });
+  res.json({ success: true });
+}
+
 async function requestEnable2fa(req, res) {
   res.json(await profileService.requestEnable2fa({ userId: req.user.id }));
 }
@@ -132,6 +175,7 @@ module.exports = {
   requestEnable2fa,
   verifyEnable2fa,
   disable2fa,
+  logout,
   forgotPassword,
   resetPassword,
   adminForgotPassword,

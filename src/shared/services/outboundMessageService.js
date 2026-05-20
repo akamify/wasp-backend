@@ -1,4 +1,5 @@
 const { Message } = require("@infra/database/Message");
+const { Conversation } = require("@infra/database/Conversation");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { sendTemplateMessage, sendTextMessage, sendMediaMessage } = require("@shared/utils/whatsappSender");
 const { touchConversation } = require("@shared/services/conversationService");
@@ -23,6 +24,7 @@ async function sendTemplateMessageForUser({
   buttonTtlMinutes,
   flowTokens,
   flowActionData,
+  sentBy,
 }) {
   const creds = await getCredentialsForUser(userId);
   const normalizedTemplate = normalizeTemplate(template.toObject ? template.toObject() : template);
@@ -68,6 +70,7 @@ async function sendTemplateMessageForUser({
     whatsappMessageId: waMessageId,
     status: "sent",
     statusTimestamps: { acceptedAt: now, sentAt: now },
+    sentBy: sentBy || { kind: "owner" },
     text: previewText,
     payload: {
       to,
@@ -88,7 +91,7 @@ async function sendTemplateMessageForUser({
     },
   });
 
-  await touchConversation({
+  const conversation = await touchConversation({
     userId,
     phone: resolvedPhone,
     lastMessageAt: now,
@@ -103,6 +106,30 @@ async function sendTemplateMessageForUser({
     occurredAt: now,
   });
 
+  // SLA fields (best-effort; don't block send flow).
+  if (conversation) {
+    const patch = { lastEmployeeReplyAt: now };
+    if (!conversation.firstResponseAt && conversation.lastCustomerMessageAt) {
+      patch.firstResponseAt = now;
+      patch.firstResponseDurationMs = Math.max(0, now.getTime() - new Date(conversation.lastCustomerMessageAt).getTime());
+    }
+    await Conversation.updateOne({ _id: conversation._id }, { $set: patch }).catch(() => {});
+  }
+
+  // Snapshot CRM ownership/status at send time for future analytics.
+  if (conversation) {
+    await Message.updateOne(
+      { _id: message._id },
+      {
+        $set: {
+          lastAssignedEmployeeId: conversation.assignedEmployeeId || null,
+          lastAssignedAt: conversation.assignedAt || null,
+          leadStatusSnapshot: conversation.leadStatus || null,
+        },
+      }
+    ).catch(() => {});
+  }
+
   // Best-effort: mark campaign as running as soon as we create the outbound message.
   if (campaignId) {
     try {
@@ -116,7 +143,7 @@ async function sendTemplateMessageForUser({
   return { message, apiResponse };
 }
 
-async function sendTextMessageForUser({ userId, to, text }) {
+async function sendTextMessageForUser({ userId, to, text, sentBy }) {
   const creds = await getCredentialsForUser(userId);
   const apiResponse = await sendTextMessage({
     accessToken: creds.accessToken,
@@ -138,12 +165,33 @@ async function sendTextMessageForUser({ userId, to, text }) {
     whatsappMessageId: waMessageId,
     status: "sent",
     statusTimestamps: { acceptedAt: now, sentAt: now },
+    sentBy: sentBy || { kind: "owner" },
     text,
     payload: { to, text },
   });
 
-  await touchConversation({ userId, phone: resolvedPhone, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
+  const conversation = await touchConversation({ userId, phone: resolvedPhone, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
   await touchContactFromMessage({ userId, phone: resolvedPhone, direction: "outbound", preview: text, occurredAt: now });
+  if (conversation) {
+    const patch = { lastEmployeeReplyAt: now };
+    if (!conversation.firstResponseAt && conversation.lastCustomerMessageAt) {
+      patch.firstResponseAt = now;
+      patch.firstResponseDurationMs = Math.max(0, now.getTime() - new Date(conversation.lastCustomerMessageAt).getTime());
+    }
+    await Conversation.updateOne({ _id: conversation._id }, { $set: patch }).catch(() => {});
+  }
+  if (conversation) {
+    await Message.updateOne(
+      { _id: message._id },
+      {
+        $set: {
+          lastAssignedEmployeeId: conversation.assignedEmployeeId || null,
+          lastAssignedAt: conversation.assignedAt || null,
+          leadStatusSnapshot: conversation.leadStatus || null,
+        },
+      }
+    ).catch(() => {});
+  }
 
   return { message, apiResponse };
 }
@@ -157,6 +205,7 @@ async function sendMediaMessageForUser({
   link,
   caption,
   filename,
+  sentBy,
 }) {
   const creds = await getCredentialsForUser(userId);
   const normalizedType = String(type || "").toLowerCase();
@@ -196,12 +245,13 @@ async function sendMediaMessageForUser({
     whatsappMessageId: waMessageId,
     status: "sent",
     statusTimestamps: { acceptedAt: now, sentAt: now },
+    sentBy: sentBy || { kind: "owner" },
     // Don't store bracket placeholders like "[audio]" in UI; let the UI render by payload type.
     text: caption ? String(caption).slice(0, 160) : "",
     payload,
   });
 
-  await touchConversation({
+  const conversation = await touchConversation({
     userId,
     phone: resolvedPhone,
     lastMessageAt: now,
@@ -215,6 +265,26 @@ async function sendMediaMessageForUser({
     preview: message.text || "",
     occurredAt: now,
   });
+  if (conversation) {
+    const patch = { lastEmployeeReplyAt: now };
+    if (!conversation.firstResponseAt && conversation.lastCustomerMessageAt) {
+      patch.firstResponseAt = now;
+      patch.firstResponseDurationMs = Math.max(0, now.getTime() - new Date(conversation.lastCustomerMessageAt).getTime());
+    }
+    await Conversation.updateOne({ _id: conversation._id }, { $set: patch }).catch(() => {});
+  }
+  if (conversation) {
+    await Message.updateOne(
+      { _id: message._id },
+      {
+        $set: {
+          lastAssignedEmployeeId: conversation.assignedEmployeeId || null,
+          lastAssignedAt: conversation.assignedAt || null,
+          leadStatusSnapshot: conversation.leadStatus || null,
+        },
+      }
+    ).catch(() => {});
+  }
 
   if (campaignId) {
     try {

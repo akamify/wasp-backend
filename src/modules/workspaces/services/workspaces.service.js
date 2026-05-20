@@ -11,6 +11,10 @@ async function listWorkspaces({ ownerId }) {
 async function createWorkspace({ ownerId, name }) {
   const normalized = String(name || "").trim();
   if (!normalized) throw new HttpError(400, "Workspace name is required");
+  const existing = await workspacesRepository.findAnyWorkspaceForOwner(ownerId);
+  if (existing) {
+    throw new HttpError(409, "Only one workspace is allowed per user");
+  }
 
   const workspace = await workspacesRepository.createWorkspace({ ownerId, name: normalized });
 

@@ -55,6 +55,7 @@ router.post("/change-password", auth, validate(v.changePasswordSchema), asyncHan
 router.post("/2fa/request-enable", auth, asyncHandler(controller.requestEnable2fa));
 router.post("/2fa/verify-enable", auth, validate(v.verifyEnable2faSchema), asyncHandler(controller.verifyEnable2fa));
 router.post("/2fa/disable", auth, asyncHandler(controller.disable2fa));
+router.post("/logout", auth, asyncHandler(controller.logout));
 
 module.exports = router;
 

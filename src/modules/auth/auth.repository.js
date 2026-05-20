@@ -13,7 +13,16 @@ async function createUser({ email, passwordHash, name, phone }) {
 }
 
 async function createWorkspaceForOwner({ ownerId, name }) {
-  return Workspace.create({ ownerId, name });
+  const existing = await Workspace.findOne({ ownerId }).sort({ createdAt: 1 }).select("_id name plan");
+  if (existing) return existing;
+  return Workspace.create({
+    ownerId,
+    name,
+    allowedApiPermissions: {
+      campaignSend: true,
+      chatAccess: false,
+    },
+  });
 }
 
 async function findDefaultWorkspaceForOwner(ownerId) {
@@ -30,13 +39,13 @@ async function hasValidMetaCredentials(workspaceId) {
 
 async function findUserForLoginByEmail(emailLower) {
   return User.findOne({ email: emailLower }).select(
-    "+passwordHash role email name phone twoFactorEnabled accountBlocked tokenVersion +loginOtpCodeHash +loginOtpCodeExpiresAt"
+    "+passwordHash role email name phone twoFactorEnabled accountBlocked tokenVersion +loginOtpCodeHash +loginOtpCodeExpiresAt +loginOtpAttempts +loginOtpLastSentAt"
   );
 }
 
 async function findUserForVerifyLoginOtp(userId) {
   return User.findById(userId).select(
-    "+passwordHash role email name phone accountBlocked tokenVersion +loginOtpCodeHash +loginOtpCodeExpiresAt twoFactorEnabled"
+    "+passwordHash role email name phone accountBlocked tokenVersion +loginOtpCodeHash +loginOtpCodeExpiresAt +loginOtpAttempts +loginOtpLastSentAt twoFactorEnabled"
   );
 }
 
@@ -47,7 +56,9 @@ async function findUserForVerifyRegisterOtp(userId) {
 }
 
 async function findUserForResendLoginOtp(userId) {
-  return User.findById(userId).select("email name twoFactorEnabled +loginOtpCodeHash +loginOtpCodeExpiresAt");
+  return User.findById(userId).select(
+    "email name role twoFactorEnabled +loginOtpCodeHash +loginOtpCodeExpiresAt +loginOtpAttempts +loginOtpLastSentAt"
+  );
 }
 
 async function findUserForResendRegisterOtp(userId) {
@@ -55,7 +66,7 @@ async function findUserForResendRegisterOtp(userId) {
 }
 
 async function findUserForMe(userId) {
-  return User.findById(userId).select("email name phone role createdAt twoFactorEnabled");
+  return User.findById(userId).select("email name phone role createdAt twoFactorEnabled adminPermissions");
 }
 
 async function findUserForApiKeyStatus(userId) {
@@ -89,7 +100,7 @@ async function findUserForEnable2faVerify(userId) {
 }
 
 async function findUserForForgotPassword(emailLower) {
-  return User.findOne({ email: emailLower }).select("email name");
+  return User.findOne({ email: emailLower }).select("email name role");
 }
 
 async function setUserPasswordResetToken(userId, { tokenHash, expiresAt }) {

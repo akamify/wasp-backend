@@ -9,7 +9,6 @@ const { ClickLog } = require("@infra/database/ClickLog");
 const { decryptString } = require("@shared/utils/crypto");
 const bcrypt = require("bcryptjs");
 const { HttpError } = require("@shared/utils/httpError");
-const { AdminAccount } = require("@infra/database/AdminAccount");
 
 function mask(value) {
   const source = String(value || "");
@@ -317,19 +316,19 @@ module.exports = {
 
 async function adminChangePassword(req, res) {
   const { currentPassword, newPassword } = req.body || {};
-  const adminAccount = await AdminAccount.findById(req.user.id).select("+passwordHash username displayName envLoginDisabled");
-  if (!adminAccount) throw new HttpError(404, "Admin account not found");
+  const adminUser = await User.findById(req.user.id).select("+passwordHash email name role tokenVersion");
+  if (!adminUser) throw new HttpError(404, "Admin account not found");
 
-  const ok = await bcrypt.compare(String(currentPassword || ""), adminAccount.passwordHash);
+  const ok = await bcrypt.compare(String(currentPassword || ""), adminUser.passwordHash);
   if (!ok) throw new HttpError(401, "Current password is incorrect");
 
   const next = String(newPassword || "");
   if (next.length < 8) throw new HttpError(400, "New password must be at least 8 characters");
 
-  adminAccount.passwordHash = await bcrypt.hash(next, 12);
-  adminAccount.envLoginDisabled = true;
-  adminAccount.passwordResetTokenHash = undefined;
-  adminAccount.passwordResetTokenExpiresAt = undefined;
-  await adminAccount.save();
+  adminUser.passwordHash = await bcrypt.hash(next, 12);
+  adminUser.passwordResetTokenHash = undefined;
+  adminUser.passwordResetTokenExpiresAt = undefined;
+  adminUser.tokenVersion = Number(adminUser.tokenVersion || 0) + 1;
+  await adminUser.save();
   res.json({ success: true });
 }

@@ -10,6 +10,15 @@ const WorkspaceSchema = new mongoose.Schema(
     },
     name: { type: String, required: true, trim: true },
     plan: { type: String, default: "free" },
+    allowedApiPermissions: {
+      campaignSend: { type: Boolean, default: true },
+      chatAccess: { type: Boolean, default: false },
+    },
+    crmEnabled: { type: Boolean, default: false, index: true },
+    crmSettings: {
+      leadWindowHours: { type: Number, default: 48, min: 1, max: 720 },
+      assignmentLockMinutes: { type: Number, default: 5, min: 1, max: 120 },
+    },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }

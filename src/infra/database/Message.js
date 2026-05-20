@@ -38,6 +38,14 @@ const MessageSchema = new mongoose.Schema(
     },
     readReceiptSentAt: { type: Date, default: null, index: true },
 
+    sentBy: {
+      kind: { type: String, enum: ["owner", "admin", "employee", "system", "api"], required: true, default: "system" },
+      actorId: { type: mongoose.Schema.Types.ObjectId, required: false },
+    },
+    lastAssignedEmployeeId: { type: mongoose.Schema.Types.ObjectId, ref: "Employee", default: null, index: true },
+    lastAssignedAt: { type: Date, default: null },
+    leadStatusSnapshot: { type: String, default: null },
+
     text: { type: String },
     payload: { type: Object },
     error: { type: Object },

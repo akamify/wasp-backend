@@ -1,6 +1,6 @@
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
-const { appBaseUrl } = require("@core/config/env");
+const { appBaseUrl, superAdminEmail } = require("@core/config/env");
 const { HttpError } = require("@shared/utils/httpError");
 const { sha256Hex } = require("@shared/utils/hash");
 const { sendEmail } = require("@shared/services/emailService");
@@ -13,6 +13,21 @@ async function forgotPassword({ email }) {
 
   const headers = {};
   if (user) {
+    if (String(user.role || "") === "admin") {
+      return {
+        headers,
+        body: { success: true, message: "If your email is registered, a reset link has been sent." },
+      };
+    }
+
+    const isSuperAdmin = String(user.role || "") === "super_admin";
+    if (isSuperAdmin && (!superAdminEmail || normalized !== String(superAdminEmail))) {
+      return {
+        headers,
+        body: { success: true, message: "If your email is registered, a reset link has been sent." },
+      };
+    }
+
     const rawToken = base64Url(crypto.randomBytes(32));
     const tokenHash = sha256Hex(rawToken);
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
