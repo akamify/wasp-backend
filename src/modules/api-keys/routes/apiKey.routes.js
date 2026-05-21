@@ -23,6 +23,18 @@ router.post("/admin/users/:id/chat-access/verify-otp", requireAdmin, rateLimiter
 router.patch("/admin/users/:id/chat-access/disable", requireAdmin, asyncHandler(c.disableChatAccess));
 router.patch("/admin/users/:id/api-keys/:keyId/disable", requireAdmin, asyncHandler(c.disableKey));
 router.patch("/admin/users/:id/api-keys/:keyId/enable", requireAdmin, asyncHandler(c.enableKey));
+router.patch(
+  "/admin/users/:id/api-keys/:keyId/permissions/chat-access",
+  requireAdmin,
+  validate(Joi.object({ enabled: Joi.boolean().required() })),
+  asyncHandler(c.setApiKeyChatAccess)
+);
+router.post(
+  "/admin/users/:id/api-keys/sync-chat-access",
+  requireAdmin,
+  validate(Joi.object({ enabled: Joi.boolean().required() })),
+  asyncHandler(c.syncUserApiKeysChatAccess)
+);
 router.patch("/admin/users/:id/block", requireAdmin, asyncHandler(c.blockUser));
 router.patch("/admin/users/:id/unblock", requireAdmin, asyncHandler(c.unblockUser));
 

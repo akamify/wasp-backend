@@ -58,6 +58,7 @@ const {
   adminSyncMetaTemplates,
 } = require("@modules/admin/controllers/adminTemplate.controller");
 const crmAdminController = require("@modules/crm/controllers/crmAdmin.controller");
+const workspaceFeaturesController = require("@modules/workspaces/controllers/workspaceFeatures.controller");
 const docsController = require("@modules/admin/controllers/adminDocs.controller");
 const { buildMemoryUpload } = require("@shared/utils/multerUpload");
 
@@ -77,25 +78,36 @@ const a = (key) => requireAdminPermission("action", key);
 router.use(auth, requireAdmin);
 router.get("/overview", p("/admin/dashboard"), asyncHandler(adminOverview));
 router.put("/settings/password", c("profile.change_password"), asyncHandler(adminChangePassword));
-router.get("/users", requireSuperAdmin, p("/admin/users"), asyncHandler(adminListUsers));
-router.patch("/users/:id/status", requireSuperAdmin, c("users.edit"), asyncHandler(adminUpdateUserStatus));
-router.post("/users/:id/chat-access/send-otp", requireSuperAdmin, a("users.manage"), rateLimiters.otp, asyncHandler(apiKeyAdminController.sendChatAccessOtp));
+router.get("/users", p("/admin/users"), asyncHandler(adminListUsers));
+router.patch("/users/:id/status", c("users.edit"), asyncHandler(adminUpdateUserStatus));
+router.post("/users/:id/chat-access/send-otp", a("users.manage"), rateLimiters.otp, asyncHandler(apiKeyAdminController.sendChatAccessOtp));
 router.post(
   "/users/:id/chat-access/verify-otp",
-  requireSuperAdmin,
   a("users.manage"),
   rateLimiters.otp,
   validate(Joi.object({ otp: Joi.string().pattern(/^\d{6}$/).required() })),
   asyncHandler(apiKeyAdminController.verifyChatAccessOtp)
 );
-router.patch("/users/:id/chat-access/enable", requireSuperAdmin, a("users.manage"), asyncHandler(apiKeyAdminController.enableChatAccess));
-router.patch("/users/:id/chat-access/disable", requireSuperAdmin, a("users.manage"), asyncHandler(apiKeyAdminController.disableChatAccess));
-router.patch("/users/:id/api-permissions/campaign-send/enable", requireSuperAdmin, a("users.manage"), asyncHandler(apiKeyAdminController.enableCampaignSend));
-router.patch("/users/:id/api-permissions/campaign-send/disable", requireSuperAdmin, a("users.manage"), asyncHandler(apiKeyAdminController.disableCampaignSend));
-router.patch("/users/:id/api-keys/:keyId/disable", requireSuperAdmin, a("users.manage"), asyncHandler(apiKeyAdminController.disableKey));
-router.patch("/users/:id/api-keys/:keyId/enable", requireSuperAdmin, a("users.manage"), asyncHandler(apiKeyAdminController.enableKey));
-router.patch("/users/:id/block", requireSuperAdmin, a("users.manage"), asyncHandler(apiKeyAdminController.blockUser));
-router.patch("/users/:id/unblock", requireSuperAdmin, a("users.manage"), asyncHandler(apiKeyAdminController.unblockUser));
+router.patch("/users/:id/chat-access/enable", a("users.manage"), asyncHandler(apiKeyAdminController.enableChatAccess));
+router.patch("/users/:id/chat-access/disable", a("users.manage"), asyncHandler(apiKeyAdminController.disableChatAccess));
+router.patch("/users/:id/api-permissions/campaign-send/enable", a("users.manage"), asyncHandler(apiKeyAdminController.enableCampaignSend));
+router.patch("/users/:id/api-permissions/campaign-send/disable", a("users.manage"), asyncHandler(apiKeyAdminController.disableCampaignSend));
+router.patch("/users/:id/api-keys/:keyId/disable", a("users.manage"), asyncHandler(apiKeyAdminController.disableKey));
+router.patch("/users/:id/api-keys/:keyId/enable", a("users.manage"), asyncHandler(apiKeyAdminController.enableKey));
+router.patch(
+  "/users/:id/api-keys/:keyId/permissions/chat-access",
+  a("users.manage"),
+  validate(Joi.object({ enabled: Joi.boolean().required() })),
+  asyncHandler(apiKeyAdminController.setApiKeyChatAccess)
+);
+router.post(
+  "/users/:id/api-keys/sync-chat-access",
+  a("users.manage"),
+  validate(Joi.object({ enabled: Joi.boolean().required() })),
+  asyncHandler(apiKeyAdminController.syncUserApiKeysChatAccess)
+);
+router.patch("/users/:id/block", a("users.manage"), asyncHandler(apiKeyAdminController.blockUser));
+router.patch("/users/:id/unblock", a("users.manage"), asyncHandler(apiKeyAdminController.unblockUser));
 router.get("/channels", p("/admin/workspaces"), asyncHandler(adminListChannels));
 router.get("/workspaces", p("/admin/workspaces"), asyncHandler(adminListChannels));
 router.get("/master-campaigns", p("/admin/master-campaigns"), asyncHandler(adminListMasterCampaigns));
@@ -162,6 +174,19 @@ router.put("/crm/workspaces/:workspaceId/settings/lead-window", c("workspaces.ed
 router.get("/crm/workspaces/:workspaceId/employees", p("/admin/workspaces"), asyncHandler(crmAdminController.listEmployees));
 router.post("/crm/workspaces/:workspaceId/employees", c("workspaces.edit"), asyncHandler(crmAdminController.createEmployee));
 router.patch("/crm/workspaces/:workspaceId/employees/:employeeId/status", c("workspaces.edit"), asyncHandler(crmAdminController.updateEmployeeStatus));
+
+// Workspace features
+router.get(
+  "/workspaces/:workspaceId/features/external-chat",
+  p("/admin/workspaces"),
+  asyncHandler(workspaceFeaturesController.getExternalChatFeature)
+);
+router.patch(
+  "/workspaces/:workspaceId/features/external-chat",
+  c("workspaces.edit"),
+  validate(Joi.object({ enabled: Joi.boolean().required() })),
+  asyncHandler(workspaceFeaturesController.updateExternalChatFeature)
+);
 
 module.exports = router;
 

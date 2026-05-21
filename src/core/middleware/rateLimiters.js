@@ -19,11 +19,26 @@ const automationWindowMs = toNumber(process.env.RATE_LIMIT_AUTOMATION_WINDOW_MS,
 const automationLimit = toNumber(process.env.RATE_LIMIT_AUTOMATION_MAX, isProd ? 30 : 200);
 const metaFlowWindowMs = toNumber(process.env.RATE_LIMIT_META_FLOW_WINDOW_MS, 60 * 1000);
 const metaFlowLimit = toNumber(process.env.RATE_LIMIT_META_FLOW_MAX, isProd ? 20 : 120);
+const externalChatReadWindowMs = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT_READ_WINDOW_MS, 60 * 1000);
+const externalChatReadLimit = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT_READ_MAX, isProd ? 120 : 1200);
+const externalChatSendWindowMs = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT_SEND_WINDOW_MS, 60 * 1000);
+const externalChatSendLimit = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT_SEND_MAX, isProd ? 30 : 300);
+const externalChatUploadWindowMs = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT_UPLOAD_WINDOW_MS, 60 * 1000);
+const externalChatUploadLimit = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT_UPLOAD_MAX, isProd ? 10 : 100);
+const externalChatTokenWindowMs = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT_TOKEN_WINDOW_MS, 60 * 60 * 1000);
+const externalChatTokenLimit = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT_TOKEN_MAX, isProd ? 12 : 120);
 
 function authKeyFromHeader(header = "") {
   const token = String(header || "").trim();
   if (!token) return "";
   return crypto.createHash("sha1").update(token).digest("hex").slice(0, 16);
+}
+
+function externalApiKeyBucket(req) {
+  if (req?.auth?.apiKeyId) return `apiKeyId:${String(req.auth.apiKeyId)}`;
+  const apiKey = String(req?.headers?.["x-api-key"] || "").trim();
+  if (apiKey) return `apiKey:${authKeyFromHeader(apiKey)}`;
+  return ipKeyGenerator(req);
 }
 
 const general = rateLimit({
@@ -96,4 +111,34 @@ const metaFlowOps = rateLimit({
   },
 });
 
-module.exports = { general, auth, login, otp, automationTrigger, metaFlowOps };
+function externalChatLimiter(windowMs, limit) {
+  return rateLimit({
+    windowMs,
+    limit,
+    keyGenerator: externalApiKeyBucket,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      success: false,
+      message: "Too many requests, please try again in a moment.",
+    },
+  });
+}
+
+const externalChatRead = externalChatLimiter(externalChatReadWindowMs, externalChatReadLimit);
+const externalChatSend = externalChatLimiter(externalChatSendWindowMs, externalChatSendLimit);
+const externalChatUpload = externalChatLimiter(externalChatUploadWindowMs, externalChatUploadLimit);
+const externalChatRealtimeToken = externalChatLimiter(externalChatTokenWindowMs, externalChatTokenLimit);
+
+module.exports = {
+  general,
+  auth,
+  login,
+  otp,
+  automationTrigger,
+  metaFlowOps,
+  externalChatRead,
+  externalChatSend,
+  externalChatUpload,
+  externalChatRealtimeToken,
+};

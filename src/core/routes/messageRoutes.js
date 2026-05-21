@@ -3,6 +3,7 @@ const Joi = require("joi");
 const { asyncHandler } = require("@shared/utils/asyncHandler");
 const { validate } = require("@core/middleware/validate");
 const { auth } = require("@core/middleware/auth");
+const { blockInternalChatForApiKey } = require("@core/middleware/blockInternalChatForApiKey");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
 const {
   sendTemplate,
@@ -37,12 +38,13 @@ const upload = buildMemoryUpload({
   ],
 });
 
-router.post("/media", auth, requireWorkspace, upload.single("file"), asyncHandler(uploadMessageMedia));
-router.get("/media/:id", auth, requireWorkspace, asyncHandler(downloadMessageMedia));
+router.post("/media", auth, blockInternalChatForApiKey, requireWorkspace, upload.single("file"), asyncHandler(uploadMessageMedia));
+router.get("/media/:id", auth, blockInternalChatForApiKey, requireWorkspace, asyncHandler(downloadMessageMedia));
 
 router.post(
   "/send",
   auth,
+  blockInternalChatForApiKey,
   requireWorkspace,
   validate(
     Joi.object({
@@ -69,6 +71,7 @@ router.post(
 router.post(
   "/send-text",
   auth,
+  blockInternalChatForApiKey,
   requireWorkspace,
   validate(
     Joi.object({
@@ -82,6 +85,7 @@ router.post(
 router.post(
   "/send-media",
   auth,
+  blockInternalChatForApiKey,
   requireWorkspace,
   validate(
     Joi.object({
@@ -99,6 +103,7 @@ router.post(
 router.post(
   "/bulk",
   auth,
+  blockInternalChatForApiKey,
   requireWorkspace,
   validate(
     Joi.object({
@@ -125,14 +130,14 @@ router.post(
   asyncHandler(bulkSend)
 );
 
-router.get("/logs", auth, requireWorkspace, asyncHandler(listLogs));
-router.get("/status/:waId", auth, requireWorkspace, asyncHandler(messageStatusByWaId));
+router.get("/logs", auth, blockInternalChatForApiKey, requireWorkspace, asyncHandler(listLogs));
+router.get("/status/:waId", auth, blockInternalChatForApiKey, requireWorkspace, asyncHandler(messageStatusByWaId));
 const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 const debugFeedEnabled = String(process.env.META_WEBHOOK_DEBUG_FEED_ENABLED || "").toLowerCase() === "true";
 if (!isProd || debugFeedEnabled) {
-  router.get("/webhook-debug", auth, requireWorkspace, asyncHandler(listWebhookDebugEvents));
+  router.get("/webhook-debug", auth, blockInternalChatForApiKey, requireWorkspace, asyncHandler(listWebhookDebugEvents));
 }
-router.get("/:phone", auth, requireWorkspace, asyncHandler(messagesByPhone));
+router.get("/:phone", auth, blockInternalChatForApiKey, requireWorkspace, asyncHandler(messagesByPhone));
 
 module.exports = router;
 

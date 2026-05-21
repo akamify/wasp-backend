@@ -37,15 +37,15 @@ async function verifyChatAccessOtp(req, res) {
     purpose: "admin_enable_chat_access",
     otp: req.body?.otp,
   });
-  res.json(await permissionService.enableChatAccess({ adminUserId: req.user.id, userId: req.params.id }));
+  res.json(await permissionService.enableChatAccess({ req, adminUserId: req.user.id, userId: req.params.id }));
 }
 
 async function disableChatAccess(req, res) {
-  res.json(await permissionService.disableChatAccess({ userId: req.params.id }));
+  res.json(await permissionService.disableChatAccess({ req, userId: req.params.id }));
 }
 
 async function enableChatAccess(req, res) {
-  res.json(await permissionService.enableChatAccess({ adminUserId: req.user.id, userId: req.params.id }));
+  res.json(await permissionService.enableChatAccess({ req, adminUserId: req.user.id, userId: req.params.id }));
 }
 
 async function enableCampaignSend(req, res) {
@@ -62,6 +62,27 @@ async function enableKey(req, res) {
 
 async function disableKey(req, res) {
   res.json(await permissionService.setUserApiKeyState({ userId: req.params.id, keyId: req.params.keyId, revoked: true }));
+}
+
+async function setApiKeyChatAccess(req, res) {
+  res.json(
+    await permissionService.setApiKeyChatAccess({
+      req,
+      userId: req.params.id,
+      keyId: req.params.keyId,
+      enabled: Boolean(req.body?.enabled),
+    })
+  );
+}
+
+async function syncUserApiKeysChatAccess(req, res) {
+  res.json(
+    await permissionService.bulkSyncApiKeysChatAccess({
+      req,
+      userId: req.params.id,
+      enabled: Boolean(req.body?.enabled),
+    })
+  );
 }
 
 async function blockUser(req, res) {
@@ -86,6 +107,8 @@ module.exports = {
   disableCampaignSend,
   enableKey,
   disableKey,
+  setApiKeyChatAccess,
+  syncUserApiKeysChatAccess,
   blockUser,
   unblockUser,
 };

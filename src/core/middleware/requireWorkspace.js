@@ -33,7 +33,7 @@ async function requireWorkspace(req, res, next) {
       _id: workspaceId,
       ownerId: req.user.id,
       isActive: true,
-    }).select("_id ownerId name plan isActive createdAt crmEnabled crmSettings allowedApiPermissions");
+    }).select("_id ownerId name plan isActive createdAt crmEnabled crmSettings allowedApiPermissions features");
 
     if (!workspace) return next(new HttpError(404, "Workspace not found"));
 
@@ -46,6 +46,9 @@ async function requireWorkspace(req, res, next) {
       allowedApiPermissions: {
         campaignSend: Boolean(workspace?.allowedApiPermissions?.campaignSend ?? true),
         chatAccess: Boolean(workspace?.allowedApiPermissions?.chatAccess ?? false),
+      },
+      features: {
+        externalChatApiAccess: Boolean(workspace?.features?.externalChatApiAccess),
       },
     };
 

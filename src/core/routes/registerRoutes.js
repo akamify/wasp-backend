@@ -27,6 +27,7 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/wallet`, require("@core/routes/walletRoutes"));
   app.use(`${basePath}/integrations`, require("@core/routes/integrationRoutes"));
   app.use(`${basePath}/realtime`, require("@core/routes/realtimeRoutes"));
+  app.use(`${basePath}/external/chat`, require("@modules/external-chat/routes/externalChat.routes"));
   app.use(`${basePath}/crm`, require("@core/routes/crmRoutes"));
   app.use(`${basePath}`, require("@core/routes/automationRoutes"));
 }

@@ -1,6 +1,7 @@
 const express = require("express");
 const { authOrApiKey } = require("@core/middleware/authOrApiKey");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
+const { blockInternalChatForApiKey } = require("@core/middleware/blockInternalChatForApiKey");
 const { asyncHandler } = require("@shared/utils/asyncHandler");
 const { requireApiPermission } = require("@modules/api-keys/middleware/requireApiPermission");
 const {
@@ -12,9 +13,9 @@ const {
 
 const router = express.Router();
 
-router.get("/", authOrApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(listConversations));
-router.post("/:phone/read", authOrApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(readConversation));
-router.get("/:phone", authOrApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(getConversation));
-router.delete("/:phone", authOrApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(clearConversation));
+router.get("/", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(listConversations));
+router.post("/:phone/read", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(readConversation));
+router.get("/:phone", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(getConversation));
+router.delete("/:phone", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireApiPermission("chatAccess"), asyncHandler(clearConversation));
 module.exports = router;
 

@@ -14,6 +14,9 @@ const WorkspaceSchema = new mongoose.Schema(
       campaignSend: { type: Boolean, default: true },
       chatAccess: { type: Boolean, default: false },
     },
+    features: {
+      externalChatApiAccess: { type: Boolean, default: false, index: true },
+    },
     crmEnabled: { type: Boolean, default: false, index: true },
     crmSettings: {
       leadWindowHours: { type: Number, default: 48, min: 1, max: 720 },

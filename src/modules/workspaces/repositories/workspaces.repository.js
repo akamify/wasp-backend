@@ -19,9 +19,38 @@ async function createWorkspace({ ownerId, name }) {
   });
 }
 
+async function findActiveWorkspaceById(workspaceId) {
+  return Workspace.findOne({ _id: workspaceId, isActive: true }).select(
+    "_id ownerId name plan isActive allowedApiPermissions features"
+  );
+}
+
+async function setExternalChatFeature({ workspaceId, enabled }) {
+  const patch = enabled
+    ? {
+      $set: {
+        "features.externalChatApiAccess": true,
+        "allowedApiPermissions.chatAccess": true,
+      },
+    }
+    : {
+      $set: {
+        "features.externalChatApiAccess": false,
+      },
+    };
+
+  return Workspace.findOneAndUpdate(
+    { _id: workspaceId, isActive: true },
+    patch,
+    { new: true }
+  ).select("_id ownerId name plan isActive allowedApiPermissions features");
+}
+
 module.exports = {
   listActiveWorkspacesForOwner,
   findAnyWorkspaceForOwner,
   createWorkspace,
+  findActiveWorkspaceById,
+  setExternalChatFeature,
 };
 

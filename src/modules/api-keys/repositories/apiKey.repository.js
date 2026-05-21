@@ -68,11 +68,33 @@ async function updateApiKeyPermissions({ userId, keyId, permissions }) {
   return item;
 }
 
+async function updateApiKeyChatAccess({ userId, keyId, enabled }) {
+  const user = await User.findById(userId).select("+apiKeys");
+  if (!user) return null;
+  const item = (user.apiKeys || []).id(keyId);
+  if (!item) return null;
+  item.permissions = item.permissions || {};
+  item.permissions.chatAccess = Boolean(enabled);
+  if (item.permissions.campaignSend === undefined) {
+    item.permissions.campaignSend = true;
+  }
+  await user.save();
+  return item;
+}
+
 async function updateUserSecurityFlags({ userId, patch }) {
   return User.findByIdAndUpdate(userId, patch, { new: true }).select("accountBlocked tokenVersion allowedApiPermissions chatAccessEnabledBy chatAccessEnabledAt");
 }
 
 async function syncAllApiKeysChatAccess({ userId, enabled }) {
+  await User.updateOne(
+    { _id: userId, "apiKeys.0": { $exists: true } },
+    { $set: { "apiKeys.$[k].permissions.chatAccess": !!enabled } },
+    { arrayFilters: [{ "k.revoked": { $ne: true } }] }
+  );
+}
+
+async function syncAllNonRevokedApiKeysChatAccess({ userId, enabled }) {
   await User.updateOne(
     { _id: userId, "apiKeys.0": { $exists: true } },
     { $set: { "apiKeys.$[k].permissions.chatAccess": !!enabled } },
@@ -124,8 +146,10 @@ module.exports = {
   revokeApiKey,
   updateApiKeyState,
   updateApiKeyPermissions,
+  updateApiKeyChatAccess,
   updateUserSecurityFlags,
   syncAllApiKeysChatAccess,
+  syncAllNonRevokedApiKeysChatAccess,
   syncWorkspaceChatAccessByOwner,
   clearLegacyApiKey,
   setApiKeyOtp,

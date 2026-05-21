@@ -1,5 +1,6 @@
 const { Conversation } = require("@infra/database/Conversation");
 const { normalizePhone } = require("@shared/services/contactService");
+const { publishWorkspaceEvent } = require("@shared/services/realtimeService");
 
 async function touchConversation({
   userId,
@@ -38,6 +39,14 @@ async function touchConversation({
     conversation.employeeUnreadCount = Number(conversation.employeeUnreadCount || 0) + 1;
   }
 
+  if (conversation?._id) {
+    publishWorkspaceEvent(userId, {
+      type: "conversation.updated",
+      conversationId: String(conversation._id),
+      phone: normalizedPhone,
+    });
+  }
+
   return conversation;
 }
 
@@ -45,22 +54,42 @@ async function markConversationRead({ userId, phone }) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return null;
 
-  return Conversation.findOneAndUpdate(
+  const conversation = await Conversation.findOneAndUpdate(
     { workspaceId: userId, phone: normalizedPhone },
     { $set: { unreadCount: 0, ownerUnreadCount: 0 } },
     { returnDocument: "after" }
   );
+
+  if (conversation?._id) {
+    publishWorkspaceEvent(userId, {
+      type: "conversation.updated",
+      conversationId: String(conversation._id),
+      phone: normalizedPhone,
+    });
+  }
+
+  return conversation;
 }
 
 async function markConversationEmployeeRead({ workspaceId, phone, employeeId }) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return null;
 
-  return Conversation.findOneAndUpdate(
+  const conversation = await Conversation.findOneAndUpdate(
     { workspaceId, phone: normalizedPhone, assignedEmployeeId: employeeId },
     { $set: { employeeUnreadCount: 0 } },
     { returnDocument: "after" }
   );
+
+  if (conversation?._id) {
+    publishWorkspaceEvent(workspaceId, {
+      type: "conversation.updated",
+      conversationId: String(conversation._id),
+      phone: normalizedPhone,
+    });
+  }
+
+  return conversation;
 }
 
 module.exports = { touchConversation, markConversationRead, markConversationEmployeeRead };
