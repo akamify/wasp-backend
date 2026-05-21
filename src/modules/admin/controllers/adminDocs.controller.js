@@ -8,6 +8,8 @@ const DOC_PREFIX = "docs-";
 const DOC_BRAND_SLUG = "__docs_brand__";
 const LEGACY_DOC_PATH_PREFIX = "docs/";
 const RESERVED_DOC_SLUGS = new Set(["brand", "__docs_brand__"]);
+const CMS_PAGE_SLUGS = new Set(["about", "privacy-policy", "terms-of-service", "cookie-policy", "help-center", "careers"]);
+const KNOWN_DOC_SLUGS = new Set(["introduction", "quick-start", "authentication", "meta-setup", "webhooks"]);
 
 const docSchema = Joi.object({
   title: Joi.string().trim().min(1).max(200).required(),
@@ -42,6 +44,31 @@ function normalizeDocSlugCandidate(rawSlug, data) {
   return dataSlug || mappedRaw;
 }
 
+function getDocPayloadFromPage(page) {
+  const root = page?.data && typeof page.data === "object" ? page.data : {};
+  const candidates = [root, root?.data, root?.doc, root?.page, root?.payload].filter((x) => x && typeof x === "object");
+  const looksLikeDoc = (obj) =>
+    Boolean(
+      String(obj?.title || "").trim() ||
+        String(obj?.description || "").trim() ||
+        String(obj?.content || "").trim() ||
+        String(obj?.bodyMarkdown || "").trim() ||
+        String(obj?.introMarkdown || "").trim() ||
+        String(obj?.markdown || "").trim() ||
+        String(obj?.status || "").trim() ||
+        String(obj?.category || "").trim() ||
+        String(obj?.slug || "").trim() ||
+        Array.isArray(obj?.keywords) ||
+        obj?.sidebar ||
+        obj?.seo ||
+        Array.isArray(obj?.blocks)
+    );
+  for (const c of candidates) {
+    if (looksLikeDoc(c)) return c;
+  }
+  return root;
+}
+
 async function resolveDocPageByIdentifier(identifier) {
   const raw = String(identifier || "").trim();
   if (!raw) return null;
@@ -65,25 +92,55 @@ async function resolveDocPageByIdentifier(identifier) {
 }
 
 function normalizeDocFromPage(page) {
-  const d = page?.data || {};
+  const d = getDocPayloadFromPage(page);
   const rawSlug = String(page?.slug || "");
   const normalizedSlug = rawSlug.startsWith(DOC_PREFIX)
     ? rawSlug.slice(DOC_PREFIX.length)
     : rawSlug.startsWith(LEGACY_DOC_PATH_PREFIX)
     ? rawSlug.slice(LEGACY_DOC_PATH_PREFIX.length)
     : rawSlug;
+  const extractString = (...values) => {
+    for (const value of values) {
+      if (typeof value === "string" && value.trim()) return value;
+    }
+    return "";
+  };
+  const blockContent = Array.isArray(d.blocks)
+    ? d.blocks
+        .map((b) => String(b?.snippet || b?.content || b?.text || "").trim())
+        .filter(Boolean)
+        .join("\n\n")
+    : "";
+  const normalizedContent = extractString(
+    d.content,
+    d.bodyMarkdown,
+    d.introMarkdown,
+    d.markdown,
+    d.contentMarkdown,
+    d.rawMarkdown,
+    d.rawContent,
+    d.body,
+    blockContent
+  );
+  const normalizedDescription = extractString(d.description, d?.hero?.subtitle, d.summary, d.excerpt);
+  const normalizedCategory = String(d.category || d?.sidebar?.section || "general");
+  const normalizedStatus = ["draft", "published"].includes(String(d.status || "").toLowerCase())
+    ? String(d.status || "").toLowerCase()
+    : d?.published === true
+    ? "published"
+    : "draft";
   return {
     id: String(page._id),
-    title: String(d.title || ""),
+    title: String(d.title || page?.title || ""),
     slug: String(d.slug || normalizedSlug),
-    description: String(d.description || ""),
-    content: String(d.content || ""),
+    description: normalizedDescription,
+    content: normalizedContent,
     keywords: Array.isArray(d.keywords) ? d.keywords : [],
-    category: String(d.category || "general"),
+    category: normalizedCategory,
     order: Number(d.order || 0),
-    status: String(d.status || "draft"),
+    status: normalizedStatus,
     sidebar: {
-      section: String(d?.sidebar?.section || d.category || "general"),
+      section: String(d?.sidebar?.section || normalizedCategory || "general"),
       sectionOrder: Number(d?.sidebar?.sectionOrder || 0),
       itemOrder: Number(d?.sidebar?.itemOrder || 0),
     },
@@ -98,22 +155,34 @@ function normalizeDocFromPage(page) {
   };
 }
 
+function isLegacyDocPage(page) {
+  const slug = String(page?.slug || "").trim().toLowerCase();
+  if (!slug || RESERVED_DOC_SLUGS.has(slug) || CMS_PAGE_SLUGS.has(slug)) return false;
+  if (KNOWN_DOC_SLUGS.has(slug)) return true;
+  const data = getDocPayloadFromPage(page);
+  const hasBodyMarkdown = typeof data.bodyMarkdown === "string" && data.bodyMarkdown.trim().length > 0;
+  const hasMarkdownishContent = typeof data.content === "string" && data.content.trim().length > 0;
+  const hasNestedBlocks = Array.isArray(data.blocks) && data.blocks.length > 0;
+  return hasBodyMarkdown || hasMarkdownishContent || hasNestedBlocks;
+}
+
 function isDocLikePayload(data) {
   if (!data || typeof data !== "object") return false;
-  const hasDocSlug = Boolean(String(data.slug || "").trim());
-  const hasDocStatus = ["draft", "published"].includes(String(data.status || "").trim().toLowerCase());
-  const content = String(data.content || "").trim();
-  const title = String(data.title || "").trim();
-  const description = String(data.description || "").trim();
-  const hasContent = Object.prototype.hasOwnProperty.call(data, "content");
-  const hasKeywords = Array.isArray(data.keywords);
-  const hasSidebar = !!(data.sidebar && typeof data.sidebar === "object");
-  const hasSeo = !!(data.seo && typeof data.seo === "object");
+  const source = getDocPayloadFromPage({ data });
+  const hasDocSlug = Boolean(String(source.slug || "").trim());
+  const hasDocStatus = ["draft", "published"].includes(String(source.status || "").trim().toLowerCase());
+  const content = String(source.content || source.bodyMarkdown || source.introMarkdown || "").trim();
+  const title = String(source.title || "").trim();
+  const description = String(source.description || "").trim();
+  const hasContent = Object.prototype.hasOwnProperty.call(source, "content") || Object.prototype.hasOwnProperty.call(source, "bodyMarkdown");
+  const hasKeywords = Array.isArray(source.keywords);
+  const hasSidebar = !!(source.sidebar && typeof source.sidebar === "object");
+  const hasSeo = !!(source.seo && typeof source.seo === "object");
   const hasMeaningfulDocFields =
     Boolean(title) ||
     Boolean(description) ||
     Boolean(content) ||
-    (Array.isArray(data.keywords) && data.keywords.length > 0);
+    (Array.isArray(source.keywords) && source.keywords.length > 0);
   return hasDocSlug && hasDocStatus && (hasContent || hasKeywords || hasSidebar || hasSeo) && hasMeaningfulDocFields;
 }
 
@@ -122,22 +191,17 @@ function isDocPage(page) {
   const normalizedCandidate = normalizeDocSlugCandidate(slug, page?.data || {});
   if (!slug || slug === DOC_BRAND_SLUG || RESERVED_DOC_SLUGS.has(normalizedCandidate)) return false;
   const type = String(page?.data?.__type || "");
-  return type === "doc" || slug.startsWith(DOC_PREFIX) || slug.startsWith(LEGACY_DOC_PATH_PREFIX) || isDocLikePayload(page?.data || {});
+  return (
+    type === "doc" ||
+    slug.startsWith(DOC_PREFIX) ||
+    slug.startsWith(LEGACY_DOC_PATH_PREFIX) ||
+    isDocLikePayload(page?.data || {}) ||
+    isLegacyDocPage(page)
+  );
 }
 
 async function adminDocsList(req, res) {
-  const pages = await PublicPage.find({
-    slug: { $ne: DOC_BRAND_SLUG },
-    $or: [
-      { "data.__type": "doc" },
-      { slug: new RegExp(`^${DOC_PREFIX}`) },
-      { slug: new RegExp(`^${LEGACY_DOC_PATH_PREFIX}`) },
-      {
-        "data.slug": { $exists: true, $ne: "" },
-        "data.status": { $in: ["draft", "published"] },
-      },
-    ],
-  }).sort({ updatedAt: -1 });
+  const pages = await PublicPage.find({ slug: { $ne: DOC_BRAND_SLUG } }).sort({ updatedAt: -1 });
   const docs = pages.filter(isDocPage).map(normalizeDocFromPage);
 
   const brand = await PublicPage.findOne({ slug: DOC_BRAND_SLUG }).select("data");

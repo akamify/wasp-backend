@@ -20,6 +20,7 @@ const {
   listOwnerConversationEvents,
   listEmployeeConversationEvents,
 } = require("@modules/crm/controllers/conversationEvents.controller");
+const crmOwnerController = require("@modules/crm/controllers/crmOwner.controller");
 
 const router = express.Router();
 const upload = buildMemoryUpload({
@@ -53,6 +54,44 @@ router.get(
   requireWorkspace,
   requireCrmFeature("crm"),
   asyncHandler(listOwnerConversationEvents)
+);
+
+// Owner CRM management
+router.get("/workspace", auth, requireWorkspace, asyncHandler(crmOwnerController.getWorkspaceCrm));
+router.put(
+  "/settings/lead-window",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(crmOwnerController.setLeadWindowHours)
+);
+router.put(
+  "/settings/assignment-lock",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(crmOwnerController.setAssignmentLockMinutes)
+);
+router.get(
+  "/employees",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(crmOwnerController.listEmployees)
+);
+router.post(
+  "/employees",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(crmOwnerController.createEmployee)
+);
+router.patch(
+  "/employees/:employeeId/status",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(crmOwnerController.updateEmployeeStatus)
 );
 
 // Employee timeline (requires employee JWT)
