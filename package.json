@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "build": "node -e \"console.log('Backend build step: not required')\"",
     "start": "node index.js",
     "dev": "node index.js",
     "worker": "node worker.js",
