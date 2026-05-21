@@ -51,6 +51,20 @@ router.post(
   asyncHandler(controller.verifyApiKeyOtp)
 );
 router.put("/profile", auth, validate(v.updateProfileSchema), asyncHandler(controller.updateProfile));
+router.post(
+  "/profile/request-otp",
+  rateLimiters.otp,
+  auth,
+  validate(v.requestProfileOtpSchema),
+  asyncHandler(controller.requestProfileOtp)
+);
+router.post(
+  "/profile/verify-otp",
+  rateLimiters.otp,
+  auth,
+  validate(v.verifyProfileOtpSchema),
+  asyncHandler(controller.verifyProfileOtp)
+);
 router.post("/change-password", auth, validate(v.changePasswordSchema), asyncHandler(controller.changePassword));
 router.post("/2fa/request-enable", auth, asyncHandler(controller.requestEnable2fa));
 router.post("/2fa/verify-enable", auth, validate(v.verifyEnable2faSchema), asyncHandler(controller.verifyEnable2fa));

@@ -43,6 +43,8 @@ const {
   adminListLoginEvents,
   adminCreateProfileRequest,
   adminListProfileRequests,
+  adminVerifyProfileRequestOtp,
+  adminResendProfileRequestOtp,
 } = require("@modules/admin/controllers/adminProfile.controller");
 const apiKeyAdminController = require("@modules/api-keys/controllers/apiKey.controller");
 const rateLimiters = require("@core/middleware/rateLimiters");
@@ -147,6 +149,8 @@ router.put("/profile", c("profile.edit"), asyncHandler(adminUpdateProfile));
 router.get("/profile/logins", c("profile.sessions"), asyncHandler(adminListLoginEvents));
 router.get("/profile/requests", p("/admin/profile"), asyncHandler(adminListProfileRequests));
 router.post("/profile/requests", p("/admin/profile"), asyncHandler(adminCreateProfileRequest));
+router.post("/profile/requests/:requestId/verify-otp", p("/admin/profile"), asyncHandler(adminVerifyProfileRequestOtp));
+router.post("/profile/requests/:requestId/resend-otp", p("/admin/profile"), asyncHandler(adminResendProfileRequestOtp));
 
 // Public pages (CMS)
 router.get("/pages", p("/admin/pages"), asyncHandler(adminListPages));

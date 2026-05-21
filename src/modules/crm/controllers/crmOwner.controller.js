@@ -1,12 +1,15 @@
 const Joi = require("joi");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
+const { appBaseUrl } = require("@core/config/env");
 const { Employee } = require("@infra/database/Employee");
 const { Workspace } = require("@infra/database/Workspace");
 const { User } = require("@infra/database/User");
 const { HttpError } = require("@shared/utils/httpError");
 const { sendEmail } = require("@shared/services/emailService");
 const { writeAuditLog } = require("@shared/services/auditLog.service");
+const { sha256Hex } = require("@shared/utils/hash");
+const employeeRepo = require("@modules/crm/repositories/employee.repository");
 
 function randomPassword() {
   return crypto.randomBytes(18).toString("base64url").slice(0, 12);
@@ -31,7 +34,7 @@ const assignmentLockSchema = Joi.object({
 const createEmployeeSchema = Joi.object({
   email: Joi.string().email().required(),
   name: Joi.string().allow("").max(100).optional(),
-  role: Joi.string().allow("").max(50).optional(),
+  role: Joi.string().valid("employee", "team_leader").allow("").optional(),
   permissions: Joi.object().unknown(true).optional(),
 });
 
@@ -103,7 +106,7 @@ async function listEmployees(req, res) {
       id: String(e._id),
       email: e.email,
       name: e.name || "",
-      role: e.role || "agent",
+      role: e.role || "employee",
       status: e.status,
       permissions: e.permissions || {},
       assignedChatsCount: Number(e.assignedChatsCount || 0),
@@ -122,35 +125,83 @@ async function createEmployee(req, res) {
   const owner = await User.findById(workspace.ownerId).select("email name");
   if (!owner) throw new HttpError(404, "Workspace owner not found");
 
-  const password = randomPassword();
-  const passwordHash = await bcrypt.hash(password, 10);
   const email = String(payload.email).trim().toLowerCase();
+
+  const existing = await Employee.findOne({ workspaceId: req.workspace.id, email }).select("_id status deletedAt");
+  if (existing) {
+    const status = String(existing.status || "ACTIVE").toUpperCase();
+    if (existing.deletedAt || status === "DELETED") {
+      throw new HttpError(
+        409,
+        "This employee email was previously deleted (fired) and cannot be used again. Please use a different email."
+      );
+    }
+    if (status === "BLOCKED") {
+      throw new HttpError(409, "An employee with this email already exists and is blocked. Unblock the employee to reuse.");
+    }
+    if (status === "DISABLED") {
+      throw new HttpError(409, "An employee with this email already exists and is disabled. Enable the employee to reuse.");
+    }
+    throw new HttpError(409, "An employee with this email already exists.");
+  }
+
+  // Set an unknown random password hash; employee must set their own password via the invite link.
+  const password = randomPassword() + crypto.randomBytes(18).toString("base64url");
+  const passwordHash = await bcrypt.hash(password, 10);
 
   const employee = await Employee.create({
     workspaceId: req.workspace.id,
     email,
     passwordHash,
     name: payload.name || "",
-    role: payload.role || "agent",
+    role: payload.role || "employee",
+    twoFactorEnabled: true,
     permissions: payload.permissions || undefined,
     createdBy: req.user.id,
   });
 
-  const subject = "CRM Employee account created";
-  const html = `
+  // Issue a one-time "set password" token (invite). Never email the password to anyone.
+  const rawToken = crypto.randomBytes(32).toString("base64url");
+  const tokenHash = sha256Hex(rawToken);
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  await employeeRepo.setPasswordResetToken({ workspaceId: req.workspace.id, employeeId: employee._id, tokenHash, expiresAt });
+
+  const appBase = String(appBaseUrl || "").replace(/\/+$/, "");
+  const resetLink = `${appBase}/employee/reset-password?token=${encodeURIComponent(rawToken)}`;
+
+  const employeeSubject = "Set your CRM employee password";
+  const employeeHtml = `
     <div style="font-family:Arial,sans-serif;line-height:1.6;color:#0f172a">
       <h2 style="margin:0 0 12px">Employee Access</h2>
       <p>Workspace: <b>${String(workspace.name || "")}</b></p>
       <p>Email: <b>${email}</b></p>
-      <p>Password: <b>${password}</b></p>
-      <p style="font-size:12px;color:#64748b">Please change the password after first login.</p>
+      <p>Click the link below to set your password:</p>
+      <p><a href="${resetLink}">Set Password</a></p>
+      <p style="font-size:12px;color:#64748b">This link expires in 24 hours.</p>
     </div>
   `;
-  const text = `Workspace: ${workspace.name}\nEmail: ${email}\nPassword: ${password}\n`;
+  const employeeText = `Workspace: ${workspace.name}\nEmail: ${email}\nSet password: ${resetLink}\n`;
+
+  const ownerSubject = "CRM employee created";
+  const ownerHtml = `
+    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#0f172a">
+      <h2 style="margin:0 0 12px">Employee Created</h2>
+      <p>Workspace: <b>${String(workspace.name || "")}</b></p>
+      <p>Email: <b>${email}</b></p>
+      <p style="font-size:12px;color:#64748b">A password setup link was sent to the employee email.</p>
+    </div>
+  `;
+  const ownerText = `Workspace: ${workspace.name}\nEmployee email: ${email}\nPassword setup link was sent to the employee.\n`;
 
   await Promise.allSettled([
-    sendEmail({ toEmail: email, toName: payload.name || "", subject, htmlContent: html, textContent: text }),
-    sendEmail({ toEmail: owner.email, toName: owner.name || "", subject, htmlContent: html, textContent: text }),
+    sendEmail({
+      toEmail: email,
+      toName: payload.name || "",
+      subject: employeeSubject,
+      htmlContent: employeeHtml,
+      textContent: employeeText,
+    }),
+    sendEmail({ toEmail: owner.email, toName: owner.name || "", subject: ownerSubject, htmlContent: ownerHtml, textContent: ownerText }),
   ]);
 
   await writeAuditLog(req, {
@@ -192,4 +243,3 @@ module.exports = {
   createEmployee,
   updateEmployeeStatus,
 };
-

@@ -8,6 +8,7 @@ const { signToken, signLoginChallengeToken } = require("@modules/auth/auth.token
 const { ensureDefaultWorkspace } = require("@modules/auth/auth.service.user.workspace");
 const { superAdminEmail } = require("@core/config/env");
 const { canLoginStatus, getBlockedLoginMessage } = require("@shared/utils/userStatus");
+const { normalizeAdminPermissions } = require("@shared/utils/adminPermissions");
 
 async function loginUser({ email, password }) {
   const user = await repo.findUserForLoginByEmail(String(email).toLowerCase());
@@ -60,6 +61,7 @@ async function loginUser({ email, password }) {
           name: user.name,
           phone: user.phone,
           role: user.role,
+          permissions: normalizeAdminPermissions(user.role, user.adminPermissions || { pages: [], components: [], actions: [] }),
           twoFactorEnabled: true,
         },
       },
@@ -102,6 +104,7 @@ async function loginUser({ email, password }) {
           name: user.name,
           phone: user.phone,
           role: user.role,
+          permissions: normalizeAdminPermissions(user.role, user.adminPermissions || { pages: [], components: [], actions: [] }),
           twoFactorEnabled: !!user.twoFactorEnabled,
         },
       },
@@ -122,6 +125,7 @@ async function loginUser({ email, password }) {
         name: user.name,
         phone: user.phone,
         role: user.role,
+        permissions: normalizeAdminPermissions(user.role, user.adminPermissions || { pages: [], components: [], actions: [] }),
         twoFactorEnabled: !!user.twoFactorEnabled,
       },
     },

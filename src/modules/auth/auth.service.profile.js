@@ -105,12 +105,90 @@ async function disable2fa({ userId }) {
   return { success: true, twoFactorEnabled: false };
 }
 
+async function requestProfileOtp({ userId, purpose, email, name }) {
+  const p = String(purpose || "").trim();
+  if (!["change_email", "change_name"].includes(p)) throw new HttpError(400, "Invalid purpose");
+
+  const user = await repo.findUserForProfileOtp(userId);
+  if (!user) throw new HttpError(404, "User not found");
+
+  if (p === "change_email") {
+    const nextEmail = String(email || "").trim().toLowerCase();
+    if (!nextEmail) throw new HttpError(400, "New email is required");
+    user.pendingEmail = nextEmail;
+  }
+
+  if (p === "change_name") {
+    const nextName = String(name || "").trim();
+    if (!nextName) throw new HttpError(400, "New name is required");
+    user.pendingName = nextName;
+  }
+
+  const otp = generateOtpCode();
+  user.profileOtpCodeHash = sha256Hex(otp);
+  user.profileOtpCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  user.profileOtpPurpose = p;
+  await user.save();
+
+  const delivery = await sendEmail({
+    toEmail: user.email,
+    toName: user.name || "",
+    subject: "Profile change verification code",
+    htmlContent: buildOtpEmailHtml({
+      code: otp,
+      title: "Profile verification",
+      subtitle: "Use this OTP to confirm your profile change. It expires in 10 minutes.",
+    }),
+    textContent: `Your OTP to confirm profile change is ${otp}. It expires in 10 minutes.`,
+  });
+
+  if (isProdEnv() && (delivery?.skipped || delivery?.failed)) {
+    throw new HttpError(500, "Email service is not configured");
+  }
+
+  return {
+    success: true,
+    message: "OTP sent",
+    ...(shouldReturnAuthDebugTokens() ? { debugOtp: otp, emailDelivery: delivery } : {}),
+  };
+}
+
+async function verifyProfileOtp({ userId, otp }) {
+  const user = await repo.findUserForProfileOtp(userId);
+  if (!user) throw new HttpError(404, "User not found");
+
+  if (!user.profileOtpCodeHash || !user.profileOtpCodeExpiresAt || user.profileOtpCodeExpiresAt < new Date()) {
+    throw new HttpError(400, "OTP expired. Request a new code.");
+  }
+  if (sha256Hex(String(otp || "").trim()) !== user.profileOtpCodeHash) throw new HttpError(401, "Invalid OTP code");
+
+  const purpose = String(user.profileOtpPurpose || "");
+  if (purpose === "change_email" && user.pendingEmail) {
+    user.email = String(user.pendingEmail).toLowerCase();
+  }
+  if (purpose === "change_name" && user.pendingName) {
+    user.name = String(user.pendingName).trim();
+  }
+
+  user.profileOtpCodeHash = undefined;
+  user.profileOtpCodeExpiresAt = undefined;
+  user.profileOtpPurpose = undefined;
+  user.pendingEmail = undefined;
+  user.pendingPhone = undefined;
+  user.pendingName = undefined;
+  await user.save();
+
+  return { success: true };
+}
+
 module.exports = {
   updateProfile,
   changePassword,
   requestEnable2fa,
   verifyEnable2fa,
   disable2fa,
+  requestProfileOtp,
+  verifyProfileOtp,
 };
 
 

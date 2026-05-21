@@ -9,6 +9,7 @@ const { requireCrmWorkspaceFromBody } = require("@modules/crm/middleware/require
 const employeeAuthController = require("@modules/crm/controllers/employeeAuth.controller");
 const employeeConversationsController = require("@modules/crm/controllers/employeeConversations.controller");
 const employeeMessagesController = require("@modules/crm/controllers/employeeMessages.controller");
+const employeeLeadsController = require("@modules/crm/controllers/employeeLeads.controller");
 const { requireConversationAccess } = require("@modules/crm/middleware/requireConversationAccess");
 const { bindPhoneParamFromBody } = require("@modules/crm/middleware/bindPhoneParamFromBody");
 const { validate } = require("@core/middleware/validate");
@@ -21,6 +22,8 @@ const {
   listEmployeeConversationEvents,
 } = require("@modules/crm/controllers/conversationEvents.controller");
 const crmOwnerController = require("@modules/crm/controllers/crmOwner.controller");
+const employeeOwnerProfileController = require("@modules/crm/controllers/employeeOwnerProfile.controller");
+const employeeProfileRequestsController = require("@modules/crm/controllers/employeeProfileRequests.controller");
 
 const router = express.Router();
 const upload = buildMemoryUpload({
@@ -44,8 +47,14 @@ const upload = buildMemoryUpload({
 
 // Employee auth
 router.post("/employee/login", requireCrmWorkspaceFromBody, employeeAuthController.login);
-router.post("/employee/forgot-password", requireCrmWorkspaceFromBody, employeeAuthController.forgotPassword);
 router.post("/employee/reset-password", employeeAuthController.resetPassword);
+router.post(
+  "/employee/logout",
+  employeeAuth,
+  requireEmployeeWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeAuthController.logout)
+);
 
 // Owner/admin timeline
 router.get(
@@ -93,6 +102,78 @@ router.patch(
   requireCrmFeature("crm"),
   asyncHandler(crmOwnerController.updateEmployeeStatus)
 );
+router.get(
+  "/employees/:employeeId/profile",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeOwnerProfileController.getEmployeeProfile)
+);
+router.patch(
+  "/employees/:employeeId/profile",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeOwnerProfileController.updateEmployeeProfile)
+);
+router.post(
+  "/employees/:employeeId/send-reset-link",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeOwnerProfileController.sendEmployeePasswordResetLink)
+);
+router.post(
+  "/employees/:employeeId/reset-password",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeOwnerProfileController.setEmployeePasswordDirect)
+);
+router.get(
+  "/employees/:employeeId/leads",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeOwnerProfileController.listEmployeeLeads)
+);
+router.get(
+  "/employees/:employeeId/activities",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeOwnerProfileController.listEmployeeActivities)
+);
+router.get(
+  "/employees/:employeeId/sessions",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeOwnerProfileController.listEmployeeSessions)
+);
+router.post(
+  "/employees/:employeeId/verify-email-otp",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeProfileRequestsController.verifyOwnerEmployeeEmailOtp)
+);
+
+// Owner: employee requests
+router.get(
+  "/employee-requests",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeProfileRequestsController.listOwnerRequests)
+);
+router.post(
+  "/employee-requests/:requestId/decide",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeProfileRequestsController.decideOwnerRequest)
+);
 
 // Employee timeline (requires employee JWT)
 router.get(
@@ -110,6 +191,13 @@ router.get(
   requireEmployeeWorkspace,
   requireCrmFeature("crm"),
   asyncHandler(employeeConversationsController.listEmployeeConversations)
+);
+router.get(
+  "/employee/leads",
+  employeeAuth,
+  requireEmployeeWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeLeadsController.listEmployeeLeads)
 );
 router.get(
   "/employee/conversations/:phone",
@@ -177,6 +265,22 @@ router.get(
   requireEmployeeWorkspace,
   requireCrmFeature("crm"),
   asyncHandler(streamEmployeeRealtime)
+);
+
+// Employee: profile requests (employee cannot send password reset links)
+router.get(
+  "/employee/profile-requests",
+  employeeAuth,
+  requireEmployeeWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeProfileRequestsController.listEmployeeRequests)
+);
+router.post(
+  "/employee/profile-requests",
+  employeeAuth,
+  requireEmployeeWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(employeeProfileRequestsController.submitEmployeeRequest)
 );
 
 module.exports = router;

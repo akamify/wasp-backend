@@ -39,7 +39,7 @@ async function hasValidMetaCredentials(workspaceId) {
 
 async function findUserForLoginByEmail(emailLower) {
   return User.findOne({ email: emailLower }).select(
-    "+passwordHash role email name phone twoFactorEnabled accountBlocked tokenVersion +loginOtpCodeHash +loginOtpCodeExpiresAt +loginOtpAttempts +loginOtpLastSentAt"
+    "+passwordHash role email name phone twoFactorEnabled accountBlocked tokenVersion adminPermissions +loginOtpCodeHash +loginOtpCodeExpiresAt +loginOtpAttempts +loginOtpLastSentAt"
   );
 }
 
@@ -97,6 +97,12 @@ async function findUserForEnable2faRequest(userId) {
 
 async function findUserForEnable2faVerify(userId) {
   return User.findById(userId).select("+twoFactorCodeHash +twoFactorCodeExpiresAt twoFactorEnabled");
+}
+
+async function findUserForProfileOtp(userId) {
+  return User.findById(userId).select(
+    "email name phone role +profileOtpCodeHash +profileOtpCodeExpiresAt +profileOtpPurpose +pendingEmail +pendingPhone +pendingName"
+  );
 }
 
 async function findUserForForgotPassword(emailLower) {
@@ -161,6 +167,7 @@ module.exports = {
   findUserWithPasswordHash,
   findUserForEnable2faRequest,
   findUserForEnable2faVerify,
+  findUserForProfileOtp,
   findUserForForgotPassword,
   setUserPasswordResetToken,
   findUserByValidPasswordResetToken,

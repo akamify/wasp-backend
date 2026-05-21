@@ -13,7 +13,11 @@ const loginSchema = Joi.object({
 
 async function login(req, res) {
   const payload = await loginSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
-  const result = await employeeAuthService.loginEmployee(payload);
+  const result = await employeeAuthService.loginEmployee({
+    ...payload,
+    ip: req.ip,
+    userAgent: req.headers["user-agent"] || "",
+  });
   res.json({ success: true, token: result.token, employee: result.employee });
 }
 
@@ -43,6 +47,14 @@ module.exports = {
   login: asyncHandler(login),
   forgotPassword: asyncHandler(forgotPassword),
   resetPassword: asyncHandler(resetPassword),
+  logout: asyncHandler(async (req, res) => {
+    await employeeAuthService.logoutEmployee({
+      workspaceId: req.workspace.id,
+      employeeId: req.employee.id,
+      ip: req.ip,
+      userAgent: req.headers["user-agent"] || "",
+    });
+    res.json({ success: true });
+  }),
   schemas: { loginSchema, forgotSchema, resetSchema },
 };
-

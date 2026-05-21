@@ -51,6 +51,7 @@ const UserSchema = new mongoose.Schema(
     profileOtpPurpose: { type: String, select: false },
     pendingEmail: { type: String, trim: true, lowercase: true, select: false },
     pendingPhone: { type: String, trim: true, select: false },
+    pendingName: { type: String, trim: true, select: false },
     loginOtpCodeHash: { type: String, select: false },
     loginOtpCodeExpiresAt: { type: Date, select: false },
     loginOtpAttempts: { type: Number, default: 0, select: false },

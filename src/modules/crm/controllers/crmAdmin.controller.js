@@ -82,7 +82,7 @@ async function listEmployees(req, res) {
       id: String(e._id),
       email: e.email,
       name: e.name || "",
-      role: e.role || "agent",
+      role: e.role || "employee",
       status: e.status,
       permissions: e.permissions || {},
       assignedChatsCount: Number(e.assignedChatsCount || 0),
@@ -96,7 +96,7 @@ async function listEmployees(req, res) {
 const createEmployeeSchema = Joi.object({
   email: Joi.string().email().required(),
   name: Joi.string().allow("").max(100).optional(),
-  role: Joi.string().allow("").max(50).optional(),
+  role: Joi.string().valid("employee", "team_leader").allow("").optional(),
   permissions: Joi.object().unknown(true).optional(),
 });
 
@@ -118,7 +118,7 @@ async function createEmployee(req, res) {
     email,
     passwordHash,
     name: payload.name || "",
-    role: payload.role || "agent",
+    role: payload.role || "employee",
     twoFactorEnabled: true,
     permissions: payload.permissions || undefined,
     createdBy: req.user.id,

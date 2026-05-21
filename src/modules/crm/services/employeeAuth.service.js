@@ -6,6 +6,7 @@ const { HttpError } = require("@shared/utils/httpError");
 const { sendEmail } = require("@shared/services/emailService");
 const { sha256Hex } = require("@shared/utils/hash");
 const employeeRepo = require("@modules/crm/repositories/employee.repository");
+const { EmployeeLoginEvent } = require("@infra/database/EmployeeLoginEvent");
 
 function signEmployeeToken({ employee, workspaceId }) {
   return jwt.sign(
@@ -28,7 +29,7 @@ function assertActiveEmployee(employee) {
   if (status === "BLOCKED") throw new HttpError(403, "Employee account is blocked");
 }
 
-async function loginEmployee({ workspaceId, email, password }) {
+async function loginEmployee({ workspaceId, email, password, ip, userAgent }) {
   const employee = await employeeRepo.findByEmail({
     workspaceId,
     email,
@@ -42,6 +43,15 @@ async function loginEmployee({ workspaceId, email, password }) {
   employee.lastLoginAt = new Date();
   await employee.save();
 
+  // Best-effort login audit trail for owner visibility.
+  EmployeeLoginEvent.create({
+    workspaceId,
+    employeeId: employee._id,
+    type: "login",
+    ip: String(ip || ""),
+    userAgent: String(userAgent || ""),
+  }).catch(() => {});
+
   return {
     token: signEmployeeToken({ employee, workspaceId }),
     employee: {
@@ -49,7 +59,7 @@ async function loginEmployee({ workspaceId, email, password }) {
       workspaceId: String(workspaceId),
       email: employee.email,
       name: employee.name || "",
-      role: employee.role || "agent",
+      role: employee.role || "employee",
       permissions: employee.permissions || {},
       lastLoginAt: employee.lastLoginAt || null,
     },
@@ -121,9 +131,31 @@ async function resetEmployeePassword({ token, newPassword }) {
   return { success: true };
 }
 
+async function logoutEmployee({ workspaceId, employeeId, ip, userAgent }) {
+  const employee = await employeeRepo.findById({
+    workspaceId,
+    employeeId,
+    select: "_id workspaceId status deletedAt sessionVersion",
+  });
+  assertActiveEmployee(employee);
+
+  employee.sessionVersion = Number(employee.sessionVersion || 0) + 1;
+  await employee.save();
+
+  await EmployeeLoginEvent.create({
+    workspaceId,
+    employeeId,
+    type: "logout",
+    ip: String(ip || ""),
+    userAgent: String(userAgent || ""),
+  }).catch(() => {});
+
+  return { success: true };
+}
+
 module.exports = {
   loginEmployee,
   forgotEmployeePassword,
   resetEmployeePassword,
+  logoutEmployee,
 };
-

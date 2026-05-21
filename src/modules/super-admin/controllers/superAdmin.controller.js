@@ -499,7 +499,9 @@ async function decideAdminProfileRequest(req, res) {
   if (!["approved", "rejected"].includes(decision)) throw new HttpError(400, "decision must be approved or rejected");
 
   const [admin, requestLog] = await Promise.all([
-    User.findOne({ _id: adminId, role: "admin" }).select("_id email name phone twoFactorEnabled tokenVersion"),
+    User.findOne({ _id: adminId, role: "admin" }).select(
+      "_id email name phone twoFactorEnabled tokenVersion +profileOtpCodeHash +profileOtpCodeExpiresAt +profileOtpPurpose +pendingEmail"
+    ),
     AuditLog.findById(requestId),
   ]);
   if (!admin) throw new HttpError(404, "Admin account not found");
@@ -513,9 +515,51 @@ async function decideAdminProfileRequest(req, res) {
   if (decision === "approved") {
     const changes = meta.requestedChanges && typeof meta.requestedChanges === "object" ? meta.requestedChanges : {};
     if (typeof changes.name === "string" && changes.name.trim()) admin.name = changes.name.trim();
-    if (typeof changes.email === "string" && changes.email.trim()) admin.email = changes.email.trim().toLowerCase();
+
+    let otpRequired = false;
+    let otpPurpose = "";
+
+    // Email change requires OTP verification by the admin after approval.
+    if (typeof changes.email === "string" && changes.email.trim()) {
+      admin.pendingEmail = changes.email.trim().toLowerCase();
+      const otp = String(Math.floor(100000 + Math.random() * 900000));
+      admin.profileOtpCodeHash = sha256Hex(otp);
+      admin.profileOtpCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      admin.profileOtpPurpose = "admin_profile_request_change_email";
+      otpRequired = true;
+      otpPurpose = "change_email";
+
+      await sendEmail({
+        toEmail: admin.email,
+        toName: admin.name || "",
+        subject: "Verify OTP to complete email change",
+        htmlContent: `<p>Your OTP to complete admin email change is <b>${otp}</b>. It expires in 10 minutes.</p>`,
+        textContent: `Your OTP to complete admin email change is ${otp}. It expires in 10 minutes.`,
+      }).catch(() => {});
+    }
     if (typeof changes.phone === "string") admin.phone = changes.phone.trim();
-    if (typeof changes.twoFactorEnabled === "boolean") admin.twoFactorEnabled = changes.twoFactorEnabled;
+
+    // Enabling 2FA requires OTP verification by the admin after approval.
+    if (typeof changes.twoFactorEnabled === "boolean") {
+      if (changes.twoFactorEnabled === true) {
+        const otp = String(Math.floor(100000 + Math.random() * 900000));
+        admin.profileOtpCodeHash = sha256Hex(otp);
+        admin.profileOtpCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+        admin.profileOtpPurpose = "admin_profile_request_enable_2fa";
+        otpRequired = true;
+        otpPurpose = "enable_2fa";
+
+        await sendEmail({
+          toEmail: admin.email,
+          toName: admin.name || "",
+          subject: "Verify OTP to enable 2FA",
+          htmlContent: `<p>Your OTP to enable 2FA is <b>${otp}</b>. It expires in 10 minutes.</p>`,
+          textContent: `Your OTP to enable 2FA is ${otp}. It expires in 10 minutes.`,
+        }).catch(() => {});
+      } else {
+        admin.twoFactorEnabled = false;
+      }
+    }
 
     if (changes.passwordReset) {
       const rawToken = base64Url(crypto.randomBytes(32));
@@ -532,16 +576,24 @@ async function decideAdminProfileRequest(req, res) {
         textContent: `Your password reset link: ${resetLink}`,
       });
     }
-    admin.tokenVersion = Number(admin.tokenVersion || 0) + 1;
-    await admin.save();
-    await writeAuditLog(req, {
-      action: "auth.force_logout",
-      actorId: req.user?.id,
-      targetId: admin._id,
-      resourceType: "auth",
-      resourceId: String(admin._id),
-      metadata: { status: "success", reason: "profile_request_approved_session_revoke" },
-    });
+    // If OTP is required, we don't apply the sensitive change yet. Admin must verify OTP.
+    if (!otpRequired) {
+      admin.tokenVersion = Number(admin.tokenVersion || 0) + 1;
+      await admin.save();
+      await writeAuditLog(req, {
+        action: "auth.force_logout",
+        actorId: req.user?.id,
+        targetId: admin._id,
+        resourceType: "auth",
+        resourceId: String(admin._id),
+        metadata: { status: "success", reason: "profile_request_approved_session_revoke" },
+      });
+    } else {
+      await admin.save();
+      meta.otpRequired = true;
+      meta.otpPurpose = otpPurpose;
+      meta.otpExpiresInSeconds = 600;
+    }
   }
 
   requestLog.action = decision === "approved" ? "profile.request.approved" : "profile.request.rejected";
@@ -549,7 +601,7 @@ async function decideAdminProfileRequest(req, res) {
   requestLog.resourceType = "profile_request";
   requestLog.metadata = {
     ...(meta || {}),
-    status: decision,
+    status: meta?.otpRequired ? "approved_pending_otp" : decision,
     reviewedBy: req.user?.id || "",
     reviewedAt: new Date().toISOString(),
     reviewNote,

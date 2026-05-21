@@ -40,7 +40,8 @@ async function employeeAuth(req, res, next) {
       workspaceId: String(employee.workspaceId),
       sessionVersion,
       permissions: employee.permissions || {},
-      role: employee.role || "agent",
+      // Back-compat: older employees may have role "agent". Treat it as employee in UI.
+      role: employee.role || "employee",
       name: employee.name || "",
       email: employee.email,
     };

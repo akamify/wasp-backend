@@ -6,7 +6,9 @@ const EmployeeSchema = new mongoose.Schema(
     email: { type: String, required: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true, select: false },
     name: { type: String, trim: true, default: "" },
-    role: { type: String, trim: true, default: "agent" },
+    // Only two roles are supported in UI: employee, team_leader.
+    // Keep as string for forward-compat; default must be employee.
+    role: { type: String, trim: true, default: "employee" },
     status: { type: String, enum: ["ACTIVE", "BLOCKED", "DISABLED", "DELETED"], default: "ACTIVE", index: true },
     twoFactorEnabled: { type: Boolean, default: true },
     permissions: {
@@ -31,6 +33,12 @@ const EmployeeSchema = new mongoose.Schema(
     // Password reset
     passwordResetTokenHash: { type: String, select: false },
     passwordResetTokenExpiresAt: { type: Date, select: false },
+
+    // Owner-approved profile changes (OTP where required)
+    profileOtpCodeHash: { type: String, select: false },
+    profileOtpCodeExpiresAt: { type: Date, select: false },
+    profileOtpPurpose: { type: String, select: false },
+    pendingEmail: { type: String, trim: true, lowercase: true, select: false },
 
     // Soft delete
     deletedAt: { type: Date, default: null },

@@ -5,6 +5,7 @@ const { HttpError } = require("@shared/utils/httpError");
 const { writeAuditLog } = require("@shared/services/auditLog.service");
 const { sendEmail } = require("@shared/services/emailService");
 const { superAdminEmail } = require("@core/config/env");
+const { sha256Hex } = require("@shared/utils/hash");
 
 function parsePaging(req) {
   const page = Math.max(1, Number(req.query.page || 1) || 1);
@@ -136,5 +137,105 @@ async function adminListProfileRequests(req, res) {
   res.json({ success: true, items, page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) });
 }
 
-module.exports = { adminGetProfile, adminUpdateProfile, adminListLoginEvents, adminCreateProfileRequest, adminListProfileRequests };
+const verifyOtpSchema = Joi.object({
+  otp: Joi.string().pattern(/^\d{6}$/).required(),
+});
+
+async function adminVerifyProfileRequestOtp(req, res) {
+  const payload = await verifyOtpSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
+  const requestId = String(req.params.requestId || "").trim();
+
+  const [adminUser, requestLog] = await Promise.all([
+    User.findById(req.user.id).select(
+      "email name role twoFactorEnabled tokenVersion +profileOtpCodeHash +profileOtpCodeExpiresAt +profileOtpPurpose +pendingEmail"
+    ),
+    AuditLog.findById(requestId),
+  ]);
+  if (!adminUser || String(adminUser.role || "") !== "admin") throw new HttpError(404, "Admin account not found");
+  if (!requestLog) throw new HttpError(404, "Profile request not found");
+  if (String(requestLog.actorId || "") !== String(adminUser._id)) throw new HttpError(403, "Request does not belong to this admin");
+
+  const meta = requestLog.metadata && typeof requestLog.metadata === "object" ? requestLog.metadata : {};
+  if (String(meta.status || "") !== "approved_pending_otp") throw new HttpError(400, "OTP verification is not required for this request");
+
+  if (!adminUser.profileOtpCodeHash || !adminUser.profileOtpCodeExpiresAt || adminUser.profileOtpCodeExpiresAt < new Date()) {
+    throw new HttpError(400, "OTP expired. Ask super admin to approve again.");
+  }
+  if (sha256Hex(String(payload.otp)) !== adminUser.profileOtpCodeHash) throw new HttpError(401, "Invalid OTP");
+
+  const otpPurpose = String(meta.otpPurpose || "");
+  if (otpPurpose === "change_email") {
+    if (!adminUser.pendingEmail) throw new HttpError(400, "No pending email change found");
+    adminUser.email = String(adminUser.pendingEmail).toLowerCase();
+    adminUser.pendingEmail = undefined;
+  } else if (otpPurpose === "enable_2fa") {
+    adminUser.twoFactorEnabled = true;
+  } else {
+    throw new HttpError(400, "Invalid OTP purpose");
+  }
+
+  adminUser.profileOtpCodeHash = undefined;
+  adminUser.profileOtpCodeExpiresAt = undefined;
+  adminUser.profileOtpPurpose = undefined;
+  adminUser.tokenVersion = Number(adminUser.tokenVersion || 0) + 1;
+  await adminUser.save();
+
+  requestLog.metadata = {
+    ...(meta || {}),
+    status: "approved",
+    appliedAt: new Date().toISOString(),
+  };
+  await requestLog.save();
+
+  await writeAuditLog(req, {
+    action: "auth.force_logout",
+    actorId: req.user?.id,
+    targetId: adminUser._id,
+    resourceType: "auth",
+    resourceId: String(adminUser._id),
+    metadata: { status: "success", reason: "admin_profile_request_otp_verified_session_revoke" },
+  });
+
+  res.json({ success: true, message: "OTP verified and changes applied." });
+}
+
+async function adminResendProfileRequestOtp(req, res) {
+  const requestId = String(req.params.requestId || "").trim();
+  const [adminUser, requestLog] = await Promise.all([
+    User.findById(req.user.id).select("email name role +profileOtpCodeHash +profileOtpCodeExpiresAt +profileOtpPurpose"),
+    AuditLog.findById(requestId),
+  ]);
+  if (!adminUser || String(adminUser.role || "") !== "admin") throw new HttpError(404, "Admin account not found");
+  if (!requestLog) throw new HttpError(404, "Profile request not found");
+  if (String(requestLog.actorId || "") !== String(adminUser._id)) throw new HttpError(403, "Request does not belong to this admin");
+
+  const meta = requestLog.metadata && typeof requestLog.metadata === "object" ? requestLog.metadata : {};
+  if (String(meta.status || "") !== "approved_pending_otp") throw new HttpError(400, "OTP resend is not available for this request");
+
+  const otp = String(Math.floor(100000 + Math.random() * 900000));
+  adminUser.profileOtpCodeHash = sha256Hex(otp);
+  adminUser.profileOtpCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  adminUser.profileOtpPurpose = String(meta.otpPurpose || "") === "enable_2fa" ? "admin_profile_request_enable_2fa" : "admin_profile_request_change_email";
+  await adminUser.save();
+
+  await sendEmail({
+    toEmail: adminUser.email,
+    toName: adminUser.name || "Admin",
+    subject: "Your OTP code",
+    htmlContent: `<p>Your OTP is <b>${otp}</b>. It expires in 10 minutes.</p>`,
+    textContent: `Your OTP is ${otp}. It expires in 10 minutes.`,
+  }).catch(() => {});
+
+  res.json({ success: true, message: "OTP resent" });
+}
+
+module.exports = {
+  adminGetProfile,
+  adminUpdateProfile,
+  adminListLoginEvents,
+  adminCreateProfileRequest,
+  adminListProfileRequests,
+  adminVerifyProfileRequestOtp,
+  adminResendProfileRequestOtp,
+};
 

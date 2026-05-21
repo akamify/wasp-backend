@@ -159,6 +159,39 @@ async function disable2fa(req, res) {
   res.json(await profileService.disable2fa({ userId: req.user.id }));
 }
 
+async function requestProfileOtp(req, res) {
+  const out = await profileService.requestProfileOtp({
+    userId: req.user.id,
+    purpose: req.body?.purpose,
+    email: req.body?.email,
+    name: req.body?.name,
+  });
+  if (out?.success) {
+    await writeAuditLog(req, {
+      action: "profile.otp.sent",
+      actorId: req.user.id,
+      targetId: req.user.id,
+      resourceType: "profile",
+      metadata: { purpose: String(req.body?.purpose || "") },
+    });
+  }
+  res.json(out);
+}
+
+async function verifyProfileOtp(req, res) {
+  const out = await profileService.verifyProfileOtp({ userId: req.user.id, otp: req.body?.otp });
+  if (out?.success) {
+    await writeAuditLog(req, {
+      action: "profile.otp.verified",
+      actorId: req.user.id,
+      targetId: req.user.id,
+      resourceType: "profile",
+      metadata: {},
+    });
+  }
+  res.json(out);
+}
+
 module.exports = {
   register,
   login,
@@ -175,6 +208,8 @@ module.exports = {
   requestEnable2fa,
   verifyEnable2fa,
   disable2fa,
+  requestProfileOtp,
+  verifyProfileOtp,
   logout,
   forgotPassword,
   resetPassword,

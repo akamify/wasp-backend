@@ -53,6 +53,16 @@ const verifyEnable2faSchema = Joi.object({
   otp: Joi.string().pattern(/^\d{6}$/).required(),
 });
 
+const requestProfileOtpSchema = Joi.object({
+  purpose: Joi.string().valid("change_email", "change_name").required(),
+  email: Joi.string().email().optional(),
+  name: Joi.string().max(120).optional(),
+});
+
+const verifyProfileOtpSchema = Joi.object({
+  otp: Joi.string().pattern(/^\d{6}$/).required(),
+});
+
 module.exports = {
   registerSchema,
   loginSchema,
@@ -65,5 +75,7 @@ module.exports = {
   updateProfileSchema,
   changePasswordSchema,
   verifyEnable2faSchema,
+  requestProfileOtpSchema,
+  verifyProfileOtpSchema,
 };
 
