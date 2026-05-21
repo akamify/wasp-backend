@@ -8,6 +8,7 @@ const EmployeeSchema = new mongoose.Schema(
     name: { type: String, trim: true, default: "" },
     role: { type: String, trim: true, default: "agent" },
     status: { type: String, enum: ["ACTIVE", "BLOCKED", "DISABLED", "DELETED"], default: "ACTIVE", index: true },
+    twoFactorEnabled: { type: Boolean, default: true },
     permissions: {
       canReply: { type: Boolean, default: true },
       canViewMedia: { type: Boolean, default: true },
@@ -43,4 +44,3 @@ EmployeeSchema.index({ workspaceId: 1, status: 1, createdAt: -1 });
 const Employee = mongoose.model("Employee", EmployeeSchema);
 
 module.exports = { Employee };
-

@@ -17,8 +17,9 @@ async function listUsers(req) {
       }
     : {};
 
-  const roleFilter =
-    filterKey === "admin" ? { role: "admin" } : filterKey === "member" ? { role: "user" } : {};
+  // User management list must strictly contain platform users only.
+  // Admin/super_admin identities are intentionally excluded.
+  const roleFilter = { role: "user" };
 
   // Back-compat: older DBs won't have `status`. Treat missing as active.
   const statusFilter =

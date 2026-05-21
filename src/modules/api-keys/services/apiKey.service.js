@@ -30,13 +30,18 @@ async function listMyApiKeys({ userId }) {
 }
 
 async function generateApiKey({ userId, name }) {
+  const user = await repo.findUserById(userId, "allowedApiPermissions");
+  if (!user) throw new HttpError(404, "User not found");
   const raw = generateApiKeyRaw();
   const keyHash = sha256Hex(raw);
   const created = await repo.addApiKey({
     userId,
     keyHash,
     name: name || "Primary key",
-    permissions: { campaignSend: true, chatAccess: false },
+    permissions: {
+      campaignSend: user?.allowedApiPermissions?.campaignSend !== false,
+      chatAccess: Boolean(user?.allowedApiPermissions?.chatAccess),
+    },
   });
   if (!created) throw new HttpError(404, "User not found");
   return { success: true, apiKey: raw, key: normalizeKeyItem(created) };

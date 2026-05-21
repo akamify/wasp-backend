@@ -69,6 +69,46 @@ function getDocPayloadFromPage(page) {
   return root;
 }
 
+function collectDeepObjects(root, maxDepth = 3) {
+  const out = [];
+  const queue = [{ node: root, depth: 0 }];
+  const seen = new Set();
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || !current.node || typeof current.node !== "object") continue;
+    if (seen.has(current.node)) continue;
+    seen.add(current.node);
+    out.push(current.node);
+    if (current.depth >= maxDepth) continue;
+    for (const value of Object.values(current.node)) {
+      if (value && typeof value === "object") queue.push({ node: value, depth: current.depth + 1 });
+    }
+  }
+  return out;
+}
+
+function pickFirstNonEmptyString(objects, keys) {
+  for (const key of keys) {
+    for (const obj of objects) {
+      const value = obj?.[key];
+      if (typeof value === "string" && value.trim()) return value;
+    }
+  }
+  return "";
+}
+
+function extractBlockContent(objects) {
+  for (const obj of objects) {
+    if (!Array.isArray(obj?.blocks)) continue;
+    const text = obj.blocks
+      .map((b) => String(b?.snippet || b?.content || b?.text || b?.body || "").trim())
+      .filter(Boolean)
+      .join("\n\n");
+    if (text) return text;
+  }
+  return "";
+}
+
 async function resolveDocPageByIdentifier(identifier) {
   const raw = String(identifier || "").trim();
   if (!raw) return null;
@@ -93,62 +133,61 @@ async function resolveDocPageByIdentifier(identifier) {
 
 function normalizeDocFromPage(page) {
   const d = getDocPayloadFromPage(page);
+  const objects = collectDeepObjects(d, 4);
   const rawSlug = String(page?.slug || "");
   const normalizedSlug = rawSlug.startsWith(DOC_PREFIX)
     ? rawSlug.slice(DOC_PREFIX.length)
     : rawSlug.startsWith(LEGACY_DOC_PATH_PREFIX)
     ? rawSlug.slice(LEGACY_DOC_PATH_PREFIX.length)
     : rawSlug;
-  const extractString = (...values) => {
-    for (const value of values) {
-      if (typeof value === "string" && value.trim()) return value;
-    }
-    return "";
-  };
-  const blockContent = Array.isArray(d.blocks)
-    ? d.blocks
-        .map((b) => String(b?.snippet || b?.content || b?.text || "").trim())
-        .filter(Boolean)
-        .join("\n\n")
-    : "";
-  const normalizedContent = extractString(
-    d.content,
-    d.bodyMarkdown,
-    d.introMarkdown,
-    d.markdown,
-    d.contentMarkdown,
-    d.rawMarkdown,
-    d.rawContent,
-    d.body,
-    blockContent
-  );
-  const normalizedDescription = extractString(d.description, d?.hero?.subtitle, d.summary, d.excerpt);
-  const normalizedCategory = String(d.category || d?.sidebar?.section || "general");
-  const normalizedStatus = ["draft", "published"].includes(String(d.status || "").toLowerCase())
-    ? String(d.status || "").toLowerCase()
+  const blockContent = extractBlockContent(objects);
+  const normalizedContent =
+    pickFirstNonEmptyString(objects, [
+      "content",
+      "bodyMarkdown",
+      "introMarkdown",
+      "markdown",
+      "contentMarkdown",
+      "rawMarkdown",
+      "rawContent",
+      "body",
+      "text",
+    ]) || blockContent;
+  const normalizedDescription = pickFirstNonEmptyString(objects, ["description", "subtitle", "summary", "excerpt"]);
+  const normalizedCategory = String(pickFirstNonEmptyString(objects, ["category"]) || d?.sidebar?.section || "general");
+  const statusCandidate = String(pickFirstNonEmptyString(objects, ["status"]) || "").toLowerCase();
+  const normalizedStatus = ["draft", "published"].includes(statusCandidate)
+    ? statusCandidate
     : d?.published === true
     ? "published"
     : "draft";
+  const titleCandidate = pickFirstNonEmptyString(objects, ["title", "name", "heading"]);
+  const seoTitleCandidate = pickFirstNonEmptyString(objects, ["metaTitle"]);
+  const seoDescriptionCandidate = pickFirstNonEmptyString(objects, ["metaDescription"]);
+  const seoImageCandidate = pickFirstNonEmptyString(objects, ["ogImage"]);
+  const noIndexCandidate = objects.some((obj) => obj && typeof obj.noIndex === "boolean") ? !!objects.find((obj) => typeof obj?.noIndex === "boolean")?.noIndex : false;
+  const keywordsCandidate = objects.find((obj) => Array.isArray(obj?.keywords))?.keywords;
+
   return {
     id: String(page._id),
-    title: String(d.title || page?.title || ""),
+    title: String(titleCandidate || page?.title || ""),
     slug: String(d.slug || normalizedSlug),
     description: normalizedDescription,
     content: normalizedContent,
-    keywords: Array.isArray(d.keywords) ? d.keywords : [],
+    keywords: Array.isArray(keywordsCandidate) ? keywordsCandidate : [],
     category: normalizedCategory,
-    order: Number(d.order || 0),
+    order: Number(objects.find((obj) => typeof obj?.order === "number")?.order || 0),
     status: normalizedStatus,
     sidebar: {
-      section: String(d?.sidebar?.section || normalizedCategory || "general"),
-      sectionOrder: Number(d?.sidebar?.sectionOrder || 0),
-      itemOrder: Number(d?.sidebar?.itemOrder || 0),
+      section: String(objects.find((obj) => typeof obj?.sidebar?.section === "string")?.sidebar?.section || normalizedCategory || "general"),
+      sectionOrder: Number(objects.find((obj) => typeof obj?.sidebar?.sectionOrder === "number")?.sidebar?.sectionOrder || 0),
+      itemOrder: Number(objects.find((obj) => typeof obj?.sidebar?.itemOrder === "number")?.sidebar?.itemOrder || 0),
     },
     seo: {
-      metaTitle: String(d?.seo?.metaTitle || d.title || ""),
-      metaDescription: String(d?.seo?.metaDescription || d.description || ""),
-      ogImage: String(d?.seo?.ogImage || ""),
-      noIndex: !!d?.seo?.noIndex,
+      metaTitle: String(seoTitleCandidate || titleCandidate || ""),
+      metaDescription: String(seoDescriptionCandidate || normalizedDescription || ""),
+      ogImage: String(seoImageCandidate || ""),
+      noIndex: noIndexCandidate,
     },
     createdAt: page.createdAt,
     updatedAt: page.updatedAt,
@@ -169,21 +208,22 @@ function isLegacyDocPage(page) {
 function isDocLikePayload(data) {
   if (!data || typeof data !== "object") return false;
   const source = getDocPayloadFromPage({ data });
+  const objects = collectDeepObjects(source, 4);
+  const hasDocType = String(source?.__type || source?.type || "").toLowerCase() === "doc";
+  const hasMarkdown = Boolean(
+    pickFirstNonEmptyString(objects, ["content", "bodyMarkdown", "introMarkdown", "markdown", "contentMarkdown", "rawMarkdown", "rawContent", "body"])
+  );
+  const hasDocFields = objects.some(
+    (obj) =>
+      typeof obj?.status === "string" ||
+      typeof obj?.category === "string" ||
+      Array.isArray(obj?.keywords) ||
+      !!obj?.sidebar ||
+      !!obj?.seo ||
+      Array.isArray(obj?.blocks)
+  );
   const hasDocSlug = Boolean(String(source.slug || "").trim());
-  const hasDocStatus = ["draft", "published"].includes(String(source.status || "").trim().toLowerCase());
-  const content = String(source.content || source.bodyMarkdown || source.introMarkdown || "").trim();
-  const title = String(source.title || "").trim();
-  const description = String(source.description || "").trim();
-  const hasContent = Object.prototype.hasOwnProperty.call(source, "content") || Object.prototype.hasOwnProperty.call(source, "bodyMarkdown");
-  const hasKeywords = Array.isArray(source.keywords);
-  const hasSidebar = !!(source.sidebar && typeof source.sidebar === "object");
-  const hasSeo = !!(source.seo && typeof source.seo === "object");
-  const hasMeaningfulDocFields =
-    Boolean(title) ||
-    Boolean(description) ||
-    Boolean(content) ||
-    (Array.isArray(source.keywords) && source.keywords.length > 0);
-  return hasDocSlug && hasDocStatus && (hasContent || hasKeywords || hasSidebar || hasSeo) && hasMeaningfulDocFields;
+  return hasDocType || hasMarkdown || (hasDocSlug && hasDocFields);
 }
 
 function isDocPage(page) {

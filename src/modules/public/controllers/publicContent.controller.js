@@ -10,6 +10,9 @@ const {
 } = require("@shared/utils/emailTemplates");
 const { storeBufferToUploads } = require("@shared/utils/fileStorage");
 const { isCloudinaryConfigured, uploadBufferToCloudinary } = require("@shared/services/cloudinaryService");
+const { appBrandName, appBrandLogoUrl } = require("@core/config/env");
+
+const PLATFORM_BRAND_SLUG = "__platform_brand__";
 
 function normalizeSlug(slug) {
   return String(slug || "")
@@ -225,5 +228,20 @@ async function applyCareer(req, res) {
   });
 }
 
-module.exports = { getPublicPage, createSupportTicket, applyCareer, normalizeSlug };
+async function getPublicPlatformBrand(req, res) {
+  const page = await PublicPage.findOne({ slug: PLATFORM_BRAND_SLUG }).select("data updatedAt");
+  return res.json({
+    success: true,
+    settings: {
+      brandName: String(page?.data?.brandName || appBrandName || "DigitalWasp"),
+      brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
+    },
+    meta: {
+      source: page ? "db" : "env",
+      updatedAt: page?.updatedAt || null,
+    },
+  });
+}
+
+module.exports = { getPublicPage, createSupportTicket, applyCareer, getPublicPlatformBrand, normalizeSlug };
 

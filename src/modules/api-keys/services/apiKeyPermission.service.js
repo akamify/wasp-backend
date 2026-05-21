@@ -13,6 +13,8 @@ async function enableChatAccess({ adminUserId, userId }) {
     },
   });
   if (!updated) throw new HttpError(404, "User not found");
+  await repo.syncAllApiKeysChatAccess({ userId, enabled: true });
+  await repo.syncWorkspaceChatAccessByOwner({ ownerId: userId, enabled: true });
   return { success: true };
 }
 
@@ -22,6 +24,8 @@ async function disableChatAccess({ userId }) {
     patch: { $set: { "allowedApiPermissions.chatAccess": false } },
   });
   if (!updated) throw new HttpError(404, "User not found");
+  await repo.syncAllApiKeysChatAccess({ userId, enabled: false });
+  await repo.syncWorkspaceChatAccessByOwner({ ownerId: userId, enabled: false });
   return { success: true };
 }
 

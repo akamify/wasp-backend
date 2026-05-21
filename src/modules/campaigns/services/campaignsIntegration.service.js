@@ -16,6 +16,12 @@ const { sendTemplateMessageForUser } = require("@shared/services/outboundMessage
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 
+function buildPublicRequestId() {
+    const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+    const rand = Math.random().toString(36).slice(2, 8);
+    return `api_${stamp}_${rand}`;
+}
+
 async function resolveWorkspaceIdFromApiKeyUser(req) {
     const workspaceIdHeader = req.headers["x-workspace-id"];
     if (workspaceIdHeader) {
@@ -30,6 +36,7 @@ async function resolveWorkspaceIdFromApiKeyUser(req) {
 }
 
 async function sendApiCampaignByName(req) {
+    const requestId = buildPublicRequestId();
     const workspaceId = await resolveWorkspaceIdFromApiKeyUser(req);
 
     const campaignName = String(req.body?.campaignName || "").trim();
@@ -90,6 +97,9 @@ async function sendApiCampaignByName(req) {
     const delayMs = req.body?.scheduledAt ? Math.max(new Date(req.body.scheduledAt).getTime() - Date.now(), 0) : 0;
 
     let queuedToRedis = true;
+    let processedInline = false;
+    let inlineSentCount = 0;
+    let inlineFailedCount = 0;
     try {
         await enqueueCampaignRecipients({
             workspaceId,
@@ -115,6 +125,7 @@ async function sendApiCampaignByName(req) {
         }
 
         if (!queuedToRedis || !hasWorkers) {
+            processedInline = true;
             let sentCount = 0;
             let failedCount = 0;
             let lastFailure = null;
@@ -184,10 +195,17 @@ async function sendApiCampaignByName(req) {
                     );
                 }
             }
+            inlineSentCount = sentCount;
+            inlineFailedCount = failedCount;
 
             const done = await require("@infra/database/Campaign").Campaign.findOne({ _id: apiCampaign._id, workspaceId }).select("totals");
             const queued = Number(done?.totals?.queued || 0);
-            const nextStatus = queued === 0 && failedCount > 0 && sentCount === 0 ? "failed" : "running";
+            let nextStatus = "running";
+            if (queued === 0) {
+                if (sentCount > 0 && failedCount === 0) nextStatus = "completed";
+                else if (sentCount > 0 && failedCount > 0) nextStatus = "completed";
+                else if (failedCount > 0) nextStatus = "failed";
+            }
             await require("@infra/database/Campaign").Campaign.updateOne(
                 { _id: apiCampaign._id, workspaceId },
                 { $set: { status: nextStatus, ...(lastFailure ? { lastError: { message: lastFailure?.message || "Failed" } } : {}) } }
@@ -197,7 +215,42 @@ async function sendApiCampaignByName(req) {
 
     const refreshed = await require("@infra/database/Campaign").Campaign.findOne({ _id: apiCampaign._id, workspaceId });
     emitCampaignEvent(CAMPAIGN_EVENTS.PROCESSING, { campaignId: String(apiCampaign._id), workspaceId });
-    return { success: true, campaign: refreshed, estimate };
+
+    const requestTotals = processedInline
+        ? {
+            totalRecipients: recipients.length,
+            queued: 0,
+            sent: inlineSentCount,
+            failed: inlineFailedCount,
+        }
+        : {
+            totalRecipients: recipients.length,
+            queued: recipients.length,
+            sent: 0,
+            failed: 0,
+        };
+
+    const billing = {
+        billableRecipients: Number(estimate.billableRecipients || 0),
+        freeRecipients: Number(estimate.freeRecipients || 0),
+        estimatedCredits: Number(estimate.estimatedCredits || 0),
+    };
+
+    return {
+        success: true,
+        message: processedInline ? "Campaign send request processed successfully." : "Campaign send request accepted.",
+        data: {
+            requestId,
+            campaign: {
+                id: String(refreshed?._id || apiCampaign._id),
+                name: String(refreshed?.name || apiCampaign.name || ""),
+                type: String(refreshed?.type || apiCampaign.type || "api"),
+                status: String(refreshed?.status || "running"),
+            },
+            request: requestTotals,
+            billing,
+        },
+    };
 }
 
 module.exports = { sendApiCampaignByName };

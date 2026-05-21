@@ -10,36 +10,96 @@ const { sha256Hex } = require("@shared/utils/hash");
 const { base64Url } = require("@modules/auth/auth.utils");
 const { superAdminEmail } = require("@core/config/env");
 const { normalizeStatus, validateAdminStatusTransition } = require("@shared/utils/userStatus");
+const STRONG_PASS_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s]).{8}$/;
+
+function generateStrongTempPassword(length = 8) {
+  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const lower = "abcdefghijkmnopqrstuvwxyz";
+  const digits = "23456789";
+  const special = "!@#$%^&*";
+  const all = `${upper}${lower}${digits}${special}`;
+
+  const pick = (chars) => chars[Math.floor(Math.random() * chars.length)];
+  let pass = [pick(upper), pick(lower), pick(digits), pick(special)];
+  while (pass.length < length) pass.push(pick(all));
+  for (let i = pass.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pass[i], pass[j]] = [pass[j], pass[i]];
+  }
+  const out = pass.join("");
+  if (!STRONG_PASS_REGEX.test(out)) return generateStrongTempPassword(length);
+  return out;
+}
 
 async function assignAdmin(req, res) {
   const email = String(req.body?.email || "").trim().toLowerCase();
+  const name = String(req.body?.name || "").trim();
   if (!email) throw new HttpError(400, "Email is required");
 
-  const user = await User.findOne({ email }).select("_id email role status accountBlocked");
-  if (!user) throw new HttpError(404, "User not found. Create admin account first with a unique admin email.");
-  if (String(user.role || "") !== "admin") {
+  let user = await User.findOne({ email }).select("_id email name role status accountBlocked adminPermissions twoFactorEnabled +passwordHash");
+  if (user && String(user.role || "") !== "admin") {
     throw new HttpError(400, "Role migration is blocked. This email is already registered with another role.");
   }
-  if (String(user.role || "") === "super_admin") throw new HttpError(400, "Super admin role cannot be changed");
+  if (user && String(user.role || "") === "super_admin") throw new HttpError(400, "Super admin role cannot be changed");
 
-  user.role = "admin";
-  user.status = "active";
-  user.terminationState = "";
-  user.accountBlocked = false;
-  if (!user.adminPermissions) {
-    user.adminPermissions = { pages: [], components: [], actions: [] };
+  const tempPassword = generateStrongTempPassword(8);
+  const passwordHash = await bcrypt.hash(tempPassword, 12);
+
+  if (!user) {
+    user = await User.create({
+      email,
+      name: name || "Admin User",
+      passwordHash,
+      role: "admin",
+      status: "active",
+      terminationState: "",
+      accountBlocked: false,
+      twoFactorEnabled: true,
+      adminPermissions: { pages: ["/admin/dashboard", "/admin/profile"], components: [], actions: [] },
+    });
+  } else {
+    if (name) user.name = name;
+    user.passwordHash = passwordHash;
+    user.role = "admin";
+    user.status = "active";
+    user.terminationState = "";
+    user.accountBlocked = false;
+    user.twoFactorEnabled = true;
+    if (!user.adminPermissions) {
+      user.adminPermissions = { pages: ["/admin/dashboard", "/admin/profile"], components: [], actions: [] };
+    }
+    await user.save();
   }
-  await user.save();
+
+  await sendEmail({
+    toEmail: email,
+    toName: user.name || "",
+    subject: "Admin account credentials",
+    htmlContent: `
+      <div style="font-family:Arial,sans-serif;line-height:1.6;color:#0f172a">
+        <h2 style="margin:0 0 12px">Admin Access Assigned</h2>
+        <p>Email: <b>${email}</b></p>
+        <p>Temporary Password: <b>${tempPassword}</b></p>
+        <p>2FA is enabled by default on your account.</p>
+        <p style="font-size:12px;color:#64748b">Please login and update your password from profile.</p>
+      </div>
+    `,
+    textContent: `Admin Access Assigned\nEmail: ${email}\nTemporary Password: ${tempPassword}\n2FA is enabled by default.\nPlease login and update your password from profile.`,
+  });
 
   await writeAuditLog(req, {
     action: "admin.assigned",
     targetId: user._id,
     resourceType: "user",
     resourceId: String(user._id),
-    metadata: { email: user.email },
+    metadata: { email: user.email, twoFactorEnabled: true },
   });
 
-  return res.json({ success: true, user: { id: String(user._id), email: user.email, role: user.role } });
+  return res.json({
+    success: true,
+    user: { id: String(user._id), email: user.email, role: user.role, twoFactorEnabled: !!user.twoFactorEnabled },
+    message: "Admin assigned. Login credentials sent on email.",
+  });
 }
 
 async function removeAdmin(req, res) {

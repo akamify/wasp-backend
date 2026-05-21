@@ -33,6 +33,7 @@ module.exports = {
   adminName: process.env.ADMIN_NAME || "Whasp Admin",
   superAdminEmail: String(process.env.SUPER_ADMIN_EMAIL || "").trim().toLowerCase(),
   appBrandName: process.env.APP_BRAND_NAME || "DigitalWhasp",
+  appBrandLogoUrl: process.env.APP_BRAND_LOGO_URL || "",
   appBaseUrl:
     process.env.FRONTEND_BASE_URL ||
     process.env.APP_BASE_URL ||

@@ -9,8 +9,19 @@ const { sendEmail } = require("@shared/services/emailService");
 const { writeAuditLog } = require("@shared/services/auditLog.service");
 
 function randomPassword() {
-  // 12 char password: URL-safe base64 slice.
-  return crypto.randomBytes(18).toString("base64url").slice(0, 12);
+  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const lower = "abcdefghijkmnopqrstuvwxyz";
+  const digits = "23456789";
+  const special = "!@#$%^&*";
+  const all = `${upper}${lower}${digits}${special}`;
+  const pick = (chars) => chars[Math.floor(Math.random() * chars.length)];
+  let pass = [pick(upper), pick(lower), pick(digits), pick(special)];
+  while (pass.length < 8) pass.push(pick(all));
+  for (let i = pass.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pass[i], pass[j]] = [pass[j], pass[i]];
+  }
+  return pass.join("");
 }
 
 const toggleCrmSchema = Joi.object({
@@ -108,6 +119,7 @@ async function createEmployee(req, res) {
     passwordHash,
     name: payload.name || "",
     role: payload.role || "agent",
+    twoFactorEnabled: true,
     permissions: payload.permissions || undefined,
     createdBy: req.user.id,
   });
@@ -119,10 +131,11 @@ async function createEmployee(req, res) {
       <p>Workspace: <b>${String(workspace.name || "")}</b></p>
       <p>Email: <b>${email}</b></p>
       <p>Password: <b>${password}</b></p>
+      <p>2FA is enabled by default.</p>
       <p style="font-size:12px;color:#64748b">Please change the password after first login.</p>
     </div>
   `;
-  const text = `Workspace: ${workspace.name}\nEmail: ${email}\nPassword: ${password}\n`;
+  const text = `Workspace: ${workspace.name}\nEmail: ${email}\nPassword: ${password}\n2FA: enabled by default\n`;
 
   // Email both owner and employee (best-effort; do not block creation).
   await Promise.allSettled([

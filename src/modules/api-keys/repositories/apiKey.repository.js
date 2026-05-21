@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const { User } = require("@infra/database/User");
+const { Workspace } = require("@infra/database/Workspace");
 
 async function findUserById(userId, select = "") {
   return User.findById(userId).select(select);
@@ -71,6 +72,21 @@ async function updateUserSecurityFlags({ userId, patch }) {
   return User.findByIdAndUpdate(userId, patch, { new: true }).select("accountBlocked tokenVersion allowedApiPermissions chatAccessEnabledBy chatAccessEnabledAt");
 }
 
+async function syncAllApiKeysChatAccess({ userId, enabled }) {
+  await User.updateOne(
+    { _id: userId, "apiKeys.0": { $exists: true } },
+    { $set: { "apiKeys.$[k].permissions.chatAccess": !!enabled } },
+    { arrayFilters: [{ "k.revoked": { $ne: true } }] }
+  );
+}
+
+async function syncWorkspaceChatAccessByOwner({ ownerId, enabled }) {
+  await Workspace.updateMany(
+    { ownerId, isActive: true },
+    { $set: { "allowedApiPermissions.chatAccess": !!enabled } }
+  );
+}
+
 async function clearLegacyApiKey({ userId }) {
   return User.findByIdAndUpdate(
     userId,
@@ -109,6 +125,8 @@ module.exports = {
   updateApiKeyState,
   updateApiKeyPermissions,
   updateUserSecurityFlags,
+  syncAllApiKeysChatAccess,
+  syncWorkspaceChatAccessByOwner,
   clearLegacyApiKey,
   setApiKeyOtp,
   findUserForApiKeyOtp,

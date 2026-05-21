@@ -32,6 +32,9 @@ const {
   adminCareerApplications,
   adminUpdateCareerApplication,
   adminDownloadResume,
+  adminGetPlatformBrand,
+  adminUpdatePlatformBrand,
+  adminUploadPlatformBrandLogo,
 } = require("@modules/admin/controllers/adminContent.controller");
 
 const {
@@ -60,6 +63,10 @@ const { buildMemoryUpload } = require("@shared/utils/multerUpload");
 
 const router = express.Router();
 const docsBrandUpload = buildMemoryUpload({
+  maxFileSizeBytes: 5 * 1024 * 1024,
+  allowedMimeTypes: ["image/png", "image/jpeg", "image/webp", "image/svg+xml"],
+});
+const platformBrandUpload = buildMemoryUpload({
   maxFileSizeBytes: 5 * 1024 * 1024,
   allowedMimeTypes: ["image/png", "image/jpeg", "image/webp", "image/svg+xml"],
 });
@@ -133,6 +140,15 @@ router.post("/profile/requests", p("/admin/profile"), asyncHandler(adminCreatePr
 router.get("/pages", p("/admin/pages"), asyncHandler(adminListPages));
 router.get("/pages/:slug", p("/admin/pages"), asyncHandler(adminGetPage));
 router.put("/pages/:slug", c("pages.edit"), asyncHandler(adminUpsertPage));
+router.get("/platform-brand", p("/admin/pages"), asyncHandler(adminGetPlatformBrand));
+router.put("/platform-brand", requireSuperAdmin, c("pages.edit"), asyncHandler(adminUpdatePlatformBrand));
+router.post(
+  "/platform-brand/upload-logo",
+  requireSuperAdmin,
+  c("pages.edit"),
+  platformBrandUpload.single("file"),
+  asyncHandler(adminUploadPlatformBrandLogo)
+);
 
 // Careers
 router.get("/career-applications", p("/admin/career-applications"), asyncHandler(adminCareerApplications));

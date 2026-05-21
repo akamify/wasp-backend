@@ -5,10 +5,14 @@ const { auth } = require("@core/middleware/auth");
 const { requireSuperAdmin } = require("@core/middleware/requireRole");
 const { validate } = require("@core/middleware/validate");
 const c = require("@modules/super-admin/controllers/superAdmin.controller");
+const platformSettingsRoutes = require("@modules/platform-settings/routes/platformSettings.routes");
+const platformAddonsRoutes = require("@modules/platform-settings/routes/platformAddons.routes");
 
 const router = express.Router();
 
 router.use(auth, requireSuperAdmin);
+router.use("/platform-settings", platformSettingsRoutes);
+router.use("/platform-addons", platformAddonsRoutes);
 
 router.get("/profile", asyncHandler(c.profile));
 router.patch("/profile/name", validate(Joi.object({ name: Joi.string().min(2).max(120).required() })), asyncHandler(c.updateProfileName));

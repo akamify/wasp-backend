@@ -52,6 +52,36 @@ function previewFromMessage(message, fallback = "") {
   return text.slice(0, 160);
 }
 
+function mapConversationListItemForPublic(item) {
+  const phone = String(item?.phone || "").trim();
+  const contactName = String(item?.contact?.name || "").trim();
+  return {
+    id: String(item?._id || ""),
+    phone,
+    displayName: contactName || phone,
+    lastMessage: {
+      preview: String(item?.lastMessagePreview || ""),
+      at: item?.lastMessageAt || null,
+    },
+    unreadCount: Number(item?.unreadCount || 0),
+    lead: {
+      status: item?.leadStatus || "UNASSIGNED",
+      assignedEmployeeId: item?.assignedEmployeeId ? String(item.assignedEmployeeId) : null,
+    },
+    contact: item?.contact
+      ? {
+        id: String(item.contact?._id || ""),
+        phone: String(item.contact?.phone || ""),
+        name: String(item.contact?.name || ""),
+        company: String(item.contact?.company || ""),
+        tags: Array.isArray(item.contact?.tags) ? item.contact.tags : [],
+      }
+      : null,
+    createdAt: item?.createdAt || null,
+    updatedAt: item?.updatedAt || null,
+  };
+}
+
 async function listConversations(req, res) {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
@@ -108,7 +138,22 @@ async function listConversations(req, res) {
     );
   }
 
-  res.json({ success: true, conversations: items });
+  if (req.auth?.isApiKey) {
+    return res.json({
+      success: true,
+      message: "Conversations fetched successfully.",
+      data: {
+        items: items.map(mapConversationListItemForPublic),
+        pagination: {
+          limit,
+          total: items.length,
+          hasNextPage: items.length >= limit,
+        },
+      },
+    });
+  }
+
+  return res.json({ success: true, conversations: items });
 }
 
 async function getConversation(req, res) {

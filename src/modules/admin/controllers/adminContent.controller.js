@@ -8,9 +8,12 @@ const { resolveUploadsPath } = require("@shared/utils/fileStorage");
 const { sendEmail } = require("@shared/services/emailService");
 const { buildTicketResolvedEmailHtml } = require("@shared/utils/emailTemplates");
 const { normalizeSlug } = require("@modules/public/controllers/publicContent.controller");
+const { uploadBufferToCloudinary } = require("@shared/services/cloudinaryService");
+const { appBrandName, appBrandLogoUrl } = require("@core/config/env");
 const DOC_PREFIX = "docs-";
 const LEGACY_DOC_PATH_PREFIX = "docs/";
 const DOC_BRAND_SLUG = "__docs_brand__";
+const PLATFORM_BRAND_SLUG = "__platform_brand__";
 
 function parsePaging(req) {
   const page = Math.max(1, Number(req.query.page || 1) || 1);
@@ -289,6 +292,68 @@ async function adminDownloadResume(req, res) {
   return res.sendFile(abs);
 }
 
+async function adminGetPlatformBrand(req, res) {
+  const page = await PublicPage.findOne({ slug: PLATFORM_BRAND_SLUG }).select("data updatedAt");
+  return res.json({
+    success: true,
+    settings: {
+      brandName: String(page?.data?.brandName || appBrandName || "DigitalWhasp"),
+      brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
+    },
+    meta: { source: page ? "db" : "env", updatedAt: page?.updatedAt || null },
+  });
+}
+
+async function adminUpdatePlatformBrand(req, res) {
+  const schema = Joi.object({
+    brandName: Joi.string().trim().allow("").max(120).default(""),
+    brandLogoUrl: Joi.string().allow("").max(5000).default(""),
+  });
+  const payload = await schema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
+  const nextName = String(payload.brandName || "").trim();
+  const nextLogo = String(payload.brandLogoUrl || "").trim();
+
+  const page = await PublicPage.findOneAndUpdate(
+    { slug: PLATFORM_BRAND_SLUG },
+    {
+      $set: {
+        title: "Platform Brand",
+        data: {
+          brandName: nextName || String(appBrandName || "DigitalWhasp"),
+          brandLogoUrl: nextLogo || String(appBrandLogoUrl || ""),
+        },
+        updatedByAdminId: String(req.user?.id || "admin"),
+      },
+    },
+    { new: true, upsert: true }
+  ).select("data updatedAt");
+
+  return res.json({
+    success: true,
+    settings: {
+      brandName: String(page?.data?.brandName || appBrandName || "DigitalWhasp"),
+      brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
+    },
+    meta: { source: "db", updatedAt: page?.updatedAt || null },
+  });
+}
+
+async function adminUploadPlatformBrandLogo(req, res) {
+  const file = req.file;
+  if (!file?.buffer) throw new HttpError(400, "Logo file is required");
+
+  const uploaded = await uploadBufferToCloudinary({
+    buffer: file.buffer,
+    mimeType: file.mimetype,
+    originalName: file.originalname,
+    folder: "waspakamify/platform-brand",
+  });
+  const logoUrl = String(uploaded?.secure_url || uploaded?.url || "").trim();
+  if (!logoUrl) throw new HttpError(500, "Failed to upload logo");
+
+  return res.json({ success: true, logoUrl });
+}
+
 module.exports = {
   adminListPages,
   adminGetPage,
@@ -298,6 +363,9 @@ module.exports = {
   adminCareerApplications,
   adminUpdateCareerApplication,
   adminDownloadResume,
+  adminGetPlatformBrand,
+  adminUpdatePlatformBrand,
+  adminUploadPlatformBrandLogo,
 };
 
 
