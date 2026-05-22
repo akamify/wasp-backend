@@ -1,13 +1,6 @@
 const { subscriptionRepository } = require("@modules/billing/repositories");
 const { HttpError } = require("@shared/utils/httpError");
-
-const FREE_LIMITS = Object.freeze({
-  maxContacts: 10,
-  maxTemplates: 5,
-  maxCampaignsPerMonth: 3,
-  maxContactsExport: 10,
-  maxExportsPerMonth: 10,
-});
+const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
 
 function addMonths(date, months) {
   const d = new Date(date);
@@ -42,11 +35,13 @@ async function enforceMonthlyLimit({
 }) {
   const subscription = await subscriptionRepository.findActiveByWorkspace(workspaceId);
   if (!subscription) {
+    const freeConfig = await getFreePlanConfig();
+    const freeLimits = freeConfig?.limits || {};
     const keys = Array.isArray(limitKeys) && limitKeys.length
       ? limitKeys
       : [limitKey].filter(Boolean);
-    const selectedKey = keys.find((k) => FREE_LIMITS[k] !== undefined) || keys[0];
-    const limitNumber = Number(FREE_LIMITS[selectedKey] ?? 0);
+    const selectedKey = keys.find((k) => freeLimits[k] !== undefined) || keys[0];
+    const limitNumber = Number(freeLimits[selectedKey] ?? 0);
     if (!Number.isFinite(limitNumber) || limitNumber <= 0) {
       throw new HttpError(403, errorMessage || "Your current plan does not allow this action");
     }
@@ -117,5 +112,4 @@ async function enforceMonthlyLimit({
 module.exports = {
   enforceMonthlyLimit,
   resolveCycleWindow,
-  FREE_LIMITS,
 };

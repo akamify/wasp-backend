@@ -30,6 +30,17 @@ const BillingSettingsSchema = new mongoose.Schema(
       serviceDescription: { type: String, default: "SaaS Subscription" },
       signatureText: { type: String, default: "" },
     },
+    freePlan: {
+      name: { type: String, default: "Free" },
+      description: { type: String, default: "Starter access with limited usage." },
+      buttonText: { type: String, default: "Current Plan" },
+      limits: {
+        maxContacts: { type: Number, default: 10, min: 0 },
+        maxTemplates: { type: Number, default: 5, min: 0 },
+        maxCampaignsPerMonth: { type: Number, default: 3, min: 0 },
+        maxContactsExport: { type: Number, default: 10, min: 0 },
+      },
+    },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }

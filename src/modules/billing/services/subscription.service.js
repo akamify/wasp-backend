@@ -1,5 +1,5 @@
 const { subscriptionRepository, billingRepository } = require("@modules/billing/repositories");
-const { FREE_LIMITS } = require("@modules/billing/services/usageLimit.service");
+const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
 
 function normalizeLimits(raw = {}) {
   return {
@@ -22,12 +22,13 @@ async function currentSubscription(req) {
   const active = await subscriptionRepository.findActiveByWorkspace(req.workspace.id);
   const usageCounts = await billingRepository.countWorkspaceUsage(req.workspace.id);
   if (!active) {
+    const freeConfig = await getFreePlanConfig();
     const freeLimits = {
-      maxContacts: FREE_LIMITS.maxContacts,
-      maxTemplates: FREE_LIMITS.maxTemplates,
+      maxContacts: freeConfig?.limits?.maxContacts ?? 0,
+      maxTemplates: freeConfig?.limits?.maxTemplates ?? 0,
       maxEmployees: 0,
-      maxCampaignsPerMonth: FREE_LIMITS.maxCampaignsPerMonth,
-      maxContactsExport: FREE_LIMITS.maxContactsExport,
+      maxCampaignsPerMonth: freeConfig?.limits?.maxCampaignsPerMonth ?? 0,
+      maxContactsExport: freeConfig?.limits?.maxContactsExport ?? 0,
     };
     return {
       success: true,
@@ -35,28 +36,7 @@ async function currentSubscription(req) {
       effective: {
         plan: req.workspace?.plan || "free",
         features: {
-          dashboardPageAccess: true,
-          templatesPageAccess: true,
-          campaignsPageAccess: true,
-          contactsPageAccess: true,
-          inboxPageAccess: true,
-          crmPageAccess: false,
-          flowsPageAccess: false,
-          walletPageAccess: true,
-          linksPageAccess: false,
-          automationPageAccess: false,
-          activityPageAccess: false,
-          apiKeysPageAccess: false,
-          apiReportsPageAccess: false,
-          campaignApiAccess: false,
-          exportAccess: true,
-          analyticsAccess: false,
-          employeeAccess: false,
-          leadDistributionAccess: false,
-          automationAccess: false,
-          apiKeyAccess: false,
-          externalChatApiAccess: false,
-          crmAccess: false,
+          ...(freeConfig?.features || {}),
         },
         limits: freeLimits,
       },

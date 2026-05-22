@@ -6,6 +6,7 @@ const { planRepository, subscriptionRepository, purchaseLinkRepository } = requi
 const { HttpError } = require("@shared/utils/httpError");
 const { hashIdempotencyParts } = require("@modules/billing/utils/idempotency");
 const { calculatePrice } = require("@modules/billing/utils/priceCalculator");
+const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
 const crypto = require("crypto");
 
 function toObjectIdString(value) {
@@ -103,7 +104,13 @@ function buildPurchaseUrl(token) {
 
 async function subscriptionPlans() {
   const items = await billingRepository.aggregatePlans();
-  return { success: true, message: "Subscription plan summary fetched.", data: { summary: items.map(mapPlanSummaryItem) } };
+  const freeConfig = await getFreePlanConfig();
+  const summary = items.map(mapPlanSummaryItem);
+  const hasFree = summary.some((entry) => String(entry?.plan || "").toLowerCase() === "free");
+  if (!hasFree) {
+    summary.push({ plan: "free", count: 0 });
+  }
+  return { success: true, message: "Subscription plan summary fetched.", data: { summary } };
 }
 
 async function subscriptionsData(req) {

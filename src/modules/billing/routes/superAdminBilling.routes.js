@@ -32,6 +32,18 @@ const planUpsertSchema = Joi.object({
   reviewNote: Joi.string().allow("").optional(),
 }).unknown(false);
 
+const freePlanUpdateSchema = Joi.object({
+  name: Joi.string().min(2).max(120).required(),
+  description: Joi.string().allow("").optional(),
+  buttonText: Joi.string().allow("").optional(),
+  limits: Joi.object({
+    maxContacts: Joi.number().integer().min(0).required(),
+    maxTemplates: Joi.number().integer().min(0).required(),
+    maxCampaignsPerMonth: Joi.number().integer().min(0).required(),
+    maxContactsExport: Joi.number().integer().min(0).required(),
+  }).required(),
+}).unknown(false);
+
 const settingsSchema = Joi.object({
   defaultGstPercent: Joi.number().min(0).max(100).required(),
   taxMode: Joi.string().valid("exclusive").required(),
@@ -40,7 +52,14 @@ const settingsSchema = Joi.object({
 router.get("/plans", asyncHandler(c.listPlans));
 router.get("/plans/:id", asyncHandler(c.getPlan));
 router.post("/plans", validate(planUpsertSchema), asyncHandler(c.createPlan));
-router.put("/plans/:id", validate(planUpsertSchema), asyncHandler(c.updatePlan));
+router.put(
+  "/plans/:id",
+  (req, res, next) => {
+    const schema = String(req.params.id) === "free-plan" ? freePlanUpdateSchema : planUpsertSchema;
+    return validate(schema)(req, res, next);
+  },
+  asyncHandler(c.updatePlan)
+);
 router.post("/plans/:id/review", validate(Joi.object({ reviewNote: Joi.string().allow("").optional() }).unknown(false)), asyncHandler(c.reviewPlan));
 router.post("/plans/:id/publish", validate(Joi.object({ reviewNote: Joi.string().allow("").optional() }).unknown(false)), asyncHandler(c.publishPlan));
 router.patch("/plans/:id/disable", asyncHandler(c.disablePlan));

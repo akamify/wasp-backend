@@ -4,6 +4,13 @@ const { planRepository, billingSettingsRepository } = require("@modules/billing/
 const { calculatePrice } = require("@modules/billing/utils/priceCalculator");
 const { FEATURE_FUNCTIONALITY_KEYS, LIMIT_KEYS } = require("@modules/billing/constants/planFeatureKeys");
 const { PLAN_STATUSES } = require("@modules/billing/constants/planStatuses");
+const {
+  getFreePlanConfig,
+  FREE_PLAN_DISPLAY_FEATURES,
+  FREE_PLAN_UNAVAILABLE_FEATURES,
+} = require("@modules/billing/services/freePlan.service");
+
+const FREE_PLAN_ID = "free-plan";
 
 function sanitizeSlug(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9-\s]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
@@ -150,6 +157,44 @@ function mapPlan(plan) {
   };
 }
 
+function mapFreePlan(freeConfig) {
+  return {
+    id: FREE_PLAN_ID,
+    slug: "free",
+    name: String(freeConfig?.name || "Free"),
+    description: String(freeConfig?.description || ""),
+    pricing: {
+      currency: "INR",
+      originalPricePaise: null,
+      discountedPricePaise: null,
+      gstPercent: 0,
+      taxMode: "exclusive",
+      discountAmountPaise: 0,
+      discountPercent: 0,
+      gstAmountPaise: 0,
+      payableAmountPaise: 0,
+    },
+    buttonText: String(freeConfig?.buttonText || "Current Plan"),
+    badgeText: "Free",
+    status: PLAN_STATUSES.PUBLISHED,
+    publicVisible: true,
+    purchasable: false,
+    recommended: false,
+    sortOrder: 0,
+    featureRows: [],
+    features: { ...(freeConfig?.features || {}) },
+    limits: { ...(freeConfig?.limits || {}) },
+    displayFeatures: [...FREE_PLAN_DISPLAY_FEATURES],
+    unavailableFeatures: [...FREE_PLAN_UNAVAILABLE_FEATURES],
+    review: {},
+    version: 1,
+    createdAt: null,
+    updatedAt: null,
+    isSystem: true,
+    isFreePlan: true,
+  };
+}
+
 function mapPricePayload(payload) {
   const gstPercent = payload.gstPercent == null ? 18 : Number(payload.gstPercent);
   if (!Number.isFinite(gstPercent) || gstPercent < 0 || gstPercent > 100) {
@@ -183,13 +228,61 @@ async function listPlans({ query = {}, includeArchived = false } = {}) {
   }
   if (!includeArchived && !filter.status) filter.status = { $in: [PLAN_STATUSES.IN_REVIEW, PLAN_STATUSES.PUBLISHED, PLAN_STATUSES.DISABLED] };
   const plans = await Plan.find(filter).sort({ sortOrder: 1, createdAt: -1 });
-  return { success: true, message: "Plans fetched successfully.", data: { items: plans.map(mapPlan) } };
+  const freeConfig = await getFreePlanConfig();
+  const freeItem = mapFreePlan(freeConfig);
+  const items = [freeItem, ...plans.map(mapPlan)];
+  items.sort((a, b) => {
+    const aOrder = Number(a?.sortOrder ?? 999);
+    const bOrder = Number(b?.sortOrder ?? 999);
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    return String(a?.name || "").localeCompare(String(b?.name || ""));
+  });
+  return { success: true, message: "Plans fetched successfully.", data: { items } };
 }
 
 async function getPlan(planId) {
+  if (String(planId) === FREE_PLAN_ID) {
+    const freeConfig = await getFreePlanConfig();
+    return { success: true, message: "Plan fetched successfully.", data: { item: mapFreePlan(freeConfig) } };
+  }
   const plan = await planRepository.findById(planId);
   if (!plan) throw new HttpError(404, "Plan not found");
   return { success: true, message: "Plan fetched successfully.", data: { item: mapPlan(plan) } };
+}
+
+async function updateFreePlan({ actorId, payload }) {
+  const current = await getFreePlanConfig();
+  const limits = {
+    maxContacts:
+      payload?.limits?.maxContacts === undefined
+        ? current.limits.maxContacts
+        : normalizeLimit(payload?.limits?.maxContacts),
+    maxTemplates:
+      payload?.limits?.maxTemplates === undefined
+        ? current.limits.maxTemplates
+        : normalizeLimit(payload?.limits?.maxTemplates),
+    maxCampaignsPerMonth:
+      payload?.limits?.maxCampaignsPerMonth === undefined
+        ? current.limits.maxCampaignsPerMonth
+        : normalizeLimit(payload?.limits?.maxCampaignsPerMonth),
+    maxContactsExport:
+      payload?.limits?.maxContactsExport === undefined
+        ? current.limits.maxContactsExport
+        : normalizeLimit(payload?.limits?.maxContactsExport),
+  };
+
+  await billingSettingsRepository.upsertSingleton({
+    freePlan: {
+      name: String(payload?.name || current.name || "Free").trim() || "Free",
+      description: String(payload?.description ?? current.description ?? "").trim(),
+      buttonText: String(payload?.buttonText || current.buttonText || "Current Plan").trim() || "Current Plan",
+      limits,
+    },
+    updatedBy: actorId || null,
+  });
+
+  const updated = await getFreePlanConfig();
+  return { success: true, message: "Free plan updated successfully.", data: { item: mapFreePlan(updated) } };
 }
 
 async function createPlan({ actorId, payload }) {
@@ -306,6 +399,9 @@ async function publishPlan({ actorId, planId, payload }) {
 }
 
 async function disablePlan({ actorId, planId }) {
+  if (String(planId) === FREE_PLAN_ID) {
+    throw new HttpError(400, "Free plan cannot be disabled.");
+  }
   const plan = await planRepository.findById(planId);
   if (!plan) throw new HttpError(404, "Plan not found");
   plan.status = PLAN_STATUSES.DISABLED;
@@ -338,8 +434,10 @@ async function pricePreview({ payload }) {
 }
 
 module.exports = {
+  FREE_PLAN_ID,
   listPlans,
   getPlan,
+  updateFreePlan,
   createPlan,
   updatePlan,
   submitReview,

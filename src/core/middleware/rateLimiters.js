@@ -74,6 +74,11 @@ const auth = rateLimit({
 const login = rateLimit({
   windowMs: authWindowMs,
   limit: loginLimit,
+  keyGenerator: (req) => {
+    const ip = ipKeyGenerator(req);
+    const email = String(req?.body?.email || "").trim().toLowerCase();
+    return email ? `login:${ip}:${email}` : `login:${ip}`;
+  },
   standardHeaders: true,
   legacyHeaders: false,
   // Legit successful logins should not consume the abuse budget.

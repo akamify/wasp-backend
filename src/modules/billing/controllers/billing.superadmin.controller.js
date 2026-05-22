@@ -26,7 +26,9 @@ async function createPlan(req, res) {
 }
 
 async function updatePlan(req, res) {
-  const out = await svc.updatePlan({ actorId: req.user?.id, planId: req.params.id, payload: req.body || {} });
+  const out = String(req.params.id) === String(svc.FREE_PLAN_ID)
+    ? await svc.updateFreePlan({ actorId: req.user?.id, payload: req.body || {} })
+    : await svc.updatePlan({ actorId: req.user?.id, planId: req.params.id, payload: req.body || {} });
   const item = out?.data?.item || {};
   await log(req, "plan.updated", { planId: item.id, slug: item.slug, status: item.status, actorId: req.user?.id || null });
   res.json(out);

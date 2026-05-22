@@ -1,33 +1,9 @@
 const { subscriptionRepository } = require("@modules/billing/repositories");
 const { HttpError } = require("@shared/utils/httpError");
+const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
 
-const FREE_FEATURES = Object.freeze({
-  dashboardPageAccess: true,
-  templatesPageAccess: true,
-  campaignsPageAccess: true,
-  contactsPageAccess: true,
-  inboxPageAccess: true,
-  walletPageAccess: true,
-  crmPageAccess: false,
-  flowsPageAccess: false,
-  linksPageAccess: false,
-  automationPageAccess: false,
-  activityPageAccess: false,
-  apiKeysPageAccess: false,
-  apiReportsPageAccess: false,
-  campaignApiAccess: false,
-  exportAccess: true,
-  analyticsAccess: false,
-  employeeAccess: false,
-  leadDistributionAccess: false,
-  automationAccess: false,
-  apiKeyAccess: false,
-  externalChatApiAccess: false,
-  crmAccess: false,
-});
-
-function resolveFeatureValue(subscription, featureKey) {
-  if (!subscription) return Boolean(FREE_FEATURES[featureKey]);
+function resolveFeatureValue(subscription, freeFeatures, featureKey) {
+  if (!subscription) return Boolean((freeFeatures || {})[featureKey]);
   return Boolean(subscription?.snapshot?.features?.[featureKey]);
 }
 
@@ -37,7 +13,8 @@ function requireBillingFeature(featureKey, options = {}) {
     try {
       if (!req.workspace?.id) return next(new HttpError(400, "Missing workspace context"));
       const subscription = await subscriptionRepository.findActiveByWorkspace(req.workspace.id);
-      const allowed = resolveFeatureValue(subscription, featureKey);
+      const freeConfig = subscription ? null : await getFreePlanConfig();
+      const allowed = resolveFeatureValue(subscription, freeConfig?.features, featureKey);
       if (!allowed) {
         return next(new HttpError(403, message, { featureKey, code: "FEATURE_NOT_ALLOWED" }));
       }
@@ -48,5 +25,4 @@ function requireBillingFeature(featureKey, options = {}) {
   };
 }
 
-module.exports = { requireBillingFeature, FREE_FEATURES };
-
+module.exports = { requireBillingFeature };
