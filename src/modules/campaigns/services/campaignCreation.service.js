@@ -11,6 +11,7 @@ const { CUSTOMER_SERVICE_WINDOW_MS } = require("@shared/services/pricingService"
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
+const { subscriptionRepository } = require("@modules/billing/repositories");
 
 async function createCampaign(req) {
     await enforceMonthlyLimit({
@@ -22,11 +23,18 @@ async function createCampaign(req) {
     });
 
     const { name, templateId, recipients, scheduledAt, type } = req.body;
+    const activeSubscription = await subscriptionRepository.findActiveByWorkspace(req.workspace.id);
     const template = await templatesRepository.getTemplateById({ id: templateId, workspaceId: req.workspace.id });
     if (!template) throw new HttpError(404, "Template not found");
     if (template.status !== "approved") throw new HttpError(400, "Template must be approved");
     const normalizedRecipients = normalizeRecipients(recipients);
     const normalizedType = String(type || CAMPAIGN_TYPES.BROADCAST).toLowerCase();
+    const hasCampaignApiAccess = activeSubscription
+        ? Boolean(activeSubscription?.snapshot?.features?.campaignApiAccess)
+        : false;
+    if (normalizedType === CAMPAIGN_TYPES.API && !hasCampaignApiAccess) {
+        throw new HttpError(403, "Your current plan does not allow API campaigns");
+    }
     if (normalizedType === CAMPAIGN_TYPES.API) {
         if (normalizedRecipients.length > 0) throw new HttpError(400, "API campaigns should not include recipients. Provide contacts when sending via integrations.");
         const campaign = await campaignsRepository.createCampaign({ workspaceId: req.workspace.id, name, templateId: template._id, status: CAMPAIGN_STATUSES.RUNNING, type: CAMPAIGN_TYPES.API, scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined, totals: { total: 0, queued: 0, sent: 0, failed: 0 } });

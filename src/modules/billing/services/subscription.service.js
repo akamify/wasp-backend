@@ -1,4 +1,5 @@
 const { subscriptionRepository, billingRepository } = require("@modules/billing/repositories");
+const { FREE_LIMITS } = require("@modules/billing/services/usageLimit.service");
 
 function normalizeLimits(raw = {}) {
   return {
@@ -21,22 +22,49 @@ async function currentSubscription(req) {
   const active = await subscriptionRepository.findActiveByWorkspace(req.workspace.id);
   const usageCounts = await billingRepository.countWorkspaceUsage(req.workspace.id);
   if (!active) {
+    const freeLimits = {
+      maxContacts: FREE_LIMITS.maxContacts,
+      maxTemplates: FREE_LIMITS.maxTemplates,
+      maxEmployees: 0,
+      maxCampaignsPerMonth: FREE_LIMITS.maxCampaignsPerMonth,
+      maxContactsExport: FREE_LIMITS.maxContactsExport,
+    };
     return {
       success: true,
       subscription: null,
       effective: {
         plan: req.workspace?.plan || "free",
         features: {
-          campaignApiAccess: true,
-          externalChatApiAccess: Boolean(req.workspace?.features?.externalChatApiAccess),
-          crmAccess: Boolean(req.workspace?.crmEnabled),
+          dashboardPageAccess: true,
+          templatesPageAccess: true,
+          campaignsPageAccess: true,
+          contactsPageAccess: true,
+          inboxPageAccess: true,
+          crmPageAccess: false,
+          flowsPageAccess: false,
+          walletPageAccess: true,
+          linksPageAccess: false,
+          automationPageAccess: false,
+          activityPageAccess: false,
+          apiKeysPageAccess: false,
+          apiReportsPageAccess: false,
+          campaignApiAccess: false,
+          exportAccess: true,
+          analyticsAccess: false,
+          employeeAccess: false,
+          leadDistributionAccess: false,
+          automationAccess: false,
+          apiKeyAccess: false,
+          externalChatApiAccess: false,
+          crmAccess: false,
         },
+        limits: freeLimits,
       },
       usage: {
-        contacts: usageMetric(usageCounts.contactsCount, 0),
-        templates: usageMetric(usageCounts.templatesCount, 0),
+        contacts: usageMetric(usageCounts.contactsCount, freeLimits.maxContacts),
+        templates: usageMetric(usageCounts.templatesCount, freeLimits.maxTemplates),
         employees: usageMetric(usageCounts.employeesCount, 0),
-        campaigns: usageMetric(usageCounts.campaignsCount, 0),
+        campaigns: usageMetric(usageCounts.campaignsCount, freeLimits.maxCampaignsPerMonth),
       },
     };
   }

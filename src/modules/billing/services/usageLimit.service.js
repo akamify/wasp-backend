@@ -1,6 +1,14 @@
 const { subscriptionRepository } = require("@modules/billing/repositories");
 const { HttpError } = require("@shared/utils/httpError");
 
+const FREE_LIMITS = Object.freeze({
+  maxContacts: 10,
+  maxTemplates: 5,
+  maxCampaignsPerMonth: 3,
+  maxContactsExport: 10,
+  maxExportsPerMonth: 10,
+});
+
 function addMonths(date, months) {
   const d = new Date(date);
   const dayOfMonth = d.getDate();
@@ -33,7 +41,41 @@ async function enforceMonthlyLimit({
   countInWindow,
 }) {
   const subscription = await subscriptionRepository.findActiveByWorkspace(workspaceId);
-  if (!subscription) return { enforced: false, reason: "no_active_subscription" };
+  if (!subscription) {
+    const keys = Array.isArray(limitKeys) && limitKeys.length
+      ? limitKeys
+      : [limitKey].filter(Boolean);
+    const selectedKey = keys.find((k) => FREE_LIMITS[k] !== undefined) || keys[0];
+    const limitNumber = Number(FREE_LIMITS[selectedKey] ?? 0);
+    if (!Number.isFinite(limitNumber) || limitNumber <= 0) {
+      throw new HttpError(403, errorMessage || "Your current plan does not allow this action");
+    }
+
+    const now = new Date();
+    const windowStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const windowEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const used = await countInWindow(windowStart, windowEnd);
+    if (used >= limitNumber) {
+      throw new HttpError(403, errorMessage || "Monthly plan limit reached", {
+        limitKey: selectedKey || limitKey,
+        limit: limitNumber,
+        used,
+        cycleMonth: 1,
+        cycleMonths: 1,
+        windowStart,
+        windowEnd,
+      });
+    }
+
+    return {
+      enforced: true,
+      limit: limitNumber,
+      used,
+      remaining: Math.max(0, limitNumber - used),
+      window: { start: windowStart, end: windowEnd, monthIndex: 1, durationMonths: 1 },
+      reason: "free_plan",
+    };
+  }
 
   const keys = Array.isArray(limitKeys) && limitKeys.length
     ? limitKeys
@@ -75,4 +117,5 @@ async function enforceMonthlyLimit({
 module.exports = {
   enforceMonthlyLimit,
   resolveCycleWindow,
+  FREE_LIMITS,
 };

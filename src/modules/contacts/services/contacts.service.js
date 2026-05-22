@@ -112,7 +112,9 @@ function escapeCsvCell(value) {
 
 async function exportContactsCsv(req) {
   const activeSubscription = await subscriptionRepository.findActiveByWorkspace(req.workspace.id);
-  const exportAllowed = Boolean(activeSubscription?.snapshot?.features?.exportAccess);
+  const exportAllowed = activeSubscription
+    ? Boolean(activeSubscription?.snapshot?.features?.exportAccess)
+    : true;
   if (!exportAllowed) {
     throw new HttpError(403, "Your current plan does not allow contacts CSV export");
   }
