@@ -82,6 +82,13 @@ function deriveFromFeatureRows(featureRows) {
     }
   }
 
+  // Auto-enable dependent capabilities from page-access toggles.
+  if (features.campaignsPageAccess) features.campaignApiAccess = true;
+  if (features.crmPageAccess) features.crmAccess = true;
+  if (features.automationPageAccess) features.automationAccess = true;
+  if (features.apiReportsPageAccess) features.analyticsAccess = true;
+  if (features.inboxPageAccess) features.apiKeyAccess = true;
+
   return { featureRows: sorted, features, limits, displayFeatures, unavailableFeatures };
 }
 
