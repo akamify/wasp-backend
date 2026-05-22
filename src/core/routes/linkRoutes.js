@@ -2,6 +2,7 @@ const express = require("express");
 const Joi = require("joi");
 const { auth } = require("@core/middleware/auth");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
+const { requireBillingFeature } = require("@core/middleware/requireBillingFeature");
 const { validate } = require("@core/middleware/validate");
 const { asyncHandler } = require("@shared/utils/asyncHandler");
 const {
@@ -16,12 +17,16 @@ const {
 } = require("@modules/links/controllers/link.controller");
 
 const router = express.Router();
+const requireLinksAccess = requireBillingFeature("linksPageAccess", {
+  message: "Your current plan does not include tracked links access.",
+});
 
-router.get("/tracked", auth, requireWorkspace, asyncHandler(listTrackedLinks));
+router.get("/tracked", auth, requireWorkspace, requireLinksAccess, asyncHandler(listTrackedLinks));
 router.post(
   "/tracked",
   auth,
   requireWorkspace,
+  requireLinksAccess,
   validate(
     Joi.object({
       message: Joi.string().min(1).max(2000).required(),
@@ -34,6 +39,7 @@ router.put(
   "/tracked/:id",
   auth,
   requireWorkspace,
+  requireLinksAccess,
   validate(
     Joi.object({
       message: Joi.string().min(1).max(2000).optional(),
@@ -42,15 +48,16 @@ router.put(
   ),
   asyncHandler(updateTrackedLink)
 );
-router.delete("/tracked/:id", auth, requireWorkspace, asyncHandler(deleteTrackedLink));
-router.get("/tracked/:id/analytics", auth, requireWorkspace, asyncHandler(getTrackedLinkAnalytics));
-router.get("/tracked/:id/qr.svg", auth, requireWorkspace, asyncHandler(qrSvg));
-router.get("/tracked/:id/qr.png", auth, requireWorkspace, asyncHandler(qrPng));
+router.delete("/tracked/:id", auth, requireWorkspace, requireLinksAccess, asyncHandler(deleteTrackedLink));
+router.get("/tracked/:id/analytics", auth, requireWorkspace, requireLinksAccess, asyncHandler(getTrackedLinkAnalytics));
+router.get("/tracked/:id/qr.svg", auth, requireWorkspace, requireLinksAccess, asyncHandler(qrSvg));
+router.get("/tracked/:id/qr.png", auth, requireWorkspace, requireLinksAccess, asyncHandler(qrPng));
 
 router.post(
   "/",
   auth,
   requireWorkspace,
+  requireLinksAccess,
   validate(
     Joi.object({
       url: Joi.string().required(),

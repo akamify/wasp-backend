@@ -5,6 +5,7 @@ const { validate } = require("@core/middleware/validate");
 const { auth } = require("@core/middleware/auth");
 const { blockInternalChatForApiKey } = require("@core/middleware/blockInternalChatForApiKey");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
+const { requireBillingFeature } = require("@core/middleware/requireBillingFeature");
 const {
   sendTemplate,
   sendText,
@@ -19,6 +20,9 @@ const { uploadMessageMedia, downloadMessageMedia } = require("@modules/messages/
 const { buildMemoryUpload } = require("@shared/utils/multerUpload");
 
 const router = express.Router();
+const requireActivityAccess = requireBillingFeature("activityPageAccess", {
+  message: "Your current plan does not include activity logs access.",
+});
 const upload = buildMemoryUpload({
   maxFileSizeBytes: 20 * 1024 * 1024,
   allowedMimeTypes: [
@@ -130,12 +134,12 @@ router.post(
   asyncHandler(bulkSend)
 );
 
-router.get("/logs", auth, blockInternalChatForApiKey, requireWorkspace, asyncHandler(listLogs));
+router.get("/logs", auth, blockInternalChatForApiKey, requireWorkspace, requireActivityAccess, asyncHandler(listLogs));
 router.get("/status/:waId", auth, blockInternalChatForApiKey, requireWorkspace, asyncHandler(messageStatusByWaId));
 const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 const debugFeedEnabled = String(process.env.META_WEBHOOK_DEBUG_FEED_ENABLED || "").toLowerCase() === "true";
 if (!isProd || debugFeedEnabled) {
-  router.get("/webhook-debug", auth, blockInternalChatForApiKey, requireWorkspace, asyncHandler(listWebhookDebugEvents));
+  router.get("/webhook-debug", auth, blockInternalChatForApiKey, requireWorkspace, requireActivityAccess, asyncHandler(listWebhookDebugEvents));
 }
 router.get("/:phone", auth, blockInternalChatForApiKey, requireWorkspace, asyncHandler(messagesByPhone));
 

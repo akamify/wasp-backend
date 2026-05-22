@@ -1,6 +1,7 @@
 const express = require("express");
 const { auth } = require("@core/middleware/auth");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
+const { requireBillingFeature } = require("@core/middleware/requireBillingFeature");
 const { asyncHandler } = require("@shared/utils/asyncHandler");
 const { listApiCampaignReports, getApiCampaignReport } = require("@modules/reports/controllers/reports.controller");
 const { listApiMessages, getApiMessageDetail } = require("@modules/reports/controllers/apiReport.controller");
@@ -8,14 +9,18 @@ const Joi = require("joi");
 const { validate } = require("@core/middleware/validate");
 
 const router = express.Router();
+const requireApiReportsAccess = requireBillingFeature("apiReportsPageAccess", {
+  message: "Your current plan does not include API reports access.",
+});
 
-router.get("/api-campaigns", auth, requireWorkspace, asyncHandler(listApiCampaignReports));
-router.get("/api-campaigns/:id", auth, requireWorkspace, asyncHandler(getApiCampaignReport));
+router.get("/api-campaigns", auth, requireWorkspace, requireApiReportsAccess, asyncHandler(listApiCampaignReports));
+router.get("/api-campaigns/:id", auth, requireWorkspace, requireApiReportsAccess, asyncHandler(getApiCampaignReport));
 
 router.get(
   "/api-messages",
   auth,
   requireWorkspace,
+  requireApiReportsAccess,
   validate(
     Joi.object({
       page: Joi.number().integer().min(1).optional(),
@@ -33,7 +38,7 @@ router.get(
   asyncHandler(listApiMessages)
 );
 
-router.get("/api-messages/:id", auth, requireWorkspace, asyncHandler(getApiMessageDetail));
+router.get("/api-messages/:id", auth, requireWorkspace, requireApiReportsAccess, asyncHandler(getApiMessageDetail));
 
 module.exports = router;
 

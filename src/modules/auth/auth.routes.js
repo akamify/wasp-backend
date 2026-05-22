@@ -4,10 +4,14 @@ const { validate } = require("@core/middleware/validate");
 const rateLimiters = require("@core/middleware/rateLimiters");
 const { auth } = require("@core/middleware/auth");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
+const { requireBillingFeature } = require("@core/middleware/requireBillingFeature");
 const controller = require("@modules/auth/auth.controller");
 const v = require("@modules/auth/auth.validation");
 
 const router = express.Router();
+const requireApiKeysAccess = requireBillingFeature("apiKeysPageAccess", {
+  message: "Your current plan does not include API keys access.",
+});
 
 router.post("/register", rateLimiters.login, validate(v.registerSchema), asyncHandler(controller.register));
 router.post("/login", rateLimiters.login, validate(v.loginSchema), asyncHandler(controller.login));
@@ -33,12 +37,13 @@ router.post(
 );
 
 router.get("/me", auth, asyncHandler(controller.me));
-router.get("/api-key", auth, requireWorkspace, asyncHandler(controller.apiKeyStatus));
+router.get("/api-key", auth, requireWorkspace, requireApiKeysAccess, asyncHandler(controller.apiKeyStatus));
 router.post(
   "/api-key/request-otp",
   rateLimiters.auth,
   auth,
   requireWorkspace,
+  requireApiKeysAccess,
   validate(v.apiKeyRequestOtpSchema),
   asyncHandler(controller.requestApiKeyOtp)
 );
@@ -47,6 +52,7 @@ router.post(
   rateLimiters.auth,
   auth,
   requireWorkspace,
+  requireApiKeysAccess,
   validate(v.apiKeyVerifyOtpSchema),
   asyncHandler(controller.verifyApiKeyOtp)
 );

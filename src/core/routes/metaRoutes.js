@@ -3,6 +3,7 @@ const Joi = require("joi");
 const { asyncHandler } = require("@shared/utils/asyncHandler");
 const { auth } = require("@core/middleware/auth");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
+const { requireBillingFeature } = require("@core/middleware/requireBillingFeature");
 const { validate } = require("@core/middleware/validate");
 const { saveMetaCredentials } = require("@modules/meta/controllers/metaCredentials.controller");
 const { metaStatus } = require("@modules/meta/controllers/metaStatus.controller");
@@ -13,6 +14,9 @@ const { buildMemoryUpload } = require("@shared/utils/multerUpload");
 const rateLimiters = require("@core/middleware/rateLimiters");
 
 const router = express.Router();
+const requireFlowsAccess = requireBillingFeature("flowsPageAccess", {
+  message: "Your current plan does not include flows access.",
+});
 const upload = buildMemoryUpload({
   maxFileSizeBytes: 5 * 1024 * 1024,
   allowedMimeTypes: ["image/jpeg", "image/png", "image/webp"],
@@ -64,11 +68,12 @@ router.post(
   asyncHandler(uploadProfilePicture)
 );
 
-router.get("/flows", auth, requireWorkspace, rateLimiters.metaFlowOps, asyncHandler(listFlows));
+router.get("/flows", auth, requireWorkspace, requireFlowsAccess, rateLimiters.metaFlowOps, asyncHandler(listFlows));
 router.post(
   "/flows",
   auth,
   requireWorkspace,
+  requireFlowsAccess,
   rateLimiters.metaFlowOps,
   validate(
     Joi.object({
@@ -82,6 +87,7 @@ router.post(
   "/flows/:flowId/assets",
   auth,
   requireWorkspace,
+  requireFlowsAccess,
   rateLimiters.metaFlowOps,
   validate(
     Joi.object({
@@ -94,6 +100,7 @@ router.post(
   "/flows/:flowId/publish",
   auth,
   requireWorkspace,
+  requireFlowsAccess,
   rateLimiters.metaFlowOps,
   asyncHandler(publishFlow)
 );

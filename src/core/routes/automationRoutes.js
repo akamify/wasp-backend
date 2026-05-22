@@ -4,15 +4,20 @@ const { asyncHandler } = require("@shared/utils/asyncHandler");
 const { validate } = require("@core/middleware/validate");
 const { authOrApiKey } = require("@core/middleware/authOrApiKey");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
+const { requireBillingFeature } = require("@core/middleware/requireBillingFeature");
 const { triggerEvent } = require("@modules/automation/controllers/automation.controller");
 const rateLimiters = require("@core/middleware/rateLimiters");
 
 const router = express.Router();
+const requireAutomationAccess = requireBillingFeature("automationPageAccess", {
+  message: "Your current plan does not include automation access.",
+});
 
 router.post(
   "/trigger-event",
   authOrApiKey,
   requireWorkspace,
+  requireAutomationAccess,
   rateLimiters.automationTrigger,
   validate(
     Joi.object({
