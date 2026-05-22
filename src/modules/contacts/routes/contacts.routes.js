@@ -19,6 +19,13 @@ router.put(
   validate(contactsValidation.updateContactSchema),
   asyncHandler(contactsController.updateContact)
 );
+router.post(
+  "/export-csv",
+  auth,
+  requireWorkspace,
+  validate(contactsValidation.exportContactsCsvSchema),
+  asyncHandler(contactsController.exportContactsCsv)
+);
 router.delete("/:id", auth, requireWorkspace, asyncHandler(contactsController.deleteContact));
 
 module.exports = router;

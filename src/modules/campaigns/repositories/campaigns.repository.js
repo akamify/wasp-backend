@@ -28,6 +28,13 @@ function incrementCampaignTotals(query, update) {
     return Campaign.updateOne(query, update);
 }
 
+function countCampaignsCreatedBetween({ workspaceId, start, end }) {
+    return Campaign.countDocuments({
+        workspaceId,
+        createdAt: { $gte: start, $lt: end },
+    });
+}
+
 module.exports = {
     listCampaignsByWorkspace,
     getCampaignById,
@@ -36,4 +43,5 @@ module.exports = {
     updateCampaign,
     deleteCampaign,
     incrementCampaignTotals,
+    countCampaignsCreatedBetween,
 };

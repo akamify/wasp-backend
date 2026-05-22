@@ -19,6 +19,13 @@ const {
   adminListMessageLogs,
   adminSubscriptionPlans,
   adminSubscriptionsData,
+  adminSubscriptionWorkspaceOverview,
+  adminSubscriptionWorkspaceHistory,
+  adminSubscriptionWorkspacePaymentLinks,
+  adminAssignPlanToWorkspace,
+  adminCreateWorkspacePaymentLink,
+  adminCancelWorkspacePaymentLink,
+  adminDisableActiveWorkspacePlan,
   adminPaymentGateway,
   adminAppUpdate,
 } = require("@modules/admin/controllers/adminPanel.controller");
@@ -63,6 +70,7 @@ const crmAdminController = require("@modules/crm/controllers/crmAdmin.controller
 const workspaceFeaturesController = require("@modules/workspaces/controllers/workspaceFeatures.controller");
 const docsController = require("@modules/admin/controllers/adminDocs.controller");
 const { buildMemoryUpload } = require("@shared/utils/multerUpload");
+const superAdminBillingRoutes = require("@modules/billing/routes/superAdminBilling.routes");
 
 const router = express.Router();
 const docsBrandUpload = buildMemoryUpload({
@@ -78,6 +86,7 @@ const c = (key) => requireAdminPermission("component", key);
 const a = (key) => requireAdminPermission("action", key);
 
 router.use(auth, requireAdmin);
+router.use("/billing", requireSuperAdmin, superAdminBillingRoutes);
 router.get("/overview", p("/admin/dashboard"), asyncHandler(adminOverview));
 router.put("/settings/password", c("profile.change_password"), asyncHandler(adminChangePassword));
 router.get("/users", p("/admin/users"), asyncHandler(adminListUsers));
@@ -125,6 +134,13 @@ router.get("/transactions-logs", p("/admin/transactions-logs"), asyncHandler(adm
 router.get("/message-logs", p("/admin/message-logs"), asyncHandler(adminListMessageLogs));
 router.get("/subscription-plans", p("/admin/subscription-plans"), asyncHandler(adminSubscriptionPlans));
 router.get("/subscriptions-data", p("/admin/subscriptions-data"), asyncHandler(adminSubscriptionsData));
+router.get("/subscriptions-data/:workspaceId/overview", p("/admin/subscriptions-data"), asyncHandler(adminSubscriptionWorkspaceOverview));
+router.get("/subscriptions-data/:workspaceId/history", p("/admin/subscriptions-data"), asyncHandler(adminSubscriptionWorkspaceHistory));
+router.get("/subscriptions-data/:workspaceId/payment-links", p("/admin/subscriptions-data"), asyncHandler(adminSubscriptionWorkspacePaymentLinks));
+router.post("/subscriptions-data/:workspaceId/assign-plan", a("subscriptions.manage"), asyncHandler(adminAssignPlanToWorkspace));
+router.post("/subscriptions-data/:workspaceId/disable-active-plan", a("subscriptions.manage"), asyncHandler(adminDisableActiveWorkspacePlan));
+router.post("/subscriptions-data/:workspaceId/payment-links", a("subscriptions.manage"), asyncHandler(adminCreateWorkspacePaymentLink));
+router.patch("/subscriptions-data/payment-links/:id/cancel", a("subscriptions.manage"), asyncHandler(adminCancelWorkspacePaymentLink));
 router.get("/payment-gateway", p("/admin/billing"), asyncHandler(adminPaymentGateway));
 router.get("/support-tickets", p("/admin/support-tickets"), asyncHandler(adminSupportTickets));
 router.patch("/support-tickets/:id/resolve", c("tickets.edit"), asyncHandler(adminResolveSupportTicket));

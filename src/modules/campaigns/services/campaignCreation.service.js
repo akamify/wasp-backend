@@ -10,8 +10,17 @@ const { debit, credit, ensureBalance, getOrCreateWallet, messageCostForTemplateC
 const { CUSTOMER_SERVICE_WINDOW_MS } = require("@shared/services/pricingService");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
+const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
 
 async function createCampaign(req) {
+    await enforceMonthlyLimit({
+        workspaceId: req.workspace.id,
+        limitKey: "maxCampaignsPerMonth",
+        errorMessage: "Monthly campaign create limit reached for your current plan",
+        countInWindow: (start, end) =>
+            campaignsRepository.countCampaignsCreatedBetween({ workspaceId: req.workspace.id, start, end }),
+    });
+
     const { name, templateId, recipients, scheduledAt, type } = req.body;
     const template = await templatesRepository.getTemplateById({ id: templateId, workspaceId: req.workspace.id });
     if (!template) throw new HttpError(404, "Template not found");

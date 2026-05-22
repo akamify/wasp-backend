@@ -20,8 +20,13 @@ const updateContactSchema = Joi.object({
   tags: Joi.array().items(Joi.string().max(40)).max(25).optional(),
 });
 
+const exportContactsCsvSchema = Joi.object({
+  contactIds: Joi.array().items(Joi.string().trim().min(1)).max(500).required(),
+});
+
 module.exports = {
   contactSchema,
   updateContactSchema,
+  exportContactsCsvSchema,
 };
 

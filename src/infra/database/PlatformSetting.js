@@ -21,7 +21,6 @@ const PlatformSettingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-PlatformSettingSchema.index({ key: 1 }, { unique: true });
 PlatformSettingSchema.index({ category: 1 });
 
 const PlatformSetting = mongoose.model("PlatformSetting", PlatformSettingSchema);

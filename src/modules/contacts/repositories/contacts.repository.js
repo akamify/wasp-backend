@@ -1,4 +1,5 @@
 const { Contact } = require("@infra/database/Contact");
+const { AuditLog } = require("@infra/database/AuditLog");
 
 async function listContacts({ filter, skip, limit }) {
   const [contacts, total] = await Promise.all([
@@ -48,6 +49,40 @@ async function deleteContact({ id, workspaceId }) {
   return Contact.deleteOne({ _id: id, workspaceId });
 }
 
+async function findContactsForExport({ workspaceId, ids }) {
+  return Contact.find({ _id: { $in: ids }, workspaceId })
+    .select("name phone company tags")
+    .sort({ updatedAt: -1, name: 1 })
+    .lean();
+}
+
+async function countContactsCreatedBetween({ workspaceId, start, end }) {
+  return Contact.countDocuments({
+    workspaceId,
+    createdAt: { $gte: start, $lt: end },
+  });
+}
+
+async function countContactExportsBetween({ workspaceId, start, end }) {
+  return AuditLog.countDocuments({
+    action: "contacts.export.csv",
+    "metadata.workspaceId": String(workspaceId),
+    createdAt: { $gte: start, $lt: end },
+  });
+}
+
+async function writeContactExportAudit({ actorId, workspaceId, exportedCount }) {
+  return AuditLog.create({
+    actorId: actorId || null,
+    action: "contacts.export.csv",
+    resourceType: "contacts",
+    metadata: {
+      workspaceId: String(workspaceId),
+      exportedCount: Number(exportedCount || 0),
+    },
+  });
+}
+
 module.exports = {
   listContacts,
   getContact,
@@ -57,5 +92,9 @@ module.exports = {
   createContact,
   updateContact,
   deleteContact,
+  findContactsForExport,
+  countContactsCreatedBetween,
+  countContactExportsBetween,
+  writeContactExportAudit,
 };
 

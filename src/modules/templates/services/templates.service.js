@@ -8,6 +8,7 @@ const {
 } = require("@shared/utils/whatsappSender");
 const { normalizeTemplate } = require("@shared/utils/templateStructure");
 const { templatesRepository } = require("@modules/templates/repositories/index");
+const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
 
 function normalizeRemoteStatus(status) {
   const s = String(status || "").toLowerCase();
@@ -34,6 +35,14 @@ function normalizeRemoteTemplate(remote) {
 }
 
 async function createTemplate(req) {
+  await enforceMonthlyLimit({
+    workspaceId: req.workspace.id,
+    limitKey: "maxTemplates",
+    errorMessage: "Monthly template create limit reached for your current plan",
+    countInWindow: (start, end) =>
+      templatesRepository.countTemplatesCreatedBetween({ workspaceId: req.workspace.id, start, end }),
+  });
+
   const normalized = normalizeTemplate({ ...req.body, source: "local" });
   const creds = await getCredentialsForUser(req.workspace.id);
 

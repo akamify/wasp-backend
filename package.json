@@ -8,7 +8,8 @@
     "start": "node index.js",
     "dev": "node index.js",
     "worker": "node worker.js",
-    "verify:worker-env": "node scripts/verify-worker-env.cjs"
+    "verify:worker-env": "node scripts/verify-worker-env.cjs",
+    "seed:billing:plans": "node scripts/seed-billing-plans.cjs"
   },
   "keywords": [],
   "author": "",

@@ -12,6 +12,13 @@ const { adminListNotifications } = require("@modules/notifications/controllers/n
 const {
   adminSubscriptionPlans,
   adminSubscriptionsData,
+  adminSubscriptionWorkspaceOverview,
+  adminSubscriptionWorkspaceHistory,
+  adminSubscriptionWorkspacePaymentLinks,
+  adminAssignPlanToWorkspace,
+  adminCreateWorkspacePaymentLink,
+  adminCancelWorkspacePaymentLink,
+  adminDisableActiveWorkspacePlan,
   adminPaymentGateway,
 } = require("@modules/billing/controllers/billing.admin.controller");
 
@@ -488,6 +495,13 @@ module.exports = {
   adminListMessageLogs,
   adminSubscriptionPlans,
   adminSubscriptionsData,
+  adminSubscriptionWorkspaceOverview,
+  adminSubscriptionWorkspaceHistory,
+  adminSubscriptionWorkspacePaymentLinks,
+  adminAssignPlanToWorkspace,
+  adminCreateWorkspacePaymentLink,
+  adminCancelWorkspacePaymentLink,
+  adminDisableActiveWorkspacePlan,
   adminPaymentGateway,
   adminSupportTickets,
   adminAppUpdate,

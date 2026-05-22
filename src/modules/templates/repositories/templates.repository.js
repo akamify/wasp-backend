@@ -23,10 +23,18 @@ async function findTemplateForMetaSync({ workspaceId, name, metaTemplateId }) {
   });
 }
 
+async function countTemplatesCreatedBetween({ workspaceId, start, end }) {
+  return Template.countDocuments({
+    workspaceId,
+    createdAt: { $gte: start, $lt: end },
+  });
+}
+
 module.exports = {
   createTemplate,
   listTemplates,
   getTemplate,
   deleteTemplate,
   findTemplateForMetaSync,
+  countTemplatesCreatedBetween,
 };

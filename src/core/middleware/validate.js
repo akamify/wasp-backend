@@ -8,16 +8,30 @@ function validate(schema, property = "body") {
     });
 
     if (error) {
+      const validationError = new HttpError(
+        400,
+        "Validation error",
+        error.details.map((d) => d.message)
+      );
+      if (typeof next !== "function") {
+        return res.status(400).json({
+          success: false,
+          message: validationError.message,
+          details: validationError.details,
+        });
+      }
       return next(
-        new HttpError(
-          400,
-          "Validation error",
-          error.details.map((d) => d.message)
-        )
+        validationError
       );
     }
 
     req[property] = value;
+    if (typeof next !== "function") {
+      return res.status(500).json({
+        success: false,
+        message: "Middleware invocation error",
+      });
+    }
     return next();
   };
 }

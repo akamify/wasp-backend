@@ -25,6 +25,13 @@ async function deleteContact(req, res) {
   res.json(await contactsService.deleteContact(req));
 }
 
+async function exportContactsCsv(req, res) {
+  const body = await contactsService.exportContactsCsv(req);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${body.filename}"`);
+  res.status(200).send(body.csv);
+}
+
 module.exports = {
   listContacts,
   getContact,
@@ -32,5 +39,6 @@ module.exports = {
   createContact,
   updateContact,
   deleteContact,
+  exportContactsCsv,
 };
 

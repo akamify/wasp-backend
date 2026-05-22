@@ -23,6 +23,7 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/conversations`, require("@core/routes/conversationRoutes"));
   app.use(`${basePath}/contacts`, require("@core/routes/contactRoutes"));
   app.use(`${basePath}/meta`, require("@core/routes/metaRoutes"));
+  app.use(`${basePath}/billing`, require("@modules/billing/routes/billing.routes"));
   app.use(`${basePath}/campaigns`, require("@core/routes/campaignRoutes"));
   app.use(`${basePath}/wallet`, require("@core/routes/walletRoutes"));
   app.use(`${basePath}/integrations`, require("@core/routes/integrationRoutes"));
