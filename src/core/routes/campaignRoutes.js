@@ -3,6 +3,7 @@ const Joi = require("joi");
 const { auth } = require("@core/middleware/auth");
 const { authOrApiKey } = require("@core/middleware/authOrApiKey");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
+const { requireBillingFeature } = require("@core/middleware/requireBillingFeature");
 const { requireApiPermission } = require("@modules/api-keys/middleware/requireApiPermission");
 const { validate } = require("@core/middleware/validate");
 const { asyncHandler } = require("@shared/utils/asyncHandler");
@@ -22,20 +23,24 @@ const {
 } = require("@modules/campaigns/controllers/campaigns.controller");
 
 const router = express.Router();
+const requireCampaignsAccess = requireBillingFeature("campaignsPageAccess", {
+  message: "Your current plan does not include campaigns access.",
+});
 
-router.get("/", auth, requireWorkspace, asyncHandler(listCampaigns));
-router.get("/:id", auth, requireWorkspace, asyncHandler(getCampaign));
-router.get("/:id/metrics", auth, requireWorkspace, asyncHandler(getCampaignMetrics));
-router.get("/:id/messages", auth, requireWorkspace, asyncHandler(listCampaignMessages));
-router.get("/:id/replies", auth, requireWorkspace, asyncHandler(listCampaignReplies));
-router.get("/:id/credit-usage", auth, requireWorkspace, asyncHandler(getCampaignCreditUsage));
-router.get("/:id/failed-recipients", auth, requireWorkspace, asyncHandler(listFailedRecipients));
-router.post("/:id/retry-failed", auth, requireWorkspace, asyncHandler(retryFailedCampaign));
-router.delete("/:id", auth, requireWorkspace, asyncHandler(deleteCampaign));
+router.get("/", auth, requireWorkspace, requireCampaignsAccess, asyncHandler(listCampaigns));
+router.get("/:id", auth, requireWorkspace, requireCampaignsAccess, asyncHandler(getCampaign));
+router.get("/:id/metrics", auth, requireWorkspace, requireCampaignsAccess, asyncHandler(getCampaignMetrics));
+router.get("/:id/messages", auth, requireWorkspace, requireCampaignsAccess, asyncHandler(listCampaignMessages));
+router.get("/:id/replies", auth, requireWorkspace, requireCampaignsAccess, asyncHandler(listCampaignReplies));
+router.get("/:id/credit-usage", auth, requireWorkspace, requireCampaignsAccess, asyncHandler(getCampaignCreditUsage));
+router.get("/:id/failed-recipients", auth, requireWorkspace, requireCampaignsAccess, asyncHandler(listFailedRecipients));
+router.post("/:id/retry-failed", auth, requireWorkspace, requireCampaignsAccess, asyncHandler(retryFailedCampaign));
+router.delete("/:id", auth, requireWorkspace, requireCampaignsAccess, asyncHandler(deleteCampaign));
 router.post(
   "/:id/action",
   auth,
   requireWorkspace,
+  requireCampaignsAccess,
   validate(Joi.object({ action: Joi.string().valid("pause", "resume", "stop", "complete").required() })),
   asyncHandler(updateCampaignStatus)
 );
@@ -43,6 +48,7 @@ router.post(
   "/estimate",
   authOrApiKey,
   requireWorkspace,
+  requireCampaignsAccess,
   requireApiPermission("campaignSend"),
   validate(
     Joi.object({
@@ -75,6 +81,7 @@ router.post(
   "/",
   authOrApiKey,
   requireWorkspace,
+  requireCampaignsAccess,
   requireApiPermission("campaignSend"),
   validate(
     Joi.object({

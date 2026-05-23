@@ -12,6 +12,7 @@ const { sendTemplateMessageForUser } = require("@shared/services/outboundMessage
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
 const { subscriptionRepository } = require("@modules/billing/repositories");
+const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 
 async function createCampaign(req) {
     await enforceMonthlyLimit({
@@ -29,9 +30,11 @@ async function createCampaign(req) {
     if (template.status !== "approved") throw new HttpError(400, "Template must be approved");
     const normalizedRecipients = normalizeRecipients(recipients);
     const normalizedType = String(type || CAMPAIGN_TYPES.BROADCAST).toLowerCase();
-    const hasCampaignApiAccess = activeSubscription
-        ? Boolean(activeSubscription?.snapshot?.features?.campaignApiAccess)
-        : false;
+    const hasCampaignApiAccess = !isPlanRestrictionsEnabled()
+        ? true
+        : activeSubscription
+            ? Boolean(activeSubscription?.snapshot?.features?.campaignApiAccess)
+            : false;
     if (normalizedType === CAMPAIGN_TYPES.API && !hasCampaignApiAccess) {
         throw new HttpError(403, "Your current plan does not allow API campaigns");
     }

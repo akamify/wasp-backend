@@ -1,6 +1,7 @@
 const { subscriptionRepository } = require("@modules/billing/repositories");
 const { HttpError } = require("@shared/utils/httpError");
 const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
+const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 
 function resolveFeatureValue(subscription, freeFeatures, featureKey) {
   if (!subscription) return Boolean((freeFeatures || {})[featureKey]);
@@ -11,6 +12,7 @@ function requireBillingFeature(featureKey, options = {}) {
   const { message = "Upgrade plan to access this feature." } = options;
   return async function billingFeatureMiddleware(req, _res, next) {
     try {
+      if (!isPlanRestrictionsEnabled()) return next();
       if (!req.workspace?.id) return next(new HttpError(400, "Missing workspace context"));
       const subscription = await subscriptionRepository.findActiveByWorkspace(req.workspace.id);
       const freeConfig = subscription ? null : await getFreePlanConfig();

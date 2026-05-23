@@ -1,5 +1,6 @@
 const { subscriptionRepository, billingRepository } = require("@modules/billing/repositories");
 const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
+const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 
 function normalizeLimits(raw = {}) {
   return {
@@ -19,6 +20,7 @@ function usageMetric(used, limit) {
 }
 
 async function currentSubscription(req) {
+  const planRestrictionsEnabled = isPlanRestrictionsEnabled();
   const active = await subscriptionRepository.findActiveByWorkspace(req.workspace.id);
   const usageCounts = await billingRepository.countWorkspaceUsage(req.workspace.id);
   if (!active) {
@@ -39,6 +41,9 @@ async function currentSubscription(req) {
           ...(freeConfig?.features || {}),
         },
         limits: freeLimits,
+      },
+      enforcement: {
+        planRestrictionsEnabled,
       },
       usage: {
         contacts: usageMetric(usageCounts.contactsCount, freeLimits.maxContacts),
@@ -70,6 +75,9 @@ async function currentSubscription(req) {
       plan: active.planSlug,
       features: active?.snapshot?.features || {},
       limits: limits,
+    },
+    enforcement: {
+      planRestrictionsEnabled,
     },
     usage: {
       contacts: usageMetric(usageCounts.contactsCount, limits.maxContacts),

@@ -3,6 +3,7 @@ const { contactsRepository } = require("@modules/contacts/repositories/index");
 const { assertNormalizedPhone, normalizePhone } = require("@shared/services/contactService");
 const { subscriptionRepository } = require("@modules/billing/repositories");
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
+const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 
 function parseListPaging(req) {
   const page = Math.max(Number(req.query.page || 1), 1);
@@ -111,12 +112,14 @@ function escapeCsvCell(value) {
 }
 
 async function exportContactsCsv(req) {
+  if (isPlanRestrictionsEnabled()) {
   const activeSubscription = await subscriptionRepository.findActiveByWorkspace(req.workspace.id);
   const exportAllowed = activeSubscription
     ? Boolean(activeSubscription?.snapshot?.features?.exportAccess)
     : true;
   if (!exportAllowed) {
     throw new HttpError(403, "Your current plan does not allow contacts CSV export");
+  }
   }
 
   await enforceMonthlyLimit({

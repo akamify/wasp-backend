@@ -1,6 +1,7 @@
 const { subscriptionRepository } = require("@modules/billing/repositories");
 const { HttpError } = require("@shared/utils/httpError");
 const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
+const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 
 function addMonths(date, months) {
   const d = new Date(date);
@@ -33,6 +34,9 @@ async function enforceMonthlyLimit({
   errorMessage,
   countInWindow,
 }) {
+  if (!isPlanRestrictionsEnabled()) {
+    return { enforced: false, reason: "plan_restrictions_disabled" };
+  }
   const subscription = await subscriptionRepository.findActiveByWorkspace(workspaceId);
   if (!subscription) {
     const freeConfig = await getFreePlanConfig();
