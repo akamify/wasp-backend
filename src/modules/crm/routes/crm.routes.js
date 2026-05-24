@@ -3,6 +3,7 @@ const { asyncHandler } = require("@shared/utils/asyncHandler");
 const { auth } = require("@core/middleware/auth");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
 const { employeeAuth } = require("@modules/crm/middleware/employeeAuth");
+const { employeeAuthSse } = require("@modules/crm/middleware/employeeAuthSse");
 const { requireEmployeeWorkspace } = require("@modules/crm/middleware/requireEmployeeWorkspace");
 const { requireCrmFeature } = require("@modules/crm/middleware/requireCrmFeature");
 const { requireCrmWorkspaceFromBody } = require("@modules/crm/middleware/requireCrmWorkspaceFromBody");
@@ -22,6 +23,8 @@ const {
   listEmployeeConversationEvents,
 } = require("@modules/crm/controllers/conversationEvents.controller");
 const crmOwnerController = require("@modules/crm/controllers/crmOwner.controller");
+const crmLeadsController = require("@modules/crm/controllers/crmLeads.controller");
+const crmDashboardController = require("@modules/crm/controllers/crmDashboard.controller");
 const employeeOwnerProfileController = require("@modules/crm/controllers/employeeOwnerProfile.controller");
 const employeeProfileRequestsController = require("@modules/crm/controllers/employeeProfileRequests.controller");
 
@@ -67,6 +70,13 @@ router.get(
 
 // Owner CRM management
 router.get("/workspace", auth, requireWorkspace, asyncHandler(crmOwnerController.getWorkspaceCrm));
+router.get(
+  "/dashboard",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(crmDashboardController.getDashboard)
+);
 router.put(
   "/settings/lead-window",
   auth,
@@ -80,6 +90,20 @@ router.put(
   requireWorkspace,
   requireCrmFeature("crm"),
   asyncHandler(crmOwnerController.setAssignmentLockMinutes)
+);
+router.put(
+  "/settings/assignment-mode",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(crmOwnerController.setAssignmentMode)
+);
+router.put(
+  "/settings/assignment-schedule",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(crmOwnerController.setAssignmentSchedule)
 );
 router.get(
   "/employees",
@@ -101,6 +125,13 @@ router.patch(
   requireWorkspace,
   requireCrmFeature("crm"),
   asyncHandler(crmOwnerController.updateEmployeeStatus)
+);
+router.post(
+  "/leads/:phone/assign",
+  auth,
+  requireWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(crmLeadsController.manualAssign)
 );
 router.get(
   "/employees/:employeeId/profile",
@@ -261,7 +292,7 @@ router.get(
 
 router.get(
   "/employee/realtime/stream",
-  employeeAuth,
+  employeeAuthSse,
   requireEmployeeWorkspace,
   requireCrmFeature("crm"),
   asyncHandler(streamEmployeeRealtime)

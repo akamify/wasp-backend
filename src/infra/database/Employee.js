@@ -22,6 +22,10 @@ const EmployeeSchema = new mongoose.Schema(
       canViewAnalytics: { type: Boolean, default: false },
     },
 
+    // Assignment constraints / foundation fields
+    maxActiveLeads: { type: Number, default: null },
+    assignmentWeight: { type: Number, default: 1 },
+
     assignedChatsCount: { type: Number, default: 0 },
     lastLoginAt: { type: Date, default: null },
     lastActivityAt: { type: Date, default: null },

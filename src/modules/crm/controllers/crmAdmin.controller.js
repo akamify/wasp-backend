@@ -48,7 +48,7 @@ async function setCrmEnabled(req, res) {
 }
 
 const leadWindowSchema = Joi.object({
-  leadWindowHours: Joi.number().integer().min(1).max(720).required(),
+  leadWindowHours: Joi.number().integer().min(1).max(22).required(),
 });
 
 async function setLeadWindowHours(req, res) {
@@ -66,6 +66,67 @@ async function setLeadWindowHours(req, res) {
     resourceType: "workspace",
     resourceId: String(workspace._id),
     metadata: { leadWindowHours: workspace.crmSettings.leadWindowHours },
+  });
+
+  res.json({ success: true, workspace: { id: String(workspace._id), crmSettings: workspace.crmSettings } });
+}
+
+const assignmentModeSchema = Joi.object({
+  autoAssignEnabled: Joi.boolean().required(),
+  assignmentMode: Joi.string().valid("ROUND_ROBIN", "LEAST_ACTIVE", "FIXED_LIMIT", "MANUAL").required(),
+});
+
+const assignmentScheduleSchema = Joi.object({
+  autoAssignFromTime: Joi.string().allow(null, "").pattern(/^\d{2}:\d{2}$/).optional(),
+  autoAssignToTime: Joi.string().allow(null, "").pattern(/^\d{2}:\d{2}$/).optional(),
+});
+
+async function setAssignmentMode(req, res) {
+  const payload = await assignmentModeSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
+  const workspaceId = String(req.params.workspaceId || "").trim();
+  const workspace = await Workspace.findById(workspaceId).select("_id ownerId crmSettings isActive");
+  if (!workspace || !workspace.isActive) throw new HttpError(404, "Workspace not found");
+
+  workspace.crmSettings = workspace.crmSettings || {};
+  workspace.crmSettings.autoAssignEnabled = Boolean(payload.autoAssignEnabled);
+  workspace.crmSettings.assignmentMode = String(payload.assignmentMode);
+  await workspace.save();
+
+  await writeAuditLog(req, {
+    action: "crm.workspace.settings.assignmentMode",
+    resourceType: "workspace",
+    resourceId: String(workspace._id),
+    metadata: {
+      autoAssignEnabled: workspace.crmSettings.autoAssignEnabled,
+      assignmentMode: workspace.crmSettings.assignmentMode,
+    },
+  });
+
+  res.json({ success: true, workspace: { id: String(workspace._id), crmSettings: workspace.crmSettings } });
+}
+
+async function setAssignmentSchedule(req, res) {
+  const payload = await assignmentScheduleSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
+  const workspaceId = String(req.params.workspaceId || "").trim();
+  const workspace = await Workspace.findById(workspaceId).select("_id ownerId crmSettings isActive");
+  if (!workspace || !workspace.isActive) throw new HttpError(404, "Workspace not found");
+
+  const from = payload.autoAssignFromTime ? String(payload.autoAssignFromTime).trim() : "";
+  const to = payload.autoAssignToTime ? String(payload.autoAssignToTime).trim() : "";
+
+  workspace.crmSettings = workspace.crmSettings || {};
+  workspace.crmSettings.autoAssignFromTime = from || null;
+  workspace.crmSettings.autoAssignToTime = to || null;
+  await workspace.save();
+
+  await writeAuditLog(req, {
+    action: "crm.workspace.settings.assignmentSchedule",
+    resourceType: "workspace",
+    resourceId: String(workspace._id),
+    metadata: {
+      autoAssignFromTime: workspace.crmSettings.autoAssignFromTime,
+      autoAssignToTime: workspace.crmSettings.autoAssignToTime,
+    },
   });
 
   res.json({ success: true, workspace: { id: String(workspace._id), crmSettings: workspace.crmSettings } });
@@ -109,9 +170,18 @@ async function createEmployee(req, res) {
   const owner = await User.findById(workspace.ownerId).select("email name");
   if (!owner) throw new HttpError(404, "Workspace owner not found");
 
+  const email = String(payload.email).trim().toLowerCase();
+
+  // Prevent collisions with platform identities (user/admin/super_admin).
+  const existingUser = await User.findOne({ email }).select("_id role email");
+  if (existingUser) throw new HttpError(409, "Employee already exists.");
+
+  // Prevent duplicates inside the same workspace.
+  const existingEmployee = await Employee.findOne({ workspaceId, email }).select("_id status deletedAt");
+  if (existingEmployee) throw new HttpError(409, "Employee already exists.");
+
   const password = randomPassword();
   const passwordHash = await bcrypt.hash(password, 10);
-  const email = String(payload.email).trim().toLowerCase();
 
   const employee = await Employee.create({
     workspaceId,
@@ -198,6 +268,8 @@ module.exports = {
   },
   setCrmEnabled,
   setLeadWindowHours,
+  setAssignmentMode,
+  setAssignmentSchedule,
   listEmployees,
   createEmployee,
   updateEmployeeStatus,

@@ -2,6 +2,7 @@ const Joi = require("joi");
 const { HttpError } = require("@shared/utils/httpError");
 const { Workspace } = require("@infra/database/Workspace");
 const { Employee } = require("@infra/database/Employee");
+const { User } = require("@infra/database/User");
 const { CrmLead } = require("@infra/database/CrmLead");
 const { CrmAssignmentAudit } = require("@infra/database/CrmAssignmentAudit");
 const { EmployeeLoginEvent } = require("@infra/database/EmployeeLoginEvent");
@@ -162,8 +163,12 @@ async function updateEmployeeProfile(req, res) {
   if (!employee) throw new HttpError(404, "Employee not found");
 
   if (payload.email) {
-    const nextEmail = String(payload.email).trim().toLowerCase();
+      const nextEmail = String(payload.email).trim().toLowerCase();
     if (nextEmail !== String(employee.email || "").toLowerCase()) {
+      // Prevent collisions with platform identities (user/admin/super_admin).
+      const existingUser = await User.findOne({ email: nextEmail }).select("_id role email");
+      if (existingUser) throw new HttpError(409, "An employee with this email already exists.");
+
       const existing = await Employee.findOne({ workspaceId: req.workspace.id, email: nextEmail }).select("_id status deletedAt");
       if (existing) {
         const status = String(existing.status || "ACTIVE").toUpperCase();

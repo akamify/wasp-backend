@@ -191,6 +191,7 @@ router.get("/career-applications/:id/resume", p("/admin/career-applications"), a
 router.get("/crm/workspaces/:workspaceId", p("/admin/workspaces"), asyncHandler(crmAdminController.getWorkspaceCrm));
 router.patch("/crm/workspaces/:workspaceId/enabled", c("workspaces.edit"), asyncHandler(crmAdminController.setCrmEnabled));
 router.put("/crm/workspaces/:workspaceId/settings/lead-window", c("workspaces.edit"), asyncHandler(crmAdminController.setLeadWindowHours));
+router.put("/crm/workspaces/:workspaceId/settings/assignment-mode", c("workspaces.edit"), asyncHandler(crmAdminController.setAssignmentMode));
 router.get("/crm/workspaces/:workspaceId/employees", p("/admin/workspaces"), asyncHandler(crmAdminController.listEmployees));
 router.post("/crm/workspaces/:workspaceId/employees", c("workspaces.edit"), asyncHandler(crmAdminController.createEmployee));
 router.patch("/crm/workspaces/:workspaceId/employees/:employeeId/status", c("workspaces.edit"), asyncHandler(crmAdminController.updateEmployeeStatus));

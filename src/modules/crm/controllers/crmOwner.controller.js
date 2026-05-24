@@ -24,11 +24,21 @@ async function requireActiveCrmWorkspaceForOwner({ workspaceId, ownerId }) {
 }
 
 const leadWindowSchema = Joi.object({
-  leadWindowHours: Joi.number().integer().min(1).max(720).required(),
+  leadWindowHours: Joi.number().integer().min(1).max(22).required(),
 });
 
 const assignmentLockSchema = Joi.object({
-  assignmentLockMinutes: Joi.number().integer().min(1).max(120).required(),
+  assignmentLockMinutes: Joi.number().integer().min(0).max(10).required(),
+});
+
+const assignmentModeSchema = Joi.object({
+  autoAssignEnabled: Joi.boolean().required(),
+  assignmentMode: Joi.string().valid("ROUND ROBIN", "LEAST ACTIVE", "FIXED LIMIT", "MANUAL").required(),
+});
+
+const assignmentScheduleSchema = Joi.object({
+  autoAssignFromTime: Joi.string().allow(null, "").pattern(/^\d{2}:\d{2}$/).optional(),
+  autoAssignToTime: Joi.string().allow(null, "").pattern(/^\d{2}:\d{2}$/).optional(),
 });
 
 const createEmployeeSchema = Joi.object({
@@ -95,6 +105,53 @@ async function setAssignmentLockMinutes(req, res) {
   res.json({ success: true, workspace: { id: String(workspace._id), crmSettings: workspace.crmSettings } });
 }
 
+async function setAssignmentMode(req, res) {
+  const payload = await assignmentModeSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
+  const workspace = await requireActiveCrmWorkspaceForOwner({ workspaceId: req.workspace.id, ownerId: req.user.id });
+  workspace.crmSettings = workspace.crmSettings || {};
+  workspace.crmSettings.autoAssignEnabled = Boolean(payload.autoAssignEnabled);
+  workspace.crmSettings.assignmentMode = String(payload.assignmentMode);
+  await workspace.save();
+
+  await writeAuditLog(req, {
+    action: "crm.workspace.settings.assignmentMode",
+    resourceType: "workspace",
+    resourceId: String(workspace._id),
+    metadata: {
+      autoAssignEnabled: workspace.crmSettings.autoAssignEnabled,
+      assignmentMode: workspace.crmSettings.assignmentMode,
+    },
+  });
+
+  res.json({ success: true, workspace: { id: String(workspace._id), crmSettings: workspace.crmSettings } });
+}
+
+async function setAssignmentSchedule(req, res) {
+  const payload = await assignmentScheduleSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
+  const workspace = await requireActiveCrmWorkspaceForOwner({ workspaceId: req.workspace.id, ownerId: req.user.id });
+  if (!workspace.crmEnabled) throw new HttpError(403, "CRM is disabled for this workspace");
+
+  const from = payload.autoAssignFromTime ? String(payload.autoAssignFromTime).trim() : "";
+  const to = payload.autoAssignToTime ? String(payload.autoAssignToTime).trim() : "";
+
+  workspace.crmSettings = workspace.crmSettings || {};
+  workspace.crmSettings.autoAssignFromTime = from || null;
+  workspace.crmSettings.autoAssignToTime = to || null;
+  await workspace.save();
+
+  await writeAuditLog(req, {
+    action: "crm.workspace.settings.assignmentSchedule",
+    resourceType: "workspace",
+    resourceId: String(workspace._id),
+    metadata: {
+      autoAssignFromTime: workspace.crmSettings.autoAssignFromTime,
+      autoAssignToTime: workspace.crmSettings.autoAssignToTime,
+    },
+  });
+
+  res.json({ success: true, workspace: { id: String(workspace._id), crmSettings: workspace.crmSettings } });
+}
+
 async function listEmployees(req, res) {
   await requireActiveCrmWorkspaceForOwner({ workspaceId: req.workspace.id, ownerId: req.user.id });
   const items = await Employee.find({ workspaceId: req.workspace.id, status: { $ne: "DELETED" } })
@@ -126,6 +183,13 @@ async function createEmployee(req, res) {
   if (!owner) throw new HttpError(404, "Workspace owner not found");
 
   const email = String(payload.email).trim().toLowerCase();
+
+  // Prevent creating employees using any existing platform account email (user/admin/super_admin).
+  // This avoids identity collisions and keeps auth domains isolated.
+  const existingUser = await User.findOne({ email }).select("_id role email");
+  if (existingUser) {
+    throw new HttpError(409, "Employee already exists.");
+  }
 
   const existing = await Employee.findOne({ workspaceId: req.workspace.id, email }).select("_id status deletedAt");
   if (existing) {
@@ -174,13 +238,14 @@ async function createEmployee(req, res) {
     <div style="font-family:Arial,sans-serif;line-height:1.6;color:#0f172a">
       <h2 style="margin:0 0 12px">Employee Access</h2>
       <p>Workspace: <b>${String(workspace.name || "")}</b></p>
+      <p>Workspace ID: <b>${String(workspace._id)}</b></p>
       <p>Email: <b>${email}</b></p>
       <p>Click the link below to set your password:</p>
       <p><a href="${resetLink}">Set Password</a></p>
       <p style="font-size:12px;color:#64748b">This link expires in 24 hours.</p>
     </div>
   `;
-  const employeeText = `Workspace: ${workspace.name}\nEmail: ${email}\nSet password: ${resetLink}\n`;
+  const employeeText = `Workspace: ${workspace.name}\nWorkspace ID: ${String(workspace._id)}\nEmail: ${email}\nSet password: ${resetLink}\n`;
 
   const ownerSubject = "CRM employee created";
   const ownerHtml = `
@@ -239,6 +304,8 @@ module.exports = {
   getWorkspaceCrm,
   setLeadWindowHours,
   setAssignmentLockMinutes,
+  setAssignmentMode,
+  setAssignmentSchedule,
   listEmployees,
   createEmployee,
   updateEmployeeStatus,

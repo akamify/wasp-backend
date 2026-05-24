@@ -38,6 +38,17 @@ async function streamEmployeeRealtime(req, res) {
     // If event has a phone, only allow when employee is assignee.
     const eventPhone = event?.phone ? String(event.phone) : "";
     if (!eventPhone) return writeEvent("message", event);
+
+    // Fast-path allowlist updates to avoid stale 15s window after reassignment.
+    if (String(event?.type || "") === "assignment_changed") {
+      const assignedEmployeeId = event?.assignedEmployeeId ? String(event.assignedEmployeeId) : "";
+      if (assignedEmployeeId && assignedEmployeeId === String(req.employee.id)) allowedPhones.add(eventPhone);
+      else allowedPhones.delete(eventPhone);
+      // Always send assignment_changed to current assignee only (or to nobody).
+      if (allowedPhones.has(eventPhone)) return writeEvent("message", event);
+      return;
+    }
+
     if (allowedPhones.has(eventPhone)) return writeEvent("message", event);
   });
 

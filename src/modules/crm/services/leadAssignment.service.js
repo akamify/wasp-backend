@@ -36,7 +36,8 @@ async function assignConversation({
 
   const now = new Date();
   const lockMinutes = Number(workspace.crmSettings?.assignmentLockMinutes || 5);
-  const lockedUntil = new Date(Date.now() + Math.max(1, lockMinutes) * 60 * 1000);
+  const safeLockMinutes = Math.max(0, Number.isFinite(lockMinutes) ? lockMinutes : 0);
+  const lockedUntil = safeLockMinutes > 0 ? new Date(Date.now() + safeLockMinutes * 60 * 1000) : null;
 
   const employee = await Employee.findOne({ _id: toEmployeeId, workspaceId, status: "ACTIVE", deletedAt: null }).select("_id");
   if (!employee) return { assigned: false, reason: "no_employee" };
@@ -48,10 +49,25 @@ async function assignConversation({
   if (!conversation) return { assigned: false, reason: "no_conversation" };
 
   const fromEmployeeId = conversation.assignedEmployeeId ? String(conversation.assignedEmployeeId) : null;
-  const currentVersion = Number(conversation.assignmentVersion || 0);
+  const rawVersion = conversation.assignmentVersion;
+  const hasVersion = typeof rawVersion === "number" && Number.isFinite(rawVersion);
+  const currentVersion = hasVersion ? rawVersion : 0;
+
+  // Backward compatibility: older Conversation documents might not have assignmentVersion.
+  // When missing, treat it as 0 for optimistic locking match.
+  const versionMatch = hasVersion
+    ? { assignmentVersion: currentVersion }
+    : {
+        $or: [
+          { assignmentVersion: currentVersion },
+          { assignmentVersion: String(currentVersion) },
+          { assignmentVersion: null },
+          { assignmentVersion: { $exists: false } },
+        ],
+      };
 
   const result = await Conversation.updateOne(
-    { _id: conversation._id, workspaceId, assignmentVersion: currentVersion },
+    { _id: conversation._id, workspaceId, ...versionMatch },
     {
       $set: {
         assignedEmployeeId: toObjectId(toEmployeeId),
@@ -60,17 +76,30 @@ async function assignConversation({
         assignmentMode: mode || "ROUND_ROBIN",
         assignmentReason: reason || "",
         assignmentLockedUntil: lockedUntil,
+        assignmentVersion: currentVersion + 1,
         leadStatus: "OPEN",
         leadStatusUpdatedAt: now,
         leadStatusUpdatedBy: assignedBy || { kind: "system" },
         lastLeadCreatedAt: now,
         normalizedPhone: String(phone),
       },
-      $inc: { assignmentVersion: 1 },
     }
   );
 
   if (Number(result?.matchedCount || 0) === 0) {
+    // Conflict means someone else updated assignmentVersion.
+    // If the desired assignee is already set, treat as idempotent success.
+    const latest = await Conversation.findOne({ _id: conversation._id, workspaceId }).select("_id assignedEmployeeId").lean();
+    const latestAssignedId = latest?.assignedEmployeeId ? String(latest.assignedEmployeeId) : "";
+    if (latestAssignedId && latestAssignedId === String(toEmployeeId)) {
+      return {
+        assigned: true,
+        conversationId: String(conversation._id),
+        fromEmployeeId,
+        toEmployeeId: String(toEmployeeId),
+        idempotent: true,
+      };
+    }
     return { assigned: false, reason: "assignment_conflict" };
   }
 
@@ -109,4 +138,3 @@ async function assignConversation({
 module.exports = {
   assignConversation,
 };
-
