@@ -134,6 +134,11 @@ async function validateCredentials({
     const res = await client.get(url, {
       headers: authHeaders(accessToken),
     });
+    const wabaPhoneNumbers = Array.isArray(res?.data?.data) ? res.data.data : [];
+    const providedPhoneNumberId = String(phoneNumberId || "").trim();
+    const isPhoneIdInWaba = wabaPhoneNumbers.some(
+      (item) => String(item?.id || "").trim() === providedPhoneNumberId
+    );
 
     steps.push({
       step: "waba_phone_numbers_lookup",
@@ -142,9 +147,34 @@ async function validateCredentials({
         method: "GET",
         url,
       },
-      response: res.data,
+      response: {
+        ...res.data,
+        phoneIds: wabaPhoneNumbers.map((item) => String(item?.id || "")).filter(Boolean),
+        providedPhoneNumberId,
+        isPhoneIdInWaba,
+      },
     });
+
+    if (!isPhoneIdInWaba) {
+      const err = new Error("Provided phoneNumberId is not linked to the given WABA");
+      err.metaDebug = {
+        step: "waba_phone_numbers_match",
+        request: {
+          method: "GET",
+          // effective endpoint becomes: https://graph.facebook.com/{version}/{wabaId}/phone_numbers
+          url: `/${wabaId}/phone_numbers`,
+          headers: { Authorization: "Bearer <ACCESS_TOKEN>" },
+        },
+        providedPhoneNumberId,
+        availablePhoneNumberIds: wabaPhoneNumbers.map((item) => String(item?.id || "")).filter(Boolean),
+      };
+      err.validationSteps = steps;
+      throw err;
+    }
   } catch (err) {
+    if (err?.metaDebug?.step === "waba_phone_numbers_match") {
+      throw err;
+    }
     throw Object.assign(
       new Error("WABA validation failed"),
       {
