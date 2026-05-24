@@ -17,6 +17,31 @@ function mask(value) {
   return `${source.slice(0, 2)}***${source.slice(-3)}`;
 }
 
+function startOfDay(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function addDays(d, days) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + days);
+  return x;
+}
+
+function startOfMonth(d) {
+  const x = new Date(d);
+  x.setDate(1);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function addMonths(d, months) {
+  const x = new Date(d);
+  x.setMonth(x.getMonth() + months);
+  return x;
+}
+
 async function adminOverview(req, res) {
   const rangeRaw = String(req.query.range || "week").trim().toLowerCase();
   const range =
@@ -68,7 +93,16 @@ async function adminOverview(req, res) {
       range === "today"
         ? [
             { $match: { direction: "outbound", createdAt: { $gte: since } } },
-            { $group: { _id: { hour: { $hour: "$createdAt" } }, count: { $sum: 1 } } },
+            {
+              $group: {
+                _id: { hour: { $hour: "$createdAt" } },
+                count: { $sum: 1 },
+                sent: { $sum: 1 },
+                delivered: { $sum: { $cond: [{ $eq: ["$status", "delivered"] }, 1, 0] } },
+                read: { $sum: { $cond: [{ $eq: ["$status", "read"] }, 1, 0] } },
+                failed: { $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] } },
+              },
+            },
             { $sort: { "_id.hour": 1 } },
           ]
         : range === "year"
@@ -78,6 +112,10 @@ async function adminOverview(req, res) {
               $group: {
                 _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" } },
                 count: { $sum: 1 },
+                sent: { $sum: 1 },
+                delivered: { $sum: { $cond: [{ $eq: ["$status", "delivered"] }, 1, 0] } },
+                read: { $sum: { $cond: [{ $eq: ["$status", "read"] }, 1, 0] } },
+                failed: { $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] } },
               },
             },
             { $sort: { "_id.year": 1, "_id.month": 1 } },
@@ -88,6 +126,10 @@ async function adminOverview(req, res) {
               $group: {
                 _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" }, day: { $dayOfMonth: "$createdAt" } },
                 count: { $sum: 1 },
+                sent: { $sum: 1 },
+                delivered: { $sum: { $cond: [{ $eq: ["$status", "delivered"] }, 1, 0] } },
+                read: { $sum: { $cond: [{ $eq: ["$status", "read"] }, 1, 0] } },
+                failed: { $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] } },
               },
             },
             { $sort: { "_id.year": 1, "_id.month": 1, "_id.day": 1 } },
@@ -95,21 +137,79 @@ async function adminOverview(req, res) {
     ),
   ]);
 
-  const points =
-    range === "today"
-      ? dailyMessages.map((item) => ({
-          label: `${String(item._id.hour).padStart(2, "0")}:00`,
-          count: item.count,
-        }))
-      : range === "year"
-      ? dailyMessages.map((item) => ({
-          label: `${item._id.year}-${String(item._id.month).padStart(2, "0")}`,
-          count: item.count,
-        }))
-      : dailyMessages.map((item) => ({
-          label: `${item._id.year}-${String(item._id.month).padStart(2, "0")}-${String(item._id.day).padStart(2, "0")}`,
-          count: item.count,
-        }));
+  let points = [];
+  if (range === "today") {
+    const byHour = new Map(dailyMessages.map((r) => [Number(r?._id?.hour), r]));
+    points = Array.from({ length: 24 }).map((_, h) => {
+      const row = byHour.get(h);
+      return {
+        label: `${String(h).padStart(2, "0")}:00`,
+        count: row?.count || 0,
+        sent: row?.sent || row?.count || 0,
+        delivered: row?.delivered || 0,
+        read: row?.read || 0,
+        failed: row?.failed || 0,
+      };
+    });
+  } else if (range === "year") {
+    const byMonth = new Map(
+      dailyMessages.map((r) => [`${r?._id?.year}-${String(r?._id?.month).padStart(2, "0")}`, r])
+    );
+    points = Array.from({ length: 12 }).map((_, i) => {
+      const m = startOfMonth(addMonths(new Date(), -11 + i));
+      const key = `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, "0")}`;
+      const row = byMonth.get(key);
+      return {
+        label: key,
+        count: row?.count || 0,
+        sent: row?.sent || row?.count || 0,
+        delivered: row?.delivered || 0,
+        read: row?.read || 0,
+        failed: row?.failed || 0,
+      };
+    });
+  } else {
+    const days = range === "30d" ? 30 : 7;
+    const offset = days - 1;
+    const byDay = new Map(
+      dailyMessages.map((r) => [
+        `${r?._id?.year}-${String(r?._id?.month).padStart(2, "0")}-${String(r?._id?.day).padStart(2, "0")}`,
+        r,
+      ])
+    );
+    points = Array.from({ length: days }).map((_, i) => {
+      const d = startOfDay(addDays(new Date(), -offset + i));
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const row = byDay.get(key);
+      return {
+        label: key,
+        count: row?.count || 0,
+        sent: row?.sent || row?.count || 0,
+        delivered: row?.delivered || 0,
+        read: row?.read || 0,
+        failed: row?.failed || 0,
+      };
+    });
+  }
+
+  const rawRecent = await Message.find({ direction: "outbound" })
+    .sort({ createdAt: -1 })
+    .limit(6)
+    .select("workspaceId status createdAt phone")
+    .lean();
+  const wsIds = Array.from(new Set(rawRecent.map((m) => String(m.workspaceId || "")).filter(Boolean)));
+  const wsRows = await Workspace.find({ _id: { $in: wsIds } }).select("name").lean();
+  const wsMap = new Map(wsRows.map((w) => [String(w._id), w.name || "Workspace"]));
+  const recentActivity = rawRecent.map((m) => ({
+    id: String(m._id),
+    eventName: `Message ${String(m.status || "sent").toUpperCase()} • ${String(m.phone || "").slice(-4)}`,
+    status: String(m.status || "").toLowerCase(),
+    createdAt: m.createdAt,
+    workspace: {
+      id: String(m.workspaceId || ""),
+      name: wsMap.get(String(m.workspaceId || "")) || "Workspace",
+    },
+  }));
 
   res.json({
     success: true,
@@ -137,6 +237,7 @@ async function adminOverview(req, res) {
       range === "year"
         ? points.map((p) => ({ date: p.label, count: p.count }))
         : points.map((p) => ({ date: p.label, count: p.count })),
+    recentActivity,
   });
 }
 

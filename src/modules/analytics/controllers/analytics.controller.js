@@ -4,6 +4,7 @@ const { Template } = require("@infra/database/Template");
 const { Contact } = require("@infra/database/Contact");
 const { Campaign } = require("@infra/database/Campaign");
 const { HttpError } = require("@shared/utils/httpError");
+const mongoose = require("mongoose");
 
 function clampPct(value) {
   if (!Number.isFinite(value)) return 0;
@@ -55,16 +56,28 @@ function addMonths(d, months) {
 }
 
 async function buildSeries({ workspaceId, range }) {
-  // Only template-based outbound messages (exclude service/freeform)
+  const workspaceObjectId = mongoose.Types.ObjectId.isValid(String(workspaceId || ""))
+    ? new mongoose.Types.ObjectId(String(workspaceId))
+    : null;
+  if (!workspaceObjectId) return { group: "day", points: [] };
+
+  // Include all outbound messages so dashboard reflects real activity
+  // (template + non-template sends).
   const baseMatch = {
-    workspaceId,
+    workspaceId: workspaceObjectId,
     direction: "outbound",
-    templateId: { $exists: true, $ne: null },
   };
 
   const addDateFieldsStage = {
     $addFields: {
       sentAtD: { $convert: { input: "$statusTimestamps.sentAt", to: "date", onError: null, onNull: null } },
+      createdAtD: { $convert: { input: "$createdAt", to: "date", onError: null, onNull: null } },
+      effectiveSentAtD: {
+        $ifNull: [
+          { $convert: { input: "$statusTimestamps.sentAt", to: "date", onError: null, onNull: null } },
+          { $convert: { input: "$createdAt", to: "date", onError: null, onNull: null } },
+        ],
+      },
       deliveredAtD: { $convert: { input: "$statusTimestamps.deliveredAt", to: "date", onError: null, onNull: null } },
       readAtD: { $convert: { input: "$statusTimestamps.readAt", to: "date", onError: null, onNull: null } },
     },
@@ -75,12 +88,12 @@ async function buildSeries({ workspaceId, range }) {
     const start = startOfDay(now);
     const end = startOfDay(addDays(now, 1));
     const agg = await Message.aggregate([
-      { $match: { ...baseMatch, "statusTimestamps.sentAt": { $exists: true } } },
+      { $match: baseMatch },
       addDateFieldsStage,
-      { $match: { sentAtD: { $gte: start, $lt: end } } },
+      { $match: { effectiveSentAtD: { $gte: start, $lt: end } } },
       {
         $group: {
-          _id: { h: { $hour: "$sentAtD" } },
+          _id: { h: { $hour: "$effectiveSentAtD" } },
           sent: { $sum: 1 },
           delivered: { $sum: { $cond: [{ $ifNull: ["$deliveredAtD", false] }, 1, 0] } },
           read: { $sum: { $cond: [{ $ifNull: ["$readAtD", false] }, 1, 0] } },
@@ -107,15 +120,15 @@ async function buildSeries({ workspaceId, range }) {
   if (range === "week") {
     const since = startOfDay(addDays(new Date(), -6));
     const agg = await Message.aggregate([
-      { $match: { ...baseMatch, "statusTimestamps.sentAt": { $exists: true } } },
+      { $match: baseMatch },
       addDateFieldsStage,
-      { $match: { sentAtD: { $gte: since } } },
+      { $match: { effectiveSentAtD: { $gte: since } } },
       {
         $group: {
           _id: {
-            y: { $year: "$sentAtD" },
-            m: { $month: "$sentAtD" },
-            d: { $dayOfMonth: "$sentAtD" },
+            y: { $year: "$effectiveSentAtD" },
+            m: { $month: "$effectiveSentAtD" },
+            d: { $dayOfMonth: "$effectiveSentAtD" },
           },
           sent: { $sum: 1 },
           delivered: { $sum: { $cond: [{ $ifNull: ["$deliveredAtD", false] }, 1, 0] } },
@@ -153,15 +166,15 @@ async function buildSeries({ workspaceId, range }) {
   if (range === "30d") {
     const since = startOfDay(addDays(new Date(), -29));
     const agg = await Message.aggregate([
-      { $match: { ...baseMatch, "statusTimestamps.sentAt": { $exists: true } } },
+      { $match: baseMatch },
       addDateFieldsStage,
-      { $match: { sentAtD: { $gte: since } } },
+      { $match: { effectiveSentAtD: { $gte: since } } },
       {
         $group: {
           _id: {
-            y: { $year: "$sentAtD" },
-            m: { $month: "$sentAtD" },
-            d: { $dayOfMonth: "$sentAtD" },
+            y: { $year: "$effectiveSentAtD" },
+            m: { $month: "$effectiveSentAtD" },
+            d: { $dayOfMonth: "$effectiveSentAtD" },
           },
           sent: { $sum: 1 },
           delivered: { $sum: { $cond: [{ $ifNull: ["$deliveredAtD", false] }, 1, 0] } },
@@ -199,13 +212,13 @@ async function buildSeries({ workspaceId, range }) {
   // year
   const monthStart = startOfMonth(addMonths(new Date(), -11));
   const agg = await Message.aggregate([
-    // Prefer time-series bucketing by actual send timestamp (more accurate for queued/backfilled sends).
-    { $match: { ...baseMatch, "statusTimestamps.sentAt": { $exists: true } } },
+    // Prefer sent timestamp and fallback to createdAt for legacy rows missing sentAt.
+    { $match: baseMatch },
     addDateFieldsStage,
-    { $match: { sentAtD: { $gte: monthStart } } },
+    { $match: { effectiveSentAtD: { $gte: monthStart } } },
     {
       $group: {
-        _id: { y: { $year: "$sentAtD" }, m: { $month: "$sentAtD" } },
+        _id: { y: { $year: "$effectiveSentAtD" }, m: { $month: "$effectiveSentAtD" } },
         sent: { $sum: 1 },
         delivered: { $sum: { $cond: [{ $ifNull: ["$deliveredAtD", false] }, 1, 0] } },
         read: { $sum: { $cond: [{ $ifNull: ["$readAtD", false] }, 1, 0] } },
@@ -236,18 +249,22 @@ async function overview(req, res) {
   const workspaceId = req.workspace.id;
   const range = normalizeRange(req.query.range);
 
-  // Template-based outbound messages only (exclude service/freeform)
+  // Include all outbound messages so analytics matches dashboard activity.
   const msgBase = {
     workspaceId,
     direction: "outbound",
-    templateId: { $exists: true, $ne: null },
+  };
+
+  const sentBase = {
+    ...msgBase,
+    $or: [
+      { "statusTimestamps.sentAt": { $exists: true } },
+      { status: { $in: ["accepted", "sent", "delivered", "read", "failed", "timeout_unknown"] } },
+    ],
   };
 
   const [sent, delivered, read, failed, clicks] = await Promise.all([
-    Message.countDocuments({
-      ...msgBase,
-      "statusTimestamps.sentAt": { $exists: true },
-    }),
+    Message.countDocuments(sentBase),
     Message.countDocuments({
       ...msgBase,
       "statusTimestamps.deliveredAt": { $exists: true },
@@ -268,13 +285,11 @@ async function overview(req, res) {
 
   const [thisMonthSent, lastMonthSent] = await Promise.all([
     Message.countDocuments({
-      ...msgBase,
-      "statusTimestamps.sentAt": { $exists: true },
+      ...sentBase,
       createdAt: { $gte: thisMonthStart, $lt: nextMonthStart },
     }),
     Message.countDocuments({
-      ...msgBase,
-      "statusTimestamps.sentAt": { $exists: true },
+      ...sentBase,
       createdAt: { $gte: lastMonthStart, $lt: thisMonthStart },
     }),
   ]);
@@ -296,9 +311,8 @@ async function overview(req, res) {
     Template.countDocuments({ workspaceId }),
     Contact.countDocuments({ workspaceId }),
     Message.countDocuments({
-      ...msgBase,
-      "statusTimestamps.sentAt": { $exists: true },
-      "statusTimestamps.sentAt": { $gte: todayStart, $lt: tomorrowStart },
+      ...sentBase,
+      createdAt: { $gte: todayStart, $lt: tomorrowStart },
     }),
   ]);
 

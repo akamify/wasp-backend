@@ -230,14 +230,9 @@ function isDocPage(page) {
   const slug = String(page?.slug || "").trim().toLowerCase();
   const normalizedCandidate = normalizeDocSlugCandidate(slug, page?.data || {});
   if (!slug || slug === DOC_BRAND_SLUG || RESERVED_DOC_SLUGS.has(normalizedCandidate)) return false;
-  const type = String(page?.data?.__type || "");
-  return (
-    type === "doc" ||
-    slug.startsWith(DOC_PREFIX) ||
-    slug.startsWith(LEGACY_DOC_PATH_PREFIX) ||
-    isDocLikePayload(page?.data || {}) ||
-    isLegacyDocPage(page)
-  );
+  const type = String(page?.data?.__type || "").toLowerCase();
+  // Strict separation: Docs module should only include explicit docs-managed records.
+  return type === "doc" || slug.startsWith(DOC_PREFIX) || slug.startsWith(LEGACY_DOC_PATH_PREFIX);
 }
 
 async function adminDocsList(req, res) {
