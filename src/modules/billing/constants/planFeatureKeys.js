@@ -1,0 +1,36 @@
+const FEATURE_FUNCTIONALITY_KEYS = Object.freeze([
+  "dashboardPageAccess",
+  "templatesPageAccess",
+  "campaignsPageAccess",
+  "contactsPageAccess",
+  "inboxPageAccess",
+  "crmPageAccess",
+  "flowsPageAccess",
+  "walletPageAccess",
+  "linksPageAccess",
+  "automationPageAccess",
+  "activityPageAccess",
+  "apiKeysPageAccess",
+  "apiReportsPageAccess",
+  "campaignApiAccess",
+  "externalChatApiAccess",
+  "crmAccess",
+  "employeeAccess",
+  "leadDistributionAccess",
+  "analyticsAccess",
+  "exportAccess",
+  "automationAccess",
+  "apiKeyAccess",
+]);
+
+const LIMIT_KEYS = Object.freeze([
+  "maxContacts",
+  "maxTemplates",
+  "maxEmployees",
+  "maxApiKeys",
+  "maxCampaignsPerMonth",
+  "maxContactsExport",
+  "maxStorageMb",
+]);
+
+module.exports = { FEATURE_FUNCTIONALITY_KEYS, LIMIT_KEYS };

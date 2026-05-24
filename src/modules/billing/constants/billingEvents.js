@@ -1,0 +1,30 @@
+const BILLING_EVENTS = Object.freeze({
+  PLAN_CREATED: "plan.created",
+  PLAN_UPDATED: "plan.updated",
+  PLAN_ENABLED: "plan.enabled",
+  PLAN_DISABLED: "plan.disabled",
+  BILLING_SETTINGS_UPDATED: "billing_settings.updated",
+  CHECKOUT_CREATED: "checkout.created",
+  CHECKOUT_PAID: "checkout.paid",
+  CHECKOUT_FAILED: "checkout.failed",
+  SUBSCRIPTION_ACTIVATED: "subscription.activated",
+  SUBSCRIPTION_RENEWED: "subscription.renewed",
+  SUBSCRIPTION_EXPIRED: "subscription.expired",
+  SUBSCRIPTION_CANCELLED: "subscription.cancelled",
+  SUBSCRIPTION_MANUALLY_ASSIGNED: "subscription.manually_assigned",
+  PURCHASE_LINK_CREATED: "purchase_link.created",
+  PURCHASE_LINK_USED: "purchase_link.used",
+  PURCHASE_LINK_CANCELLED: "purchase_link.cancelled",
+  INVOICE_GENERATED: "invoice.generated",
+  INVOICE_PDF_GENERATED: "invoice.pdf_generated",
+  INVOICE_PDF_FAILED: "invoice.pdf_failed",
+  INVOICE_EMAIL_SENT: "invoice.email_sent",
+  INVOICE_EMAIL_FAILED: "invoice.email_failed",
+  INVOICE_DOWNLOADED: "invoice.downloaded",
+  INVOICE_BULK_DOWNLOADED: "invoice.bulk_downloaded",
+  RAZORPAY_WEBHOOK_PROCESSED: "razorpay.webhook_processed",
+  RAZORPAY_WEBHOOK_DUPLICATE: "razorpay.webhook_duplicate",
+});
+
+module.exports = { BILLING_EVENTS };
+

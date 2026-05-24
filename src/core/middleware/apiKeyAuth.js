@@ -1,0 +1,50 @@
+const { HttpError } = require("@shared/utils/httpError");
+const { sha256Hex } = require("@shared/utils/hash");
+const { User } = require("@infra/database/User");
+const { canLoginStatus, getBlockedLoginMessage } = require("@shared/utils/userStatus");
+
+async function apiKeyAuth(req, res, next) {
+  const apiKey = req.headers["x-api-key"];
+  if (!apiKey || typeof apiKey !== "string") {
+    return next(new HttpError(401, "Missing X-API-Key header"));
+  }
+
+  const apiKeyHash = sha256Hex(apiKey);
+  const user = await User.findOne({
+    $or: [{ apiKeyHash }, { "apiKeys.keyHash": apiKeyHash }],
+  }).select("_id role accountBlocked allowedApiPermissions apiKeys");
+  if (!user) return next(new HttpError(401, "Invalid API key"));
+  if (!canLoginStatus(user.status)) return next(new HttpError(403, getBlockedLoginMessage(user.status)));
+  if (user.accountBlocked) return next(new HttpError(403, "This user is inactive"));
+
+  const keyDoc = Array.isArray(user.apiKeys)
+    ? user.apiKeys.find((k) => String(k.keyHash || "") === String(apiKeyHash))
+    : null;
+  if (keyDoc && keyDoc.revoked) return next(new HttpError(403, "API key revoked"));
+
+  const userAllowedPermissions = user.allowedApiPermissions || { campaignSend: true, chatAccess: false };
+  const keyPermissions = keyDoc?.permissions || userAllowedPermissions;
+  const permissions = {
+    campaignSend: Boolean(userAllowedPermissions?.campaignSend) && Boolean(keyPermissions?.campaignSend),
+    chatAccess: Boolean(userAllowedPermissions?.chatAccess) && Boolean(keyPermissions?.chatAccess),
+  };
+  if (keyDoc) {
+    keyDoc.lastUsedAt = new Date();
+    await user.save();
+  }
+
+  req.user = { id: String(user._id), role: user.role };
+  req.auth = {
+    userId: String(user._id),
+    apiKeyId: keyDoc ? String(keyDoc._id) : null,
+    permissions: {
+      campaignSend: permissions.campaignSend,
+      chatAccess: permissions.chatAccess,
+    },
+    isApiKey: true,
+  };
+  return next();
+}
+
+module.exports = { apiKeyAuth };
+
