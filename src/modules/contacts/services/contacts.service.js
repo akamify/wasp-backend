@@ -24,6 +24,25 @@ function buildListFilter(req) {
   return filter;
 }
 
+function normalizeAttributes(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+  const out = {};
+  for (const [rawKey, rawValue] of Object.entries(input)) {
+    const key = String(rawKey || "").trim();
+    if (!key) continue;
+    if (typeof rawValue === "string") {
+      const trimmed = rawValue.trim();
+      if (!trimmed) continue;
+      out[key] = trimmed;
+      continue;
+    }
+    if (typeof rawValue === "number" || typeof rawValue === "boolean") {
+      out[key] = rawValue;
+    }
+  }
+  return out;
+}
+
 async function listContacts(req) {
   const { page, limit, skip } = parseListPaging(req);
   const filter = buildListFilter(req);
@@ -66,6 +85,7 @@ async function createContact(req) {
     language: req.body.language ? String(req.body.language).trim() : undefined,
     notes: req.body.notes || undefined,
     tags: Array.from(new Set((req.body.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean))),
+    attributes: normalizeAttributes(req.body.attributes),
     source: "manual",
   });
 
@@ -94,6 +114,7 @@ async function updateContact(req) {
     language: req.body.language,
     notes: req.body.notes,
     tags: req.body.tags,
+    attributes: req.body.attributes,
   };
 
   const contact = await contactsRepository.updateContact(existing, updates);
@@ -136,7 +157,7 @@ async function exportContactsCsv(req) {
   const rows = await contactsRepository.findContactsForExport({ workspaceId: req.workspace.id, ids });
   if (!rows.length) throw new HttpError(404, "No contacts found for selected IDs");
 
-  const header = ["name", "phone", "company", "tags"];
+  const header = ["name", "phone", "company", "tags", "attributes"];
   const csvRows = [header.join(",")];
   for (const row of rows) {
     const values = [
@@ -144,6 +165,7 @@ async function exportContactsCsv(req) {
       escapeCsvCell(row.phone || ""),
       escapeCsvCell(row.company || ""),
       escapeCsvCell(Array.isArray(row.tags) ? row.tags.join("|") : ""),
+      escapeCsvCell(row.attributes && typeof row.attributes === "object" ? JSON.stringify(row.attributes) : ""),
     ];
     csvRows.push(values.join(","));
   }

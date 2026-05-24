@@ -8,6 +8,13 @@ const contactSchema = Joi.object({
   language: Joi.string().max(20).allow("").optional(),
   notes: Joi.string().max(5000).allow("").optional(),
   tags: Joi.array().items(Joi.string().max(40)).max(25).optional(),
+  attributes: Joi.object()
+    .pattern(
+      Joi.string().trim().min(1).max(50),
+      Joi.alternatives().try(Joi.string().max(200), Joi.number(), Joi.boolean())
+    )
+    .max(30)
+    .optional(),
 });
 
 const updateContactSchema = Joi.object({
@@ -18,6 +25,13 @@ const updateContactSchema = Joi.object({
   language: Joi.string().max(20).allow("").optional(),
   notes: Joi.string().max(5000).allow("").optional(),
   tags: Joi.array().items(Joi.string().max(40)).max(25).optional(),
+  attributes: Joi.object()
+    .pattern(
+      Joi.string().trim().min(1).max(50),
+      Joi.alternatives().try(Joi.string().max(200), Joi.number(), Joi.boolean())
+    )
+    .max(30)
+    .optional(),
 });
 
 const exportContactsCsvSchema = Joi.object({

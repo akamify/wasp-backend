@@ -34,6 +34,23 @@ async function updateContact(existingDoc, updates) {
     updates.tags !== undefined
       ? Array.from(new Set((updates.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)))
       : undefined;
+  const nextAttributes =
+    updates.attributes !== undefined && updates.attributes && typeof updates.attributes === "object" && !Array.isArray(updates.attributes)
+      ? Object.entries(updates.attributes).reduce((acc, [rawKey, rawValue]) => {
+          const key = String(rawKey || "").trim();
+          if (!key) return acc;
+          if (typeof rawValue === "string") {
+            const trimmed = rawValue.trim();
+            if (!trimmed) return acc;
+            acc[key] = trimmed;
+            return acc;
+          }
+          if (typeof rawValue === "number" || typeof rawValue === "boolean") {
+            acc[key] = rawValue;
+          }
+          return acc;
+        }, {})
+      : undefined;
 
   existingDoc.phone = updates.phone;
   if (updates.name !== undefined) existingDoc.name = updates.name || undefined;
@@ -42,6 +59,7 @@ async function updateContact(existingDoc, updates) {
   if (updates.language !== undefined) existingDoc.language = updates.language ? String(updates.language).trim() : undefined;
   if (updates.notes !== undefined) existingDoc.notes = updates.notes || undefined;
   if (updates.tags !== undefined) existingDoc.tags = nextTags;
+  if (updates.attributes !== undefined) existingDoc.attributes = nextAttributes || {};
   return existingDoc.save();
 }
 
@@ -51,7 +69,7 @@ async function deleteContact({ id, workspaceId }) {
 
 async function findContactsForExport({ workspaceId, ids }) {
   return Contact.find({ _id: { $in: ids }, workspaceId })
-    .select("name phone company tags")
+    .select("name phone company tags attributes")
     .sort({ updatedAt: -1, name: 1 })
     .lean();
 }

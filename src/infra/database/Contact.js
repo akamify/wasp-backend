@@ -15,6 +15,11 @@ const ContactSchema = new mongoose.Schema(
     language: { type: String, trim: true, default: null },
     notes: { type: String, trim: true },
     tags: [{ type: String, trim: true }],
+    attributes: {
+      type: Map,
+      of: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
     source: {
       type: String,
       enum: ["manual", "inbound", "outbound", "imported"],

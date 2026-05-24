@@ -10,7 +10,7 @@ const { HttpError } = require("@shared/utils/httpError");
 async function attachContacts(userId, conversations) {
   const phones = Array.from(new Set(conversations.map((item) => item.phone).filter(Boolean)));
   const contacts = await Contact.find({ workspaceId: userId, phone: { $in: phones } }).select(
-    "_id phone name company tags"
+    "_id phone name company tags attributes"
   );
   const contactMap = new Map(contacts.map((contact) => [contact.phone, contact]));
 
@@ -25,6 +25,7 @@ async function attachContacts(userId, conversations) {
           name: contact.name,
           company: contact.company,
           tags: contact.tags || [],
+          attributes: contact.attributes || {},
         }
         : null,
     };
@@ -75,6 +76,7 @@ function mapConversationListItemForPublic(item) {
         name: String(item.contact?.name || ""),
         company: String(item.contact?.company || ""),
         tags: Array.isArray(item.contact?.tags) ? item.contact.tags : [],
+        attributes: item.contact?.attributes || {},
       }
       : null,
     createdAt: item?.createdAt || null,
@@ -167,7 +169,7 @@ async function getConversation(req, res) {
   const [conversation, contact] = await Promise.all([
     Conversation.findOne({ workspaceId: req.workspace.id, phone }),
     Contact.findOne({ workspaceId: req.workspace.id, phone }).select(
-      "_id phone name company email language notes tags"
+      "_id phone name company email language notes tags attributes"
     ),
   ]);
 

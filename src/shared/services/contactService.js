@@ -23,6 +23,25 @@ function normalizeTags(tags) {
   );
 }
 
+function normalizeAttributes(attributes) {
+  if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return undefined;
+  const out = {};
+  for (const [rawKey, rawValue] of Object.entries(attributes)) {
+    const key = String(rawKey || "").trim();
+    if (!key) continue;
+    if (typeof rawValue === "string") {
+      const trimmed = rawValue.trim();
+      if (!trimmed) continue;
+      out[key] = trimmed;
+      continue;
+    }
+    if (typeof rawValue === "number" || typeof rawValue === "boolean") {
+      out[key] = rawValue;
+    }
+  }
+  return out;
+}
+
 function buildContactUpdate(patch = {}) {
   const $set = {};
   const $unset = {};
@@ -54,6 +73,11 @@ function buildContactUpdate(patch = {}) {
   const tags = normalizeTags(patch.tags);
   if (tags !== undefined) {
     $set.tags = tags;
+  }
+
+  const attributes = normalizeAttributes(patch.attributes);
+  if (attributes !== undefined) {
+    $set.attributes = attributes;
   }
 
   if (patch.lastMessagePreview !== undefined) {
