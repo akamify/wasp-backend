@@ -16,6 +16,11 @@ const { sendTemplateMessageForUser } = require("@shared/services/outboundMessage
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 
+function isUpstashRequestLimitError(err) {
+    const msg = String(err?.message || "").toLowerCase();
+    return msg.includes("max requests limit exceeded");
+}
+
 function buildPublicRequestId() {
     const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
     const rand = Math.random().toString(36).slice(2, 8);
@@ -110,9 +115,12 @@ async function sendApiCampaignByName(req) {
         });
     } catch (queueErr) {
         queuedToRedis = false;
+        const queueErrorMessage = isUpstashRequestLimitError(queueErr)
+            ? "Redis request limit exceeded. Campaign kept running; please upgrade/reset Redis plan and retry queue processing."
+            : (queueErr?.message || "Failed to enqueue campaign jobs");
         await require("@infra/database/Campaign").Campaign.updateOne(
             { _id: apiCampaign._id, workspaceId },
-            { $set: { lastError: { message: queueErr?.message || "Failed to enqueue campaign jobs" } } }
+            { $set: { lastError: { message: queueErrorMessage } } }
         );
     }
 
@@ -198,17 +206,15 @@ async function sendApiCampaignByName(req) {
             inlineSentCount = sentCount;
             inlineFailedCount = failedCount;
 
-            const done = await require("@infra/database/Campaign").Campaign.findOne({ _id: apiCampaign._id, workspaceId }).select("totals");
-            const queued = Number(done?.totals?.queued || 0);
-            let nextStatus = "running";
-            if (queued === 0) {
-                if (sentCount > 0 && failedCount === 0) nextStatus = "completed";
-                else if (sentCount > 0 && failedCount > 0) nextStatus = "completed";
-                else if (failedCount > 0) nextStatus = "failed";
-            }
             await require("@infra/database/Campaign").Campaign.updateOne(
                 { _id: apiCampaign._id, workspaceId },
-                { $set: { status: nextStatus, ...(lastFailure ? { lastError: { message: lastFailure?.message || "Failed" } } : {}) } }
+                {
+                    $set: {
+                        // API campaign must stay running until user explicitly completes/cancels.
+                        status: "running",
+                        ...(lastFailure ? { lastError: { message: lastFailure?.message || "Failed" } } : {}),
+                    },
+                }
             );
         }
     }
