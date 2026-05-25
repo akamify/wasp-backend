@@ -41,7 +41,7 @@ router.post(
 );
 router.post(
   "/admins/assign",
-  validate(Joi.object({ email: Joi.string().email().required() })),
+  validate(Joi.object({ email: Joi.string().email().required(), name: Joi.string().min(2).max(120).allow("").optional() })),
   asyncHandler(c.assignAdmin)
 );
 router.post(

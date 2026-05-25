@@ -31,6 +31,15 @@ function generateStrongTempPassword(length = 8) {
   return out;
 }
 
+function createPasswordResetTokenPayload() {
+  const rawToken = base64Url(crypto.randomBytes(32));
+  return {
+    rawToken,
+    tokenHash: sha256Hex(rawToken),
+    expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+  };
+}
+
 async function assignAdmin(req, res) {
   const email = String(req.body?.email || "").trim().toLowerCase();
   const name = String(req.body?.name || "").trim();
@@ -42,8 +51,8 @@ async function assignAdmin(req, res) {
   }
   if (user && String(user.role || "") === "super_admin") throw new HttpError(400, "Super admin role cannot be changed");
 
-  const tempPassword = generateStrongTempPassword(8);
-  const passwordHash = await bcrypt.hash(tempPassword, 12);
+  const passwordHash = await bcrypt.hash(generateStrongTempPassword(8), 12);
+  const { rawToken, tokenHash, expiresAt } = createPasswordResetTokenPayload();
 
   if (!user) {
     user = await User.create({
@@ -56,6 +65,8 @@ async function assignAdmin(req, res) {
       accountBlocked: false,
       twoFactorEnabled: true,
       adminPermissions: { pages: ["/admin/dashboard", "/admin/profile"], components: [], actions: [] },
+      passwordResetTokenHash: tokenHash,
+      passwordResetTokenExpiresAt: expiresAt,
     });
   } else {
     if (name) user.name = name;
@@ -68,23 +79,27 @@ async function assignAdmin(req, res) {
     if (!user.adminPermissions) {
       user.adminPermissions = { pages: ["/admin/dashboard", "/admin/profile"], components: [], actions: [] };
     }
+    user.passwordResetTokenHash = tokenHash;
+    user.passwordResetTokenExpiresAt = expiresAt;
     await user.save();
   }
 
+  const resetLink = `${appBaseUrl}/reset-password?token=${encodeURIComponent(rawToken)}`;
   await sendEmail({
     toEmail: email,
     toName: user.name || "",
-    subject: "Admin account credentials",
+    subject: "Admin account created - Set your password",
     htmlContent: `
       <div style="font-family:Arial,sans-serif;line-height:1.6;color:#0f172a">
         <h2 style="margin:0 0 12px">Admin Access Assigned</h2>
         <p>Email: <b>${email}</b></p>
-        <p>Temporary Password: <b>${tempPassword}</b></p>
+        <p>You have been added as an admin. Use the link below to create or reset your password:</p>
+        <p><a href="${resetLink}">${resetLink}</a></p>
         <p>2FA is enabled by default on your account.</p>
-        <p style="font-size:12px;color:#64748b">Please login and update your password from profile.</p>
+        <p style="font-size:12px;color:#64748b">This link expires in 30 minutes. If it expires, ask super admin to send a new link.</p>
       </div>
     `,
-    textContent: `Admin Access Assigned\nEmail: ${email}\nTemporary Password: ${tempPassword}\n2FA is enabled by default.\nPlease login and update your password from profile.`,
+    textContent: `Admin Access Assigned\nEmail: ${email}\nSet password link: ${resetLink}\n2FA is enabled by default.\nThis link expires in 30 minutes.`,
   });
 
   await writeAuditLog(req, {
@@ -92,13 +107,13 @@ async function assignAdmin(req, res) {
     targetId: user._id,
     resourceType: "user",
     resourceId: String(user._id),
-    metadata: { email: user.email, twoFactorEnabled: true },
+    metadata: { email: user.email, twoFactorEnabled: true, passwordSetupLinkSent: true },
   });
 
   return res.json({
     success: true,
     user: { id: String(user._id), email: user.email, role: user.role, twoFactorEnabled: !!user.twoFactorEnabled },
-    message: "Admin assigned. Login credentials sent on email.",
+    message: "Admin assigned. Password setup link sent on email.",
   });
 }
 
@@ -156,9 +171,7 @@ async function resetUserPassword(req, res) {
   if (!user) throw new HttpError(404, "User not found");
   if (String(user.role || "") === "super_admin") throw new HttpError(400, "Use super admin reset flow for root account");
 
-  const rawToken = base64Url(crypto.randomBytes(32));
-  const tokenHash = sha256Hex(rawToken);
-  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+  const { rawToken, tokenHash, expiresAt } = createPasswordResetTokenPayload();
 
   user.passwordResetTokenHash = tokenHash;
   user.passwordResetTokenExpiresAt = expiresAt;
