@@ -237,7 +237,15 @@ function isDocPage(page) {
 
 async function adminDocsList(req, res) {
   const pages = await PublicPage.find({ slug: { $ne: DOC_BRAND_SLUG } }).sort({ updatedAt: -1 });
-  const docs = pages.filter(isDocPage).map(normalizeDocFromPage);
+  const docs = pages
+    .filter(isDocPage)
+    .map(normalizeDocFromPage)
+    .sort((a, b) => {
+      const orderA = Number(a?.order || 0);
+      const orderB = Number(b?.order || 0);
+      if (orderA !== orderB) return orderA - orderB;
+      return String(a?.title || "").localeCompare(String(b?.title || ""));
+    });
 
   const brand = await PublicPage.findOne({ slug: DOC_BRAND_SLUG }).select("data");
   res.json({
