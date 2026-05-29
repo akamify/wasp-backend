@@ -23,6 +23,9 @@ router.get("/debug/last", (req, res, next) => {
 
 router.get("/whatsapp", asyncHandler(verify));
 router.post("/whatsapp", verifyWebhookSignature, asyncHandler(receive));
+// Centralized Meta WhatsApp callback path used in platform onboarding docs/UI.
+router.get("/meta/whatsapp", asyncHandler(verify));
+router.post("/meta/whatsapp", verifyWebhookSignature, asyncHandler(receive));
 // Alias paths (common in tutorials / older setups)
 router.get("/webhook", asyncHandler(verify));
 router.post("/webhook", verifyWebhookSignature, asyncHandler(receive));
