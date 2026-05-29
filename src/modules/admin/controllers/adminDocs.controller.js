@@ -1,11 +1,12 @@
 const Joi = require("joi");
 const mongoose = require("mongoose");
-const { PublicPage } = require("@infra/database/PublicPage");
+const { DocPage } = require("@infra/database/DocPage");
+const { DocSetting } = require("@infra/database/DocSetting");
 const { HttpError } = require("@shared/utils/httpError");
 const { uploadBufferToCloudinary } = require("@shared/services/cloudinaryService");
 
 const DOC_PREFIX = "docs-";
-const DOC_BRAND_SLUG = "__docs_brand__";
+const DOC_BRAND_KEY = "brand";
 const LEGACY_DOC_PATH_PREFIX = "docs/";
 const RESERVED_DOC_SLUGS = new Set(["brand", "__docs_brand__"]);
 const CMS_PAGE_SLUGS = new Set(["about", "privacy-policy", "terms-of-service", "cookie-policy", "help-center", "careers"]);
@@ -115,7 +116,7 @@ async function resolveDocPageByIdentifier(identifier) {
 
   let page = null;
   if (mongoose.Types.ObjectId.isValid(raw)) {
-    page = await PublicPage.findById(raw);
+    page = await DocPage.findById(raw);
     if (page && isDocPage(page)) return page;
   }
 
@@ -126,7 +127,7 @@ async function resolveDocPageByIdentifier(identifier) {
     normalized.startsWith(LEGACY_DOC_PATH_PREFIX) ? normalized : `${LEGACY_DOC_PATH_PREFIX}${normalized}`,
   ];
 
-  page = await PublicPage.findOne({ slug: { $in: Array.from(new Set(slugCandidates)) } });
+  page = await DocPage.findOne({ slug: { $in: Array.from(new Set(slugCandidates)) } });
   if (!page || !isDocPage(page)) return null;
   return page;
 }
@@ -229,14 +230,12 @@ function isDocLikePayload(data) {
 function isDocPage(page) {
   const slug = String(page?.slug || "").trim().toLowerCase();
   const normalizedCandidate = normalizeDocSlugCandidate(slug, page?.data || {});
-  if (!slug || slug === DOC_BRAND_SLUG || RESERVED_DOC_SLUGS.has(normalizedCandidate)) return false;
-  const type = String(page?.data?.__type || "").toLowerCase();
-  // Strict separation: Docs module should only include explicit docs-managed records.
-  return type === "doc" || slug.startsWith(DOC_PREFIX) || slug.startsWith(LEGACY_DOC_PATH_PREFIX);
+  if (!slug || RESERVED_DOC_SLUGS.has(normalizedCandidate)) return false;
+  return true;
 }
 
 async function adminDocsList(req, res) {
-  const pages = await PublicPage.find({ slug: { $ne: DOC_BRAND_SLUG } }).sort({ updatedAt: -1 });
+  const pages = await DocPage.find({}).sort({ updatedAt: -1 });
   const docs = pages
     .filter(isDocPage)
     .map(normalizeDocFromPage)
@@ -247,7 +246,7 @@ async function adminDocsList(req, res) {
       return String(a?.title || "").localeCompare(String(b?.title || ""));
     });
 
-  const brand = await PublicPage.findOne({ slug: DOC_BRAND_SLUG }).select("data");
+  const brand = await DocSetting.findOne({ key: DOC_BRAND_KEY }).select("data");
   res.json({
     success: true,
     items: docs,
@@ -269,9 +268,9 @@ async function adminDocsCreate(req, res) {
   const payload = await docSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
   const docSlug = String(payload.slug || "").trim().toLowerCase();
   if (RESERVED_DOC_SLUGS.has(docSlug)) throw new HttpError(400, "This slug is reserved and cannot be used for docs");
-  const slug = `${DOC_PREFIX}${docSlug}`;
+  const slug = docSlug;
 
-  const exists = await PublicPage.findOne({ slug }).select("_id");
+  const exists = await DocPage.findOne({ slug }).select("_id");
   if (exists) throw new HttpError(409, "Doc slug already exists");
 
   const data = {
@@ -286,7 +285,7 @@ async function adminDocsCreate(req, res) {
     __type: "doc",
   };
 
-  const page = await PublicPage.create({
+  const page = await DocPage.create({
     slug,
     title: payload.title,
     data,
@@ -305,9 +304,9 @@ async function adminDocsUpdate(req, res) {
 
   const docSlug = String(payload.slug || "").trim().toLowerCase();
   if (RESERVED_DOC_SLUGS.has(docSlug)) throw new HttpError(400, "This slug is reserved and cannot be used for docs");
-  const nextSlug = `${DOC_PREFIX}${docSlug}`;
+  const nextSlug = docSlug;
   if (nextSlug !== String(existing.slug)) {
-    const conflict = await PublicPage.findOne({ slug: nextSlug, _id: { $ne: existing._id } }).select("_id");
+    const conflict = await DocPage.findOne({ slug: nextSlug, _id: { $ne: existing._id } }).select("_id");
     if (conflict) throw new HttpError(409, "Doc slug already exists");
   }
 
@@ -334,12 +333,12 @@ async function adminDocsDelete(req, res) {
   const id = String(req.params.id || "").trim();
   const page = await resolveDocPageByIdentifier(id);
   if (!page) throw new HttpError(404, "Doc not found");
-  await PublicPage.deleteOne({ _id: page._id });
+  await DocPage.deleteOne({ _id: page._id });
   return res.json({ success: true });
 }
 
 async function adminDocsBrandGet(req, res) {
-  const page = await PublicPage.findOne({ slug: DOC_BRAND_SLUG }).select("data");
+  const page = await DocSetting.findOne({ key: DOC_BRAND_KEY }).select("data");
   return res.json({
     success: true,
     settings: {
@@ -356,9 +355,9 @@ async function adminDocsBrandUpdate(req, res) {
   });
   const payload = await schema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
 
-  const page = await PublicPage.findOneAndUpdate(
-    { slug: DOC_BRAND_SLUG },
-    { $set: { title: "Docs Brand", data: payload, updatedByAdminId: String(req.user?.id || "") } },
+  const page = await DocSetting.findOneAndUpdate(
+    { key: DOC_BRAND_KEY },
+    { $set: { data: payload, updatedByAdminId: String(req.user?.id || "") } },
     { new: true, upsert: true }
   ).select("data");
 
