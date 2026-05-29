@@ -1,9 +1,18 @@
 const { metaGraphVersion } = require("@core/config/env");
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { encryptString, decryptString } = require("@shared/utils/crypto");
+const { encryptSecret } = require("@shared/utils/secretCrypto");
 const { hashForLookup } = require("@shared/utils/hash");
 const { HttpError } = require("@shared/utils/httpError");
 const { validateCredentials } = require("@shared/utils/whatsappSender");
+
+function safeEncryptSecret(value) {
+  try {
+    return encryptSecret(value);
+  } catch {
+    return null;
+  }
+}
 
 async function saveMetaCredentials(req, res) {
   const { accessToken, phoneNumberId, wabaId, graphApiVersion, override, overrideReason } = req.body;
@@ -47,8 +56,15 @@ async function saveMetaCredentials(req, res) {
           businessAccountIdHash: hashForLookup(wabaId),
           phoneNumberIdPlain: String(phoneNumberId),
           businessAccountIdPlain: String(wabaId),
+          displayPhoneNumber: null,
+          businessTokenEnc: safeEncryptSecret(accessToken),
           graphApiVersion: graphApiVersion || metaGraphVersion,
           isValid: true,
+          status: "active",
+          webhookSubscribed: true,
+          connectionMethod: "manual",
+          connectedAt: new Date(),
+          lastError: null,
           lastValidatedAt: new Date(),
           lastEditedAt: new Date(),
           lastEditedBy: req.user?.id || null,

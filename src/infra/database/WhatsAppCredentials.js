@@ -25,6 +25,18 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
     graphApiVersion: { type: String, default: "v22.0" },
     isValid: { type: Boolean, default: false },
     lastValidatedAt: { type: Date },
+    displayPhoneNumber: { type: String, default: null },
+    businessTokenEnc: { type: String, default: null, select: false },
+    connectionMethod: { type: String, enum: ["embedded_signup", "manual"], default: "manual", index: true },
+    webhookSubscribed: { type: Boolean, default: false, index: true },
+    status: {
+      type: String,
+      enum: ["pending", "active", "failed", "disconnected"],
+      default: "pending",
+      index: true,
+    },
+    lastError: { type: String, default: null },
+    connectedAt: { type: Date, default: null },
 
     // Connection governance (workspace can have only one connection; edits are audited)
     lastEditedAt: { type: Date, default: null },
