@@ -96,7 +96,10 @@ async function validateCredentials({
 
   const steps = [];
 
-  // Step 1: phone number validation
+  // Step 1: direct phone-number node lookup (best-effort).
+  // Some system-user tokens can validate via WABA edges but still return
+  // GraphMethodException(100/33) on direct `/{phoneNumberId}` reads.
+  // In that specific case we continue and enforce membership via Step 2.
   try {
     const url = `/${phoneNumberId}`;
     const res = await client.get(url, {
@@ -115,6 +118,28 @@ async function validateCredentials({
       response: res.data,
     });
   } catch (err) {
+    const metaError = err?.response?.data?.error || {};
+    const code = Number(metaError.code || 0);
+    const subcode = Number(metaError.error_subcode || 0);
+    const canFallbackToWabaLookup = code === 100 && subcode === 33;
+    if (canFallbackToWabaLookup) {
+      steps.push({
+        step: "phone_number_lookup",
+        ok: false,
+        softFail: true,
+        reason: "direct_phone_node_unavailable_using_token",
+        request: {
+          method: "GET",
+          url: `/${phoneNumberId}`,
+          params: { fields: "display_phone_number,verified_name" },
+        },
+        error: toMetaErrorInfo(err, "phone_number_lookup", {
+          method: "GET",
+          url: `/${phoneNumberId}`,
+          params: { fields: "display_phone_number,verified_name" },
+        }),
+      });
+    } else {
     throw Object.assign(
       new Error("Phone number validation failed"),
       {
@@ -126,6 +151,7 @@ async function validateCredentials({
         validationSteps: steps,
       }
     );
+    }
   }
 
   // Step 2: WABA access validation via supported edge
