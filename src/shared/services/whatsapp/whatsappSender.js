@@ -254,6 +254,63 @@ async function validateCredentials({
     response: tokenInfo,
   });
 
+  // Step 5: ensure this app is subscribed to the WABA webhooks.
+  // Central webhook callback/token is app-level, but each tenant WABA still needs
+  // app subscription via /{wabaId}/subscribed_apps.
+  const appId = String(process.env.APP_ID || process.env.META_APP_ID || "").trim();
+  try {
+    const listUrl = `/${wabaId}/subscribed_apps`;
+    const listRes = await client.get(listUrl, { headers: authHeaders(accessToken) });
+    const items = Array.isArray(listRes?.data?.data) ? listRes.data.data : [];
+    const subscribedAppIds = items
+      .map((item) =>
+        String(
+          item?.whatsapp_business_api_data?.id ||
+            item?.whatsapp_business_api_data?.app_id ||
+            item?.app_id ||
+            item?.id ||
+            ""
+        ).trim()
+      )
+      .filter(Boolean);
+    const alreadySubscribed = appId ? subscribedAppIds.includes(appId) : subscribedAppIds.length > 0;
+
+    if (!alreadySubscribed) {
+      const subscribeUrl = `/${wabaId}/subscribed_apps`;
+      const subscribeRes = await client.post(subscribeUrl, null, {
+        headers: authHeaders(accessToken),
+      });
+      steps.push({
+        step: "waba_subscribed_apps_subscribe",
+        ok: true,
+        request: { method: "POST", url: subscribeUrl },
+        response: subscribeRes.data,
+      });
+    } else {
+      steps.push({
+        step: "waba_subscribed_apps_lookup",
+        ok: true,
+        request: { method: "GET", url: listUrl },
+        response: {
+          appIdConfigured: appId || null,
+          subscribedAppIds,
+          alreadySubscribed: true,
+        },
+      });
+    }
+  } catch (err) {
+    throw Object.assign(
+      new Error("WABA subscribed_apps validation failed"),
+      {
+        metaDebug: toMetaErrorInfo(err, "waba_subscribed_apps", {
+          method: "GET/POST",
+          url: `/${wabaId}/subscribed_apps`,
+        }),
+        validationSteps: steps,
+      }
+    );
+  }
+
   return { ok: true, steps };
 }
 
