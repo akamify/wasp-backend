@@ -5,7 +5,6 @@ const { auth } = require("@core/middleware/auth");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
 const { requireBillingFeature } = require("@core/middleware/requireBillingFeature");
 const { validate } = require("@core/middleware/validate");
-const { saveMetaCredentials } = require("@modules/meta/controllers/metaCredentials.controller");
 const { metaStatus } = require("@modules/meta/controllers/metaStatus.controller");
 const { metaSubscriptionHealth } = require("@modules/meta/controllers/metaSubscriptionHealth.controller");
 const { updateBusinessProfile, uploadProfilePicture } = require("@modules/meta/controllers/metaProfile.controller");
@@ -24,23 +23,6 @@ const upload = buildMemoryUpload({
 
 router.get("/status", auth, requireWorkspace, asyncHandler(metaStatus));
 router.get("/subscription-health", auth, requireWorkspace, asyncHandler(metaSubscriptionHealth));
-
-router.post(
-  "/save",
-  auth,
-  requireWorkspace,
-  validate(
-    Joi.object({
-      accessToken: Joi.string().min(10).required(),
-      phoneNumberId: Joi.string().min(3).required(),
-      wabaId: Joi.string().min(3).required(),
-      graphApiVersion: Joi.string().pattern(/^v\d+\.\d+$/).optional(),
-      override: Joi.boolean().optional(),
-      overrideReason: Joi.string().trim().max(400).allow("", null).optional(),
-    })
-  ),
-  asyncHandler(saveMetaCredentials)
-);
 
 router.put(
   "/profile",

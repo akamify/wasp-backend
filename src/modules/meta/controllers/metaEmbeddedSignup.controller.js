@@ -155,6 +155,8 @@ async function getWhatsAppConnection(req, res) {
     return res.json({
       connected: false,
       status: "disconnected",
+      waba_id: null,
+      phone_number_id: null,
       waba_id_masked: null,
       phone_number_id_masked: null,
       display_phone_number: null,
@@ -166,6 +168,8 @@ async function getWhatsAppConnection(req, res) {
   return res.json({
     connected: row.isValid && row.status === "active",
     status: row.status || (row.isValid ? "active" : "pending"),
+    waba_id: row.businessAccountIdPlain || null,
+    phone_number_id: row.phoneNumberIdPlain || null,
     waba_id_masked: mask(row.businessAccountIdPlain),
     phone_number_id_masked: mask(row.phoneNumberIdPlain),
     display_phone_number: row.displayPhoneNumber || null,
@@ -206,4 +210,3 @@ module.exports = {
   getWhatsAppConnection,
   disconnectWhatsAppConnection,
 };
-

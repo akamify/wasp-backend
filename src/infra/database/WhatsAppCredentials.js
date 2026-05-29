@@ -27,7 +27,7 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
     lastValidatedAt: { type: Date },
     displayPhoneNumber: { type: String, default: null },
     businessTokenEnc: { type: String, default: null, select: false },
-    connectionMethod: { type: String, enum: ["embedded_signup", "manual"], default: "manual", index: true },
+    connectionMethod: { type: String, enum: ["embedded_signup"], default: "embedded_signup", index: true },
     webhookSubscribed: { type: Boolean, default: false, index: true },
     status: {
       type: String,
