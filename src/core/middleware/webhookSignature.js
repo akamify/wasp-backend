@@ -2,11 +2,17 @@ const crypto = require("crypto");
 const { metaAppSecret } = require("@core/config/env");
 const { HttpError } = require("@shared/utils/httpError");
 
-function safeEqualHex(a, b) {
-  const aBuf = Buffer.from(a, "hex");
-  const bBuf = Buffer.from(b, "hex");
-  if (aBuf.length !== bBuf.length) return false;
-  return crypto.timingSafeEqual(aBuf, bBuf);
+function getSigningSecret() {
+  return String(metaAppSecret || process.env.APP_SECRET || "").trim();
+}
+
+function verifyMetaSignature({ rawBody, signature, secret }) {
+  if (!rawBody || !Buffer.isBuffer(rawBody)) return false;
+  if (!signature || typeof signature !== "string") return false;
+  if (!signature.startsWith("sha256=")) return false;
+  const expected = `sha256=${crypto.createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+  if (Buffer.byteLength(signature) !== Buffer.byteLength(expected)) return false;
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
 function verifyWebhookSignature(req, res, next) {
@@ -22,7 +28,8 @@ function verifyWebhookSignature(req, res, next) {
 
   // In non-production, signature validation is best-effort to avoid blocking local dev
   // when the callback URL is proxied / test tools omit signature headers.
-  if (!metaAppSecret) {
+  const signingSecret = getSigningSecret();
+  if (!signingSecret) {
     if (!isProd) return next(); // signature verification optional in dev/test
     return next(new HttpError(500, "META_APP_SECRET is required to verify webhook signatures"));
   }
@@ -47,16 +54,21 @@ function verifyWebhookSignature(req, res, next) {
     return next(new HttpError(500, "Missing raw body for signature verification"));
   }
 
-  const expected = crypto
-    .createHmac("sha256", metaAppSecret)
-    .update(rawBody)
-    .digest("hex");
+  const verified = verifyMetaSignature({ rawBody, signature, secret: signingSecret });
+  if (String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true") {
+    // eslint-disable-next-line no-console
+    console.info("Webhook signature debug.", {
+      route: req.originalUrl || req.url,
+      hasSignature: !!signature,
+      rawBodyLength: rawBody ? rawBody.length : 0,
+      expectedLength: rawBody ? Buffer.byteLength(`sha256=${crypto.createHmac("sha256", signingSecret).update(rawBody).digest("hex")}`) : 0,
+      receivedLength: signature ? Buffer.byteLength(signature) : 0,
+      usingMetaAppSecretPresent: !!signingSecret,
+      signatureVerified: verified,
+    });
+  }
 
-  const provided = signature.startsWith("sha256=")
-    ? signature.slice("sha256=".length)
-    : signature;
-
-  if (!safeEqualHex(provided, expected)) {
+  if (!verified) {
     if (String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true") {
       // eslint-disable-next-line no-console
       console.warn("Webhook signature mismatch.");
@@ -68,5 +80,5 @@ function verifyWebhookSignature(req, res, next) {
   return next();
 }
 
-module.exports = { verifyWebhookSignature };
+module.exports = { verifyWebhookSignature, verifyMetaSignature };
 
