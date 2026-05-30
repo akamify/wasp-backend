@@ -120,17 +120,48 @@ async function exchangeEmbeddedSignupCode(req, res) {
   let validatedPhoneNumber = null;
 
   try {
-    logGraphCall({
-      operation: "list_waba_phone_numbers",
-      path: `/${wabaId}/phone_numbers`,
-      wabaId,
-      phoneNumberId,
-    });
-    const phoneListRes = await client.get(`/${wabaId}/phone_numbers`, {
-      headers,
-      params: { fields: "id,display_phone_number,verified_name,code_verification_status,quality_rating" },
-    });
-    const phoneRows = Array.isArray(phoneListRes?.data?.data) ? phoneListRes.data.data : [];
+    let phoneRows = [];
+    try {
+      logGraphCall({
+        operation: "list_waba_phone_numbers_minimal_fields",
+        path: `/${wabaId}/phone_numbers?fields=id,display_phone_number`,
+        wabaId,
+        phoneNumberId,
+      });
+      const phoneListRes = await client.get(`/${wabaId}/phone_numbers`, {
+        headers,
+        params: { fields: "id,display_phone_number" },
+      });
+      phoneRows = Array.isArray(phoneListRes?.data?.data) ? phoneListRes.data.data : [];
+      if (debug) {
+        // eslint-disable-next-line no-console
+        console.info("[embedded-signup] minimal phone list success", { count: phoneRows.length });
+      }
+    } catch (minimalErr) {
+      if (debug) {
+        // eslint-disable-next-line no-console
+        console.warn("[embedded-signup] minimal phone list failed", {
+          reason: sanitizeMetaError(minimalErr, "phone list minimal fields failed"),
+        });
+      }
+      const metaCode = Number(minimalErr?.response?.data?.error?.code || 0);
+      if (metaCode !== 200) throw minimalErr;
+
+      // Retry once without fields for restrictive permission cases.
+      logGraphCall({
+        operation: "list_waba_phone_numbers_no_fields_fallback",
+        path: `/${wabaId}/phone_numbers`,
+        wabaId,
+        phoneNumberId,
+      });
+      const fallbackRes = await client.get(`/${wabaId}/phone_numbers`, { headers });
+      phoneRows = Array.isArray(fallbackRes?.data?.data) ? fallbackRes.data.data : [];
+      if (debug) {
+        // eslint-disable-next-line no-console
+        console.info("[embedded-signup] no-fields fallback success", { count: phoneRows.length });
+      }
+    }
+
     const matched = phoneRows.find((item) => String(item?.id || "").trim() === phoneNumberId);
 
     if (matched) {
@@ -173,8 +204,8 @@ async function exchangeEmbeddedSignupCode(req, res) {
     }
   } catch (err) {
     if (err instanceof HttpError) throw err;
-    throw new HttpError(400, "Selected phone number could not be matched to the selected WABA. Please reconnect WhatsApp and select the correct phone number.", {
-      message: sanitizeMetaError(err, "WABA phone validation failed"),
+    throw new HttpError(400, "Could not read phone numbers from the connected WABA. Please make sure the embedded signup configuration includes WhatsApp Business Management access and try again.", {
+      message: sanitizeMetaError(err, "WABA phone read failed"),
     });
   }
 
