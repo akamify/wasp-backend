@@ -19,9 +19,9 @@ router.post(
   requireWorkspace,
   validate(
     Joi.object({
-      code: Joi.string().required(),
-      waba_id: Joi.string().required(),
-      phone_number_id: Joi.string().required(),
+      code: Joi.string().allow("", null).optional(),
+      waba_id: Joi.string().allow("", null).optional(),
+      phone_number_id: Joi.string().allow("", null).optional(),
     })
   ),
   asyncHandler(exchangeEmbeddedSignupCode)
@@ -29,4 +29,3 @@ router.post(
 router.post("/disconnect", auth, requireWorkspace, asyncHandler(disconnectWhatsAppConnection));
 
 module.exports = router;
-

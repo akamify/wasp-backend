@@ -35,9 +35,29 @@ async function exchangeEmbeddedSignupCode(req, res) {
   const code = String(req.body?.code || "").trim();
   const wabaId = String(req.body?.waba_id || "").trim();
   const phoneNumberId = String(req.body?.phone_number_id || "").trim();
-  if (!code) throw new HttpError(400, "Could not exchange Meta code");
-  if (!wabaId) throw new HttpError(400, "Missing waba_id");
-  if (!phoneNumberId) throw new HttpError(400, "Missing phone_number_id");
+  const missing = {
+    code: !code,
+    waba_id: !wabaId,
+    phone_number_id: !phoneNumberId,
+  };
+  if (missing.code || missing.waba_id || missing.phone_number_id) {
+    return res.status(400).json({
+      success: false,
+      message: "Embedded signup details missing. Please complete signup popup flow.",
+      missing,
+    });
+  }
+
+  const debug = String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true";
+  if (debug) {
+    // eslint-disable-next-line no-console
+    console.info("[embedded-signup] exchange request", {
+      workspaceIdPresent: !!workspaceId,
+      hasCode: !!code,
+      hasWabaId: !!wabaId,
+      hasPhoneNumberId: !!phoneNumberId,
+    });
+  }
 
   const appId = String(process.env.META_APP_ID || process.env.APP_ID || "").trim();
   const appSecret = String(process.env.META_APP_SECRET || process.env.APP_SECRET || "").trim();
@@ -52,7 +72,15 @@ async function exchangeEmbeddedSignupCode(req, res) {
     });
     businessToken = String(tokenRes?.data?.access_token || "").trim();
     if (!businessToken) throw new Error("access_token missing");
+    if (debug) {
+      // eslint-disable-next-line no-console
+      console.info("[embedded-signup] code exchange success", { hasToken: !!businessToken });
+    }
   } catch (err) {
+    if (debug) {
+      // eslint-disable-next-line no-console
+      console.warn("[embedded-signup] code exchange failed", { reason: sanitizeMetaError(err, "Meta code exchange failed") });
+    }
     throw new HttpError(400, "Could not exchange Meta code", {
       message: sanitizeMetaError(err, "Meta code exchange failed"),
     });
@@ -82,6 +110,12 @@ async function exchangeEmbeddedSignupCode(req, res) {
       throw new HttpError(400, "Phone Number ID does not belong to this WABA");
     }
     displayPhoneNumber = matched?.display_phone_number || null;
+    if (debug) {
+      // eslint-disable-next-line no-console
+      console.info("[embedded-signup] waba phone validation success", {
+        hasDisplayPhone: !!displayPhoneNumber,
+      });
+    }
   } catch (err) {
     if (err instanceof HttpError) throw err;
     const metaErr = getMetaError(err);
@@ -104,6 +138,12 @@ async function exchangeEmbeddedSignupCode(req, res) {
         throw new Error("Phone lookup mismatch");
       }
       displayPhoneNumber = String(phoneRes?.data?.display_phone_number || "").trim() || null;
+      if (debug) {
+        // eslint-disable-next-line no-console
+        console.info("[embedded-signup] fallback phone validation success", {
+          hasDisplayPhone: !!displayPhoneNumber,
+        });
+      }
     } catch (fallbackErr) {
       throw new HttpError(400, "Phone Number ID does not belong to this WABA", {
         message: sanitizeMetaError(fallbackErr, "Phone number validation failed"),
@@ -115,6 +155,10 @@ async function exchangeEmbeddedSignupCode(req, res) {
   try {
     const subscribeRes = await client.post(`/${wabaId}/subscribed_apps`, null, { headers });
     subscribed = Boolean(subscribeRes?.data?.success);
+    if (debug) {
+      // eslint-disable-next-line no-console
+      console.info("[embedded-signup] subscribed_apps result", { subscribed });
+    }
   } catch (err) {
     await WhatsAppCredentials.findOneAndUpdate(
       { workspaceId },
@@ -162,6 +206,14 @@ async function exchangeEmbeddedSignupCode(req, res) {
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 
+  if (debug) {
+    // eslint-disable-next-line no-console
+    console.info("[embedded-signup] connection active", {
+      hasWabaId: !!wabaId,
+      hasPhoneNumberId: !!phoneNumberId,
+      webhookSubscribed: subscribed,
+    });
+  }
   return res.json({
     success: true,
     connected: true,

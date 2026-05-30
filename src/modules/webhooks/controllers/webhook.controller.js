@@ -241,10 +241,18 @@ async function receive(req, res) {
       }
 
       // 2) Message + status webhooks (canonical) - prefer routing by phone number id
+      if (field !== "messages") {
+        if (debug) {
+          // eslint-disable-next-line no-console
+          console.log("Webhook non-message field ignored.", { field });
+        }
+        continue;
+      }
+
       const phoneNumberId = value?.metadata?.phone_number_id ? String(value.metadata.phone_number_id) : "";
       if (!phoneNumberId && debug) {
         // eslint-disable-next-line no-console
-        console.warn("Webhook change missing metadata.phone_number_id.", { field });
+        console.warn("messages webhook missing phone_number_id.");
       }
 
       let tenant = phoneNumberId ? await findTenantByPhoneNumberId(phoneNumberId) : null;
