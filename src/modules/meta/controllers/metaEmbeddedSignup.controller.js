@@ -26,6 +26,10 @@ function mask(value) {
   return `${s.slice(0, 2)}***${s.slice(-3)}`;
 }
 
+function getMetaError(err) {
+  return err?.response?.data?.error || null;
+}
+
 async function exchangeEmbeddedSignupCode(req, res) {
   const workspaceId = String(req.workspace.id);
   const code = String(req.body?.code || "").trim();
@@ -80,9 +84,31 @@ async function exchangeEmbeddedSignupCode(req, res) {
     displayPhoneNumber = matched?.display_phone_number || null;
   } catch (err) {
     if (err instanceof HttpError) throw err;
-    throw new HttpError(400, "Phone Number ID does not belong to this WABA", {
-      message: sanitizeMetaError(err, "WABA phone validation failed"),
-    });
+    const metaErr = getMetaError(err);
+    const permissionDenied = Number(metaErr?.code || 0) === 200;
+    if (!permissionDenied) {
+      throw new HttpError(400, "Phone Number ID does not belong to this WABA", {
+        message: sanitizeMetaError(err, "WABA phone validation failed"),
+      });
+    }
+
+    // Fallback for embedded-signup tokens where WABA phone_numbers field is restricted:
+    // validate that phone_number_id exists and is accessible with the returned token.
+    try {
+      const phoneRes = await client.get(`/${phoneNumberId}`, {
+        headers,
+        params: { fields: "id,display_phone_number,verified_name" },
+      });
+      const fetchedId = String(phoneRes?.data?.id || "").trim();
+      if (!fetchedId || fetchedId !== phoneNumberId) {
+        throw new Error("Phone lookup mismatch");
+      }
+      displayPhoneNumber = String(phoneRes?.data?.display_phone_number || "").trim() || null;
+    } catch (fallbackErr) {
+      throw new HttpError(400, "Phone Number ID does not belong to this WABA", {
+        message: sanitizeMetaError(fallbackErr, "Phone number validation failed"),
+      });
+    }
   }
 
   let subscribed = false;
