@@ -26,6 +26,20 @@ function mask(value) {
   return `${s.slice(0, 2)}***${s.slice(-3)}`;
 }
 
+function maskId(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+  if (s.length <= 10) return `${s.slice(0, 2)}***${s.slice(-2)}`;
+  return `${s.slice(0, 6)}***${s.slice(-4)}`;
+}
+
+function maskPhone(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+  if (s.length <= 6) return "***";
+  return `${s.slice(0, 3)}***${s.slice(-2)}`;
+}
+
 function getMetaError(err) {
   return err?.response?.data?.error || null;
 }
@@ -53,6 +67,8 @@ async function exchangeEmbeddedSignupCode(req, res) {
     // eslint-disable-next-line no-console
     console.info("[embedded-signup] exchange request", {
       workspaceIdPresent: !!workspaceId,
+      wabaId: maskId(wabaId),
+      phoneNumberId: maskId(phoneNumberId),
       hasCode: !!code,
       hasWabaId: !!wabaId,
       hasPhoneNumberId: !!phoneNumberId,
@@ -88,13 +104,28 @@ async function exchangeEmbeddedSignupCode(req, res) {
 
   const client = axios.create({ baseURL, timeout: 20000 });
   const headers = { Authorization: `Bearer ${businessToken}` };
-  let displayPhoneNumber = null;
+  let validatedPhoneNumber = null;
 
   try {
-    const phoneListRes = await client.get(`/${wabaId}/phone_numbers`, { headers });
+    const phoneListRes = await client.get(`/${wabaId}/phone_numbers`, {
+      headers,
+      params: { fields: "id,display_phone_number,verified_name,code_verification_status,quality_rating" },
+    });
     const phoneRows = Array.isArray(phoneListRes?.data?.data) ? phoneListRes.data.data : [];
-    const matched = phoneRows.find((item) => String(item?.id || "") === phoneNumberId);
-    if (!matched) {
+    const matched = phoneRows.find((item) => String(item?.id || "").trim() === phoneNumberId);
+
+    if (matched) {
+      validatedPhoneNumber = matched;
+    } else if (phoneRows.length === 1) {
+      validatedPhoneNumber = phoneRows[0];
+      if (debug) {
+        // eslint-disable-next-line no-console
+        console.warn("[embedded-signup] Provided phone_number_id mismatch; using only returned WABA phone number", {
+          providedPhoneNumberId: maskId(phoneNumberId),
+          resolvedPhoneNumberId: maskId(validatedPhoneNumber?.id),
+        });
+      }
+    } else {
       await WhatsAppCredentials.findOneAndUpdate(
         { workspaceId },
         {
@@ -102,18 +133,23 @@ async function exchangeEmbeddedSignupCode(req, res) {
             status: "failed",
             connectionMethod: "embedded_signup",
             webhookSubscribed: false,
-            lastError: "Phone Number ID does not belong to this WABA",
+            lastError: "Selected phone number could not be matched to the selected WABA. Please reconnect WhatsApp and select the correct phone number.",
           },
         },
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
-      throw new HttpError(400, "Phone Number ID does not belong to this WABA");
+      throw new HttpError(400, "Selected phone number could not be matched to the selected WABA. Please reconnect WhatsApp and select the correct phone number.");
     }
-    displayPhoneNumber = matched?.display_phone_number || null;
+
     if (debug) {
       // eslint-disable-next-line no-console
-      console.info("[embedded-signup] waba phone validation success", {
-        hasDisplayPhone: !!displayPhoneNumber,
+      console.info("[embedded-signup] phone_numbers fetched", {
+        count: phoneRows.length,
+        returned: phoneRows.map((item) => ({
+          id: maskId(item?.id),
+          display_phone_number: maskPhone(item?.display_phone_number),
+        })),
+        matchedProvided: !!matched,
       });
     }
   } catch (err) {
@@ -121,7 +157,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
     const metaErr = getMetaError(err);
     const permissionDenied = Number(metaErr?.code || 0) === 200;
     if (!permissionDenied) {
-      throw new HttpError(400, "Phone Number ID does not belong to this WABA", {
+      throw new HttpError(400, "Selected phone number could not be matched to the selected WABA. Please reconnect WhatsApp and select the correct phone number.", {
         message: sanitizeMetaError(err, "WABA phone validation failed"),
       });
     }
@@ -137,15 +173,19 @@ async function exchangeEmbeddedSignupCode(req, res) {
       if (!fetchedId || fetchedId !== phoneNumberId) {
         throw new Error("Phone lookup mismatch");
       }
-      displayPhoneNumber = String(phoneRes?.data?.display_phone_number || "").trim() || null;
+      validatedPhoneNumber = {
+        id: fetchedId,
+        display_phone_number: String(phoneRes?.data?.display_phone_number || "").trim() || null,
+      };
       if (debug) {
         // eslint-disable-next-line no-console
         console.info("[embedded-signup] fallback phone validation success", {
-          hasDisplayPhone: !!displayPhoneNumber,
+          phoneNumberId: maskId(fetchedId),
+          hasDisplayPhone: !!validatedPhoneNumber?.display_phone_number,
         });
       }
     } catch (fallbackErr) {
-      throw new HttpError(400, "Phone Number ID does not belong to this WABA", {
+      throw new HttpError(400, "Selected phone number could not be matched to the selected WABA. Please reconnect WhatsApp and select the correct phone number.", {
         message: sanitizeMetaError(fallbackErr, "Phone number validation failed"),
       });
     }
@@ -184,13 +224,13 @@ async function exchangeEmbeddedSignupCode(req, res) {
       $set: {
         accessTokenEnc: encryptString(businessToken),
         businessTokenEnc: encryptSecret(businessToken),
-        phoneNumberIdEnc: encryptString(phoneNumberId),
+        phoneNumberIdEnc: encryptString(String(validatedPhoneNumber?.id || phoneNumberId)),
         businessAccountIdEnc: encryptString(wabaId),
-        phoneNumberIdHash: hashForLookup(phoneNumberId),
+        phoneNumberIdHash: hashForLookup(String(validatedPhoneNumber?.id || phoneNumberId)),
         businessAccountIdHash: hashForLookup(wabaId),
-        phoneNumberIdPlain: phoneNumberId,
+        phoneNumberIdPlain: String(validatedPhoneNumber?.id || phoneNumberId),
         businessAccountIdPlain: wabaId,
-        displayPhoneNumber,
+        displayPhoneNumber: String(validatedPhoneNumber?.display_phone_number || "").trim() || null,
         graphApiVersion: process.env.META_GRAPH_VERSION || "v25.0",
         isValid: true,
         status: "active",
@@ -219,8 +259,8 @@ async function exchangeEmbeddedSignupCode(req, res) {
     connected: true,
     status: "active",
     waba_id_masked: mask(wabaId),
-    phone_number_id_masked: mask(phoneNumberId),
-    display_phone_number: displayPhoneNumber,
+    phone_number_id_masked: mask(String(validatedPhoneNumber?.id || phoneNumberId)),
+    display_phone_number: String(validatedPhoneNumber?.display_phone_number || "").trim() || null,
     webhook_subscribed: subscribed,
   });
 }

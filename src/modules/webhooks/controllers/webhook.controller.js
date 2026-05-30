@@ -255,9 +255,19 @@ async function receive(req, res) {
         console.warn("messages webhook missing phone_number_id.");
       }
 
-      let tenant = phoneNumberId ? await findTenantByPhoneNumberId(phoneNumberId) : null;
+      let tenant = null;
+      const wabaIdFromEntry = entry?.id ? String(entry.id) : "";
+      if (phoneNumberId && wabaIdFromEntry) {
+        tenant = await WhatsAppCredentials.findOne({
+          phoneNumberIdPlain: String(phoneNumberId),
+          businessAccountIdPlain: String(wabaIdFromEntry),
+          status: "active",
+        }).select("workspaceId");
+      }
       if (!tenant) {
-        const wabaIdFromEntry = entry?.id ? String(entry.id) : "";
+        tenant = phoneNumberId ? await findTenantByPhoneNumberId(phoneNumberId) : null;
+      }
+      if (!tenant) {
         if (wabaIdFromEntry) {
           tenant = await findTenantByWabaId(wabaIdFromEntry);
           if (tenant) {
