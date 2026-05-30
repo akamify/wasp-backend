@@ -339,11 +339,7 @@ async function disconnectWhatsAppConnection(req, res) {
     }
   } catch {}
 
-  row.status = "disconnected";
-  row.isValid = false;
-  row.webhookSubscribed = false;
-  row.lastError = null;
-  await row.save();
+  await WhatsAppCredentials.deleteOne({ _id: row._id });
   return res.json({ success: true, status: "disconnected" });
 }
 
