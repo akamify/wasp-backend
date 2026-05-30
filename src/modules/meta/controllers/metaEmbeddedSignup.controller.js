@@ -40,8 +40,15 @@ function maskPhone(value) {
   return `${s.slice(0, 3)}***${s.slice(-2)}`;
 }
 
-function getMetaError(err) {
-  return err?.response?.data?.error || null;
+function logGraphCall({ operation, path, wabaId, phoneNumberId }) {
+  if (String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() !== "true") return;
+  // eslint-disable-next-line no-console
+  console.info("[embedded-signup] graph call", {
+    operation,
+    path,
+    wabaId: maskId(wabaId),
+    phoneNumberId: maskId(phoneNumberId),
+  });
 }
 
 async function exchangeEmbeddedSignupCode(req, res) {
@@ -82,6 +89,12 @@ async function exchangeEmbeddedSignupCode(req, res) {
   const baseURL = graphBaseUrl();
   let businessToken = "";
   try {
+    logGraphCall({
+      operation: "exchange_code",
+      path: "/oauth/access_token",
+      wabaId,
+      phoneNumberId,
+    });
     const tokenRes = await axios.get(`${baseURL}/oauth/access_token`, {
       params: { client_id: appId, client_secret: appSecret, code },
       timeout: 20000,
@@ -107,6 +120,12 @@ async function exchangeEmbeddedSignupCode(req, res) {
   let validatedPhoneNumber = null;
 
   try {
+    logGraphCall({
+      operation: "list_waba_phone_numbers",
+      path: `/${wabaId}/phone_numbers`,
+      wabaId,
+      phoneNumberId,
+    });
     const phoneListRes = await client.get(`/${wabaId}/phone_numbers`, {
       headers,
       params: { fields: "id,display_phone_number,verified_name,code_verification_status,quality_rating" },
@@ -154,45 +173,19 @@ async function exchangeEmbeddedSignupCode(req, res) {
     }
   } catch (err) {
     if (err instanceof HttpError) throw err;
-    const metaErr = getMetaError(err);
-    const permissionDenied = Number(metaErr?.code || 0) === 200;
-    if (!permissionDenied) {
-      throw new HttpError(400, "Selected phone number could not be matched to the selected WABA. Please reconnect WhatsApp and select the correct phone number.", {
-        message: sanitizeMetaError(err, "WABA phone validation failed"),
-      });
-    }
-
-    // Fallback for embedded-signup tokens where WABA phone_numbers field is restricted:
-    // validate that phone_number_id exists and is accessible with the returned token.
-    try {
-      const phoneRes = await client.get(`/${phoneNumberId}`, {
-        headers,
-        params: { fields: "id,display_phone_number,verified_name" },
-      });
-      const fetchedId = String(phoneRes?.data?.id || "").trim();
-      if (!fetchedId || fetchedId !== phoneNumberId) {
-        throw new Error("Phone lookup mismatch");
-      }
-      validatedPhoneNumber = {
-        id: fetchedId,
-        display_phone_number: String(phoneRes?.data?.display_phone_number || "").trim() || null,
-      };
-      if (debug) {
-        // eslint-disable-next-line no-console
-        console.info("[embedded-signup] fallback phone validation success", {
-          phoneNumberId: maskId(fetchedId),
-          hasDisplayPhone: !!validatedPhoneNumber?.display_phone_number,
-        });
-      }
-    } catch (fallbackErr) {
-      throw new HttpError(400, "Selected phone number could not be matched to the selected WABA. Please reconnect WhatsApp and select the correct phone number.", {
-        message: sanitizeMetaError(fallbackErr, "Phone number validation failed"),
-      });
-    }
+    throw new HttpError(400, "Selected phone number could not be matched to the selected WABA. Please reconnect WhatsApp and select the correct phone number.", {
+      message: sanitizeMetaError(err, "WABA phone validation failed"),
+    });
   }
 
   let subscribed = false;
   try {
+    logGraphCall({
+      operation: "subscribe_waba_webhook",
+      path: `/${wabaId}/subscribed_apps`,
+      wabaId,
+      phoneNumberId: String(validatedPhoneNumber?.id || phoneNumberId),
+    });
     const subscribeRes = await client.post(`/${wabaId}/subscribed_apps`, null, { headers });
     subscribed = Boolean(subscribeRes?.data?.success);
     if (debug) {
