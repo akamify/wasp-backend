@@ -4,6 +4,7 @@ const { verifyWebhookSignature, verifyMetaSignature } = require("@core/middlewar
 const { verify, receive, listWebhookDebugEvents } = require("@modules/webhooks/controllers/webhook.controller");
 const { razorpayWebhook } = require("@modules/wallet/controllers/wallet.controller");
 const { lookupSecret } = require("@core/config/env");
+const { getMetaAppConfig } = require("@core/config/metaAppConfig");
 
 const router = express.Router();
 
@@ -28,12 +29,19 @@ router.post("/debug/webhook-signature-test", (req, res) => {
   }
   const rawBodyText = String(req.body?.rawBody || "");
   const signature = String(req.body?.signature || "");
-  const secret = String(process.env.META_APP_SECRET || process.env.APP_SECRET || "").trim();
+  let secret = "";
+  let metaAppId = "";
+  try {
+    const cfg = getMetaAppConfig();
+    secret = cfg.metaAppSecret;
+    metaAppId = cfg.metaAppId;
+  } catch {}
   const rawBody = Buffer.from(rawBodyText, "utf8");
   const verified = !!secret && verifyMetaSignature({ rawBody, signature, secret });
   return res.json({
     success: true,
     route: "/debug/webhook-signature-test",
+    metaAppId: metaAppId || null,
     hasSignature: !!signature,
     rawBodyLength: rawBody.length,
     expectedLength: secret ? Buffer.byteLength(`sha256=${require("crypto").createHmac("sha256", secret).update(rawBody).digest("hex")}`) : 0,

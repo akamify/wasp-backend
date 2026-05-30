@@ -1,6 +1,7 @@
 const axios = require("axios");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
+const { getMetaAppConfig } = require("@core/config/metaAppConfig");
 
 function graphBaseUrl(graphApiVersion) {
   const version = graphApiVersion || process.env.META_GRAPH_VERSION || "v22.0";
@@ -37,8 +38,13 @@ async function metaSubscriptionHealth(req, res) {
   const baseURL = graphBaseUrl(creds.graphApiVersion);
   const client = axios.create({ baseURL, timeout: 20000 });
   const headers = { Authorization: `Bearer ${creds.accessToken}` };
-  const appId = process.env.APP_ID || process.env.META_APP_ID || "";
-  const appSecret = process.env.APP_SECRET || process.env.META_APP_SECRET || "";
+  let appId = "";
+  let appSecret = "";
+  try {
+    const cfg = getMetaAppConfig();
+    appId = cfg.metaAppId;
+    appSecret = cfg.metaAppSecret;
+  } catch {}
 
   const [subsRes, phoneRes, wabaPhonesRes, debugTokenRes] = await Promise.allSettled([
     client.get(`/${creds.wabaId}/subscribed_apps`, { headers }),

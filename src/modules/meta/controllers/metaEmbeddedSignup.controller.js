@@ -4,6 +4,7 @@ const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { hashForLookup } = require("@shared/utils/hash");
 const { encryptString } = require("@shared/utils/crypto");
 const { encryptSecret } = require("@shared/utils/secretCrypto");
+const { getMetaAppConfig } = require("@core/config/metaAppConfig");
 
 function graphBaseUrl() {
   const version = process.env.META_GRAPH_VERSION || "v25.0";
@@ -82,9 +83,15 @@ async function exchangeEmbeddedSignupCode(req, res) {
     });
   }
 
-  const appId = String(process.env.META_APP_ID || process.env.APP_ID || "").trim();
-  const appSecret = String(process.env.META_APP_SECRET || process.env.APP_SECRET || "").trim();
-  if (!appId || !appSecret) throw new HttpError(500, "Meta app is not configured");
+  let appId = "";
+  let appSecret = "";
+  try {
+    const cfg = getMetaAppConfig();
+    appId = cfg.metaAppId;
+    appSecret = cfg.metaAppSecret;
+  } catch {
+    throw new HttpError(500, "Meta app is not configured");
+  }
 
   const baseURL = graphBaseUrl();
   let businessToken = "";

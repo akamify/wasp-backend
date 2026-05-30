@@ -1,4 +1,5 @@
 const axios = require("axios");
+const { getMetaAppConfig } = require("@core/config/metaAppConfig");
 
 function graphBaseUrl(graphApiVersion) {
   const version = graphApiVersion || process.env.META_GRAPH_VERSION || "v22.0";
@@ -54,9 +55,15 @@ function sleep(ms) {
 }
 
 async function debugToken({ inputToken, graphApiVersion }) {
-  const appId = process.env.APP_ID || process.env.META_APP_ID || "";
-  const appSecret = process.env.APP_SECRET || process.env.META_APP_SECRET || "";
-  if (!appId || !appSecret) return null;
+  let appId = "";
+  let appSecret = "";
+  try {
+    const cfg = getMetaAppConfig();
+    appId = cfg.metaAppId;
+    appSecret = cfg.metaAppSecret;
+  } catch {
+    return null;
+  }
 
   const baseURL = graphBaseUrl(graphApiVersion);
   const client = axios.create({ baseURL, timeout: 15000 });
@@ -257,7 +264,10 @@ async function validateCredentials({
   // Step 5: ensure this app is subscribed to the WABA webhooks.
   // Central webhook callback/token is app-level, but each tenant WABA still needs
   // app subscription via /{wabaId}/subscribed_apps.
-  const appId = String(process.env.APP_ID || process.env.META_APP_ID || "").trim();
+  let appId = "";
+  try {
+    appId = String(getMetaAppConfig().metaAppId || "").trim();
+  } catch {}
   try {
     const listUrl = `/${wabaId}/subscribed_apps`;
     const listRes = await client.get(listUrl, { headers: authHeaders(accessToken) });

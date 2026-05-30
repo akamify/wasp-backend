@@ -71,6 +71,7 @@ const workspaceFeaturesController = require("@modules/workspaces/controllers/wor
 const docsController = require("@modules/admin/controllers/adminDocs.controller");
 const { buildMemoryUpload } = require("@shared/utils/multerUpload");
 const superAdminBillingRoutes = require("@modules/billing/routes/superAdminBilling.routes");
+const { getMetaSecretFingerprint } = require("@modules/meta/controllers/metaAdmin.controller");
 
 const router = express.Router();
 const docsBrandUpload = buildMemoryUpload({
@@ -142,6 +143,7 @@ router.post("/subscriptions-data/:workspaceId/disable-active-plan", a("subscript
 router.post("/subscriptions-data/:workspaceId/payment-links", a("subscriptions.manage"), asyncHandler(adminCreateWorkspacePaymentLink));
 router.patch("/subscriptions-data/payment-links/:id/cancel", a("subscriptions.manage"), asyncHandler(adminCancelWorkspacePaymentLink));
 router.get("/payment-gateway", p("/admin/billing"), asyncHandler(adminPaymentGateway));
+router.get("/meta/secret-fingerprint", p("/admin/settings"), asyncHandler(getMetaSecretFingerprint));
 router.get("/support-tickets", p("/admin/support-tickets"), asyncHandler(adminSupportTickets));
 router.patch("/support-tickets/:id/resolve", c("tickets.edit"), asyncHandler(adminResolveSupportTicket));
 router.get("/app-update", p("/admin/settings"), asyncHandler(adminAppUpdate));

@@ -1,6 +1,7 @@
 const axios = require("axios");
 const { HttpError } = require("@shared/utils/httpError");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
+const { getMetaAppConfig } = require("@core/config/metaAppConfig");
 
 function graphBaseUrl(graphApiVersion) {
   const version = graphApiVersion || process.env.META_GRAPH_VERSION || "v22.0";
@@ -77,8 +78,7 @@ async function uploadProfilePicture(req, res) {
 
   try {
     // WhatsApp business profile picture requires a handle from Meta's Resumable Upload API (not /{phone}/media).
-    const appId = process.env.APP_ID || process.env.META_APP_ID;
-    if (!appId) throw new HttpError(500, "APP_ID is not configured");
+    const { metaAppId: appId } = getMetaAppConfig();
 
     const client = axios.create({ baseURL: graphBaseUrl(creds.graphApiVersion), timeout: 30000 });
 

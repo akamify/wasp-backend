@@ -11,6 +11,9 @@ const rateLimiters = require("@core/middleware/rateLimiters");
 const { notFound, errorHandler } = require("@core/middleware/errorHandler");
 const { appBrandName, corsOrigins } = require("@core/config/env");
 const { registerRoutes } = require("@core/routes/registerRoutes");
+const { verifyWebhookSignature } = require("@core/middleware/webhookSignature");
+const { receive } = require("@modules/webhooks/controllers/webhook.controller");
+const { getMetaAppConfig } = require("@core/config/metaAppConfig");
 
 const app = express();
 
@@ -20,34 +23,32 @@ app.disable("x-powered-by");
 // API is dynamic; avoid 304/ETag surprises that can lead to empty bodies in XHR clients.
 app.set("etag", false);
 
-// Capture raw body for webhook signature verification.
-app.use(
-  express.json({
-    verify: (req, res, buf) => {
-      const url = String(req.originalUrl || req.url || "");
-      const isWebhookPath =
-        url.includes("/webhooks/meta/whatsapp") ||
-        url.includes("/webhooks/whatsapp");
-      if (isWebhookPath) req.rawBody = Buffer.from(buf);
-    },
-  })
-);
-app.use(express.urlencoded({ extended: false }));
+const rawWebhook = express.raw({ type: "*/*" });
+const webhookPostHandler = [rawWebhook, verifyWebhookSignature, receive];
+app.post("/webhooks/meta/whatsapp", ...webhookPostHandler);
+app.post("/api/webhooks/meta/whatsapp", ...webhookPostHandler);
+app.post("/webhooks/whatsapp", ...webhookPostHandler);
+app.post("/api/webhooks/whatsapp", ...webhookPostHandler);
+app.post("/webhook", ...webhookPostHandler);
+app.post("/api/webhook", ...webhookPostHandler);
 
 const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
-const startupMetaAppSecret = String(process.env.META_APP_SECRET || process.env.APP_SECRET || "").trim();
+const { metaAppId: startupMetaAppId, metaAppSecret: startupMetaAppSecret, metaAppSecretSource } = getMetaAppConfig();
 const startupTokenEncSecret = String(process.env.TOKEN_ENCRYPTION_SECRET || "").trim();
 if (!startupMetaAppSecret || startupMetaAppSecret.length < 12) {
   throw new Error("META_APP_SECRET is missing or too short. Webhook signature verification cannot run safely.");
 }
 // eslint-disable-next-line no-console
 console.info("[startup] env status", {
-  metaAppIdPresent: !!String(process.env.META_APP_ID || process.env.APP_ID || "").trim(),
-  metaAppSecretPresent: !!startupMetaAppSecret,
-  metaWebhookVerifyTokenPresent: !!String(process.env.META_WEBHOOK_VERIFY_TOKEN || "").trim(),
-  tokenEncryptionSecretPresent: !!startupTokenEncSecret,
+  metaAppId: startupMetaAppId,
+  metaAppSecretSource,
+  metaAppSecretLength: startupMetaAppSecret.length,
+  hasMetaWebhookVerifyToken: !!String(process.env.META_WEBHOOK_VERIFY_TOKEN || "").trim(),
+  tokenEncryptionSecretLength: startupTokenEncSecret.length,
   metaGraphVersion: String(process.env.META_GRAPH_VERSION || "v22.0"),
 });
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: false }));
 const normalizedCorsOrigins = Array.isArray(corsOrigins)
   ? corsOrigins.map((origin) => String(origin || "").trim().replace(/\/+$/, "")).filter(Boolean)
   : [];
