@@ -6,6 +6,10 @@ const { decryptString, encryptString } = require("@shared/utils/crypto");
 const { encryptSecret } = require("@shared/utils/secretCrypto");
 const { getMetaAppConfig } = require("@core/config/metaAppConfig");
 const { markTemplatesStaleForInactiveWabas, stampUntaggedTemplatesForWaba } = require("@shared/services/templateOwnershipService");
+const {
+  refreshWhatsAppConnectionMetadata,
+  serializeWhatsAppConnection,
+} = require("@shared/services/whatsappConnectionMetadataService");
 const templatesService = require("@modules/templates/services/templates.service");
 
 function graphBaseUrl() {
@@ -290,6 +294,15 @@ async function exchangeEmbeddedSignupCode(req, res) {
     lastEditedAt: now,
     lastEditedBy: req.user?.id || null,
   });
+  await refreshWhatsAppConnectionMetadata(workspaceId).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.warn("[whatsapp-metadata] metadata refresh after reconnect failed", {
+      workspaceId,
+      maskedWabaId: maskId(wabaId),
+      maskedPhoneNumberId: maskId(validatedPhoneNumber.id),
+      reason: sanitizeMetaError(err, "Metadata refresh failed"),
+    });
+  });
   await templatesService.syncMetaTemplates({ workspace: req.workspace, body: {} }).catch((err) => {
     // eslint-disable-next-line no-console
     console.warn("[templates] refresh after reconnect failed", {
@@ -320,35 +333,12 @@ async function exchangeEmbeddedSignupCode(req, res) {
 
 async function getWhatsAppConnection(req, res) {
   const row = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select(
-    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain wabaName isValid isActive"
+    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain wabaName verifiedName nameStatus qualityRating codeVerificationStatus platformType accountMode throughput messagingLimitTier messagingLimitTierCached businessProfile lastMetadataSyncAt metadataFetchStatus metadataWarnings isValid isActive"
   );
   if (!row) {
-    return res.json({
-      connected: false,
-      status: "disconnected",
-      waba_id: null,
-      phone_number_id: null,
-      waba_id_masked: null,
-      phone_number_id_masked: null,
-      display_phone_number: null,
-      webhook_subscribed: false,
-      connected_at: null,
-      last_error: null,
-    });
+    return res.json(serializeWhatsAppConnection(null));
   }
-  return res.json({
-    connected: row.isValid && row.status === "active",
-    status: row.status || (row.isValid ? "active" : "pending"),
-    waba_id: row.wabaId || row.businessAccountIdPlain || null,
-    phone_number_id: row.phoneNumberId || row.phoneNumberIdPlain || null,
-    waba_id_masked: mask(row.wabaId || row.businessAccountIdPlain),
-    phone_number_id_masked: mask(row.phoneNumberId || row.phoneNumberIdPlain),
-    display_phone_number: row.displayPhoneNumber || null,
-    waba_name: row.wabaName || null,
-    webhook_subscribed: Boolean(row.webhookSubscribed),
-    connected_at: row.connectedAt || null,
-    last_error: row.lastError || null,
-  });
+  return res.json(serializeWhatsAppConnection(row));
 }
 
 async function disconnectWhatsAppConnection(req, res) {

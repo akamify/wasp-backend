@@ -5,6 +5,7 @@ const { hashForLookup } = require("@shared/utils/hash");
 const { HttpError } = require("@shared/utils/httpError");
 const { validateCredentials } = require("@shared/utils/whatsappSender");
 const { markTemplatesStaleForInactiveWabas, stampUntaggedTemplatesForWaba } = require("@shared/services/templateOwnershipService");
+const { refreshWhatsAppConnectionMetadata } = require("@shared/services/whatsappConnectionMetadataService");
 const templatesService = require("@modules/templates/services/templates.service");
 
 function mask(value) {
@@ -84,6 +85,7 @@ async function upsertCredentials(req, res) {
       lastEditedBy: req.user?.id || null,
       lastEditedReason: String(overrideReason || "").trim() || null,
     });
+    await refreshWhatsAppConnectionMetadata(req.workspace.id).catch(() => null);
     await templatesService.syncMetaTemplates({ workspace: req.workspace, body: {} }).catch(() => null);
 
     res.json({

@@ -38,7 +38,11 @@ const root = path.resolve(__dirname, "..");
 const routes = fs.readFileSync(path.join(root, "src/core/routes/whatsappIntegrationRoutes.js"), "utf8");
 const sender = fs.readFileSync(path.join(root, "src/shared/services/whatsapp/whatsappSender.js"), "utf8");
 const templatesService = fs.readFileSync(path.join(root, "src/modules/templates/services/templates.service.js"), "utf8");
+const metadataService = fs.readFileSync(path.join(root, "src/shared/services/whatsappConnectionMetadataService.js"), "utf8");
+const embeddedSignup = fs.readFileSync(path.join(root, "src/modules/meta/controllers/metaEmbeddedSignup.controller.js"), "utf8");
+const outboundMessageService = fs.readFileSync(path.join(root, "src/shared/services/outboundMessageService.js"), "utf8");
 assert(routes.includes('"/templates/refresh"'));
+assert(routes.includes('"/connection/refresh-metadata"'));
 assert(sender.includes("Meta token is missing business_management."));
 assert(sender.includes("whatsapp_business_manage_events"));
 assert(templatesService.includes('staleReason: "old_waba_connection"'));
@@ -47,5 +51,17 @@ assert(templatesService.includes("meta template not found -> local cleanup"));
 assert(templatesService.includes("Template was not found on Meta, so it was removed locally."));
 assert(templatesService.includes("subcode === 2593002"));
 assert(templatesService.includes("active WABA template filter applied"));
+for (const field of ["wabaName", "displayPhoneNumber", "verifiedName", "nameStatus", "qualityRating", "codeVerificationStatus", "platformType", "accountMode", "throughput", "messagingLimitTier", "businessProfile.about", "lastMetadataSyncAt", "metadataFetchStatus", "metadataWarnings"]) {
+  assert(WhatsAppCredentials.schema.path(field), `WhatsApp metadata field missing: ${field}`);
+}
+assert(metadataService.includes("phone_list_extended"));
+assert(metadataService.includes("phone_list_minimal"));
+assert(metadataService.includes("pending_verification"));
+assert(metadataService.includes("pending_display_name_review"));
+assert(metadataService.includes("metadata_partial"));
+assert(metadataService.includes("[whatsapp-metadata] metadata refresh complete"));
+assert(embeddedSignup.includes("refreshWhatsAppConnectionMetadata(workspaceId)"));
+assert(outboundMessageService.includes("code === 133010"));
+assert(outboundMessageService.includes("This phone number is connected but not registered on WhatsApp Cloud API yet."));
 
 console.log("TEMPLATE_WABA_SCOPING_OK");

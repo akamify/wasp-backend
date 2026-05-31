@@ -23,6 +23,20 @@ function isMissingMetaTemplate(err) {
   return message.includes("template name does not exist") || message.includes("template does not exist");
 }
 
+function throwIfPhoneNotRegistered(err) {
+  const code = Number(
+    err?.metaDebug?.meta?.code ||
+      err?.metaDebug?.raw?.error?.code ||
+      err?.response?.data?.error?.code
+  );
+  if (code === 133010) {
+    throw new HttpError(
+      400,
+      "This phone number is connected but not registered on WhatsApp Cloud API yet."
+    );
+  }
+}
+
 async function sendTemplateMessageForUser({
   userId,
   campaignId,
@@ -81,6 +95,7 @@ async function sendTemplateMessageForUser({
       graphApiVersion: creds.graphApiVersion,
     });
   } catch (err) {
+    throwIfPhoneNotRegistered(err);
     if (isMissingMetaTemplate(err) && template?._id) {
       await require("@infra/database/Template").Template.updateOne(
         { _id: template._id, workspaceId: userId, wabaId: creds.wabaId },
@@ -186,13 +201,19 @@ async function sendTemplateMessageForUser({
 
 async function sendTextMessageForUser({ userId, to, text, sentBy }) {
   const creds = await getCredentialsForUser(userId);
-  const apiResponse = await sendTextMessage({
-    accessToken: creds.accessToken,
-    phoneNumberId: creds.phoneNumberId,
-    to,
-    text,
-    graphApiVersion: creds.graphApiVersion,
-  });
+  let apiResponse;
+  try {
+    apiResponse = await sendTextMessage({
+      accessToken: creds.accessToken,
+      phoneNumberId: creds.phoneNumberId,
+      to,
+      text,
+      graphApiVersion: creds.graphApiVersion,
+    });
+  } catch (err) {
+    throwIfPhoneNotRegistered(err);
+    throw err;
+  }
 
   const waMessageId = Array.isArray(apiResponse?.messages) ? apiResponse.messages[0]?.id : undefined;
   const waId = Array.isArray(apiResponse?.contacts) ? apiResponse.contacts[0]?.wa_id : undefined;
@@ -250,17 +271,23 @@ async function sendMediaMessageForUser({
 }) {
   const creds = await getCredentialsForUser(userId);
   const normalizedType = String(type || "").toLowerCase();
-  const apiResponse = await sendMediaMessage({
-    accessToken: creds.accessToken,
-    phoneNumberId: creds.phoneNumberId,
-    to,
-    type: normalizedType,
-    mediaId,
-    link,
-    caption,
-    filename,
-    graphApiVersion: creds.graphApiVersion,
-  });
+  let apiResponse;
+  try {
+    apiResponse = await sendMediaMessage({
+      accessToken: creds.accessToken,
+      phoneNumberId: creds.phoneNumberId,
+      to,
+      type: normalizedType,
+      mediaId,
+      link,
+      caption,
+      filename,
+      graphApiVersion: creds.graphApiVersion,
+    });
+  } catch (err) {
+    throwIfPhoneNotRegistered(err);
+    throw err;
+  }
 
   const waMessageId = Array.isArray(apiResponse?.messages) ? apiResponse.messages[0]?.id : undefined;
   const waId = Array.isArray(apiResponse?.contacts) ? apiResponse.contacts[0]?.wa_id : undefined;
