@@ -9,6 +9,7 @@ const {
   deleteMessageTemplate,
 } = require("@shared/utils/whatsappSender");
 const { normalizeTemplate } = require("@shared/utils/templateStructure");
+const { assertTemplateBelongsToWaba } = require("@shared/services/templateOwnershipService");
 
 function normalizeRemoteStatus(status) {
   const s = String(status || "").toLowerCase();
@@ -98,6 +99,7 @@ async function adminDeleteMasterTemplate(req, res) {
 
   if (shouldDeleteOnMeta) {
     const creds = await getCredentialsForUser(workspace.id);
+    assertTemplateBelongsToWaba(template, creds.wabaId);
     try {
       metaDelete = await deleteMessageTemplate({
         accessToken: creds.accessToken,
@@ -122,6 +124,7 @@ async function adminSyncTemplateStatus(req, res) {
   if (!template) throw new HttpError(404, "Template not found");
   const workspace = await ensureWorkspaceForTemplate(template);
   const creds = await getCredentialsForUser(workspace.id);
+  assertTemplateBelongsToWaba(template, creds.wabaId);
 
   let remote;
   try {
@@ -186,6 +189,10 @@ async function adminSyncMetaTemplates(req, res) {
     const existing = await Template.findOne({
       workspaceId: String(workspace._id),
       $or: [
+        ...(normalized.metaTemplateId ? [{ wabaId: creds.wabaId, metaTemplateId: normalized.metaTemplateId }] : []),
+        { wabaId: creds.wabaId, name: normalized.name },
+        ...(normalized.metaTemplateId ? [{ wabaId: null, metaTemplateId: normalized.metaTemplateId }] : []),
+        { wabaId: null, name: normalized.name },
         ...(normalized.metaTemplateId ? [{ metaTemplateId: normalized.metaTemplateId }] : []),
         { name: normalized.name },
       ],
@@ -200,6 +207,7 @@ async function adminSyncMetaTemplates(req, res) {
       existing.metaTemplateId = normalized.metaTemplateId || existing.metaTemplateId;
       existing.rejectedReason = normalized.rejectedReason;
       existing.lastSyncedAt = normalized.lastSyncedAt;
+      existing.wabaId = creds.wabaId;
       await existing.save();
       synced.push(existing);
       continue;
@@ -207,6 +215,7 @@ async function adminSyncMetaTemplates(req, res) {
 
     const created = await Template.create({
       workspaceId: String(workspace._id),
+      wabaId: creds.wabaId,
       ...normalized,
     });
     synced.push(created);

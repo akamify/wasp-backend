@@ -7,6 +7,7 @@ const { ensureBalance, getOrCreateWallet, walletChargesEnabled } = require("@mod
 const { CAMPAIGN_STATUSES, CAMPAIGN_TYPES } = require("@modules/campaigns/constants/campaign.constants");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { enqueueCampaignRecipients } = require("@modules/campaigns/services/campaignsQueue.service");
+const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 
 async function retryFailedCampaign(req) {
     const { id } = req.params;
@@ -16,6 +17,7 @@ async function retryFailedCampaign(req) {
     const template = await templatesRepository.getTemplateById({ id: baseCampaign.templateId, workspaceId: req.workspace.id });
     if (!template) throw new HttpError(404, "Template not found");
     if (template.status !== "approved") throw new HttpError(400, "Template must be approved");
+    await assertTemplateBelongsToCurrentWaba({ template, workspaceId: req.workspace.id });
 
     const workspaceObjectId = new mongoose.Types.ObjectId(req.workspace.id);
     const failedRows = await messagesRepository.aggregateMessages([

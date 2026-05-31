@@ -4,6 +4,7 @@ const { encryptString, decryptString } = require("@shared/utils/crypto");
 const { hashForLookup } = require("@shared/utils/hash");
 const { HttpError } = require("@shared/utils/httpError");
 const { validateCredentials } = require("@shared/utils/whatsappSender");
+const { stampUntaggedTemplatesForWaba } = require("@shared/services/templateOwnershipService");
 
 function mask(value) {
   const s = String(value || "");
@@ -27,10 +28,11 @@ async function upsertCredentials(req, res) {
   const existing = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id }).select(
     "+phoneNumberIdEnc +businessAccountIdEnc isValid"
   );
+  let currentWabaId = "";
 
   if (existing?.isValid && existing?.phoneNumberIdEnc && existing?.businessAccountIdEnc) {
     const currentPhoneNumberId = decryptString(existing.phoneNumberIdEnc);
-    const currentWabaId = decryptString(existing.businessAccountIdEnc);
+    currentWabaId = decryptString(existing.businessAccountIdEnc);
 
     const isChangingIds = currentPhoneNumberId !== phoneNumberId || currentWabaId !== businessId;
 
@@ -51,6 +53,7 @@ async function upsertCredentials(req, res) {
       wabaId: businessId,
       graphApiVersion: graphApiVersion || metaGraphVersion,
     });
+    await stampUntaggedTemplatesForWaba({ workspaceId: req.workspace.id, wabaId: currentWabaId });
 
     const doc = await WhatsAppCredentials.findOneAndUpdate(
       { workspaceId: req.workspace.id },
@@ -61,6 +64,8 @@ async function upsertCredentials(req, res) {
           businessAccountIdEnc: encryptString(businessId),
           phoneNumberIdHash: hashForLookup(phoneNumberId),
           businessAccountIdHash: hashForLookup(businessId),
+          phoneNumberIdPlain: String(phoneNumberId),
+          businessAccountIdPlain: String(businessId),
           graphApiVersion: graphApiVersion || metaGraphVersion,
           isValid: true,
           lastValidatedAt: new Date(),

@@ -8,18 +8,24 @@ async function listTemplates(filter) {
   return Template.find(filter).sort({ createdAt: -1 });
 }
 
-async function getTemplate({ id, workspaceId }) {
-  return Template.findOne({ _id: id, workspaceId });
+async function getTemplate({ id, workspaceId, wabaId }) {
+  return Template.findOne({ _id: id, workspaceId, ...(wabaId ? { wabaId } : {}) });
 }
 
-async function deleteTemplate({ id, workspaceId }) {
-  return Template.deleteOne({ _id: id, workspaceId });
+async function deleteTemplate({ id, workspaceId, wabaId }) {
+  return Template.deleteOne({ _id: id, workspaceId, ...(wabaId ? { wabaId } : {}) });
 }
 
-async function findTemplateForMetaSync({ workspaceId, name, metaTemplateId }) {
+async function findTemplateForMetaSync({ workspaceId, wabaId, name, metaTemplateId }) {
   return Template.findOne({
     workspaceId,
-    $or: [...(metaTemplateId ? [{ metaTemplateId }] : []), { name }],
+    $or: [
+      { wabaId, ...(metaTemplateId ? { metaTemplateId } : { name }) },
+      { wabaId, name },
+      { wabaId: null, ...(metaTemplateId ? { metaTemplateId } : { name }) },
+      { wabaId: null, name },
+      { name },
+    ],
   });
 }
 

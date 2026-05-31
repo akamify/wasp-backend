@@ -8,6 +8,9 @@ const TemplateSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    // Templates belong to a WABA, not only to a workspace. A workspace can
+    // reconnect to another WhatsApp account without inheriting stale templates.
+    wabaId: { type: String, trim: true, index: true, default: null },
     name: { type: String, required: true, trim: true },
     language: { type: String, required: true, trim: true },
     category: {

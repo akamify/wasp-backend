@@ -8,6 +8,7 @@ const { chargeForMessaging, refundMessagingCharge, messageCostForTemplateCategor
 const { isCustomerServiceWindowOpen } = require("@shared/services/pricingService");
 const { renderTemplatePreviewParts } = require("@shared/utils/templateStructure");
 const { publishWorkspaceEvent } = require("@shared/services/realtimeService");
+const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 
 function isDuplicateKeyError(err) {
   return err?.code === 11000 || err?.name === "MongoServerError";
@@ -81,6 +82,7 @@ async function sendTemplate(req, res) {
   if (template.status !== "approved") {
     throw new HttpError(400, "Template must be approved before sending");
   }
+  await assertTemplateBelongsToCurrentWaba({ template, workspaceId: req.workspace.id });
 
   const windowOpen = await isCustomerServiceWindowOpen({ workspaceId: req.workspace.id, phone: normalizedPhone });
   const chargeAmount = windowOpen ? 0 : messageCostForTemplateCategory(template.category, 1);
@@ -153,7 +155,7 @@ async function bulkSend(req, res) {
     throw new HttpError(400, "Template must be approved before sending");
   }
 
-  await getCredentialsForUser(req.workspace.id);
+  await assertTemplateBelongsToCurrentWaba({ template, workspaceId: req.workspace.id });
 
   const limit = Math.min(Number(req.body.concurrency || 5), 20);
   const queue = recipients.slice();

@@ -13,6 +13,7 @@ const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/camp
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
 const { subscriptionRepository } = require("@modules/billing/repositories");
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
+const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 
 async function createCampaign(req) {
     await enforceMonthlyLimit({
@@ -28,6 +29,7 @@ async function createCampaign(req) {
     const template = await templatesRepository.getTemplateById({ id: templateId, workspaceId: req.workspace.id });
     if (!template) throw new HttpError(404, "Template not found");
     if (template.status !== "approved") throw new HttpError(400, "Template must be approved");
+    await assertTemplateBelongsToCurrentWaba({ template, workspaceId: req.workspace.id });
     const normalizedRecipients = normalizeRecipients(recipients);
     const normalizedType = String(type || CAMPAIGN_TYPES.BROADCAST).toLowerCase();
     const hasCampaignApiAccess = !isPlanRestrictionsEnabled()

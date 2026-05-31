@@ -9,6 +9,7 @@ const {
 const { normalizeTemplate } = require("@shared/utils/templateStructure");
 const { templatesRepository } = require("@modules/templates/repositories/index");
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
+const { assertTemplateBelongsToWaba } = require("@shared/services/templateOwnershipService");
 
 function normalizeRemoteStatus(status) {
   const s = String(status || "").toLowerCase();
@@ -66,6 +67,7 @@ async function createTemplate(req) {
   const tpl = await templatesRepository.createTemplate({
     ...normalized,
     workspaceId: req.workspace.id,
+    wabaId: creds.wabaId,
     source: "local",
     metaTemplateId: metaResponse?.id || undefined,
     status: normalizeRemoteStatus(metaResponse?.status),
@@ -76,20 +78,23 @@ async function createTemplate(req) {
 }
 
 async function listTemplates(req) {
-  const filter = { workspaceId: req.workspace.id };
+  const creds = await getCredentialsForUser(req.workspace.id);
+  const filter = { workspaceId: req.workspace.id, wabaId: creds.wabaId };
   if (req.query.status) filter.status = req.query.status;
   const templates = await templatesRepository.listTemplates(filter);
   return { success: true, templates };
 }
 
 async function getTemplate(req) {
-  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id });
+  const creds = await getCredentialsForUser(req.workspace.id);
+  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
   if (!template) throw new HttpError(404, "Template not found");
   return { success: true, template };
 }
 
 async function updateTemplate(req) {
-  const existing = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id });
+  const creds = await getCredentialsForUser(req.workspace.id);
+  const existing = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
   if (!existing) throw new HttpError(404, "Template not found");
 
   if (
@@ -118,14 +123,14 @@ async function updateTemplate(req) {
 }
 
 async function deleteTemplate(req) {
-  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id });
+  const creds = await getCredentialsForUser(req.workspace.id);
+  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
   if (!template) throw new HttpError(404, "Template not found");
 
   const shouldDeleteOnMeta = template.source === "meta" || !!template.metaTemplateId;
   let metaDelete = null;
 
   if (shouldDeleteOnMeta) {
-    const creds = await getCredentialsForUser(req.workspace.id);
     try {
       metaDelete = await deleteMessageTemplate({
         accessToken: creds.accessToken,
@@ -138,12 +143,13 @@ async function deleteTemplate(req) {
     }
   }
 
-  await templatesRepository.deleteTemplate({ id: req.params.id, workspaceId: req.workspace.id });
+  await templatesRepository.deleteTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
   return { success: true, meta: metaDelete };
 }
 
 async function submitForApproval(req) {
-  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id });
+  const creds = await getCredentialsForUser(req.workspace.id);
+  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
   if (!template) throw new HttpError(404, "Template not found");
 
   if (String(template.name || "").trim().toLowerCase() === "hello_world") {
@@ -153,7 +159,7 @@ async function submitForApproval(req) {
     );
   }
 
-  const creds = await getCredentialsForUser(req.workspace.id);
+  assertTemplateBelongsToWaba(template, creds.wabaId);
   const normalizedTemplate = normalizeTemplate(template.toObject());
 
   template.name = normalizedTemplate.name;
@@ -185,9 +191,10 @@ async function submitForApproval(req) {
 }
 
 async function syncStatus(req) {
-  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id });
-  if (!template) throw new HttpError(404, "Template not found");
   const creds = await getCredentialsForUser(req.workspace.id);
+  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
+  if (!template) throw new HttpError(404, "Template not found");
+  assertTemplateBelongsToWaba(template, creds.wabaId);
 
   let remote;
   try {
@@ -236,6 +243,7 @@ async function syncMetaTemplates(req) {
 
     const existing = await templatesRepository.findTemplateForMetaSync({
       workspaceId: req.workspace.id,
+      wabaId: creds.wabaId,
       name: normalized.name,
       metaTemplateId: normalized.metaTemplateId,
     });
@@ -249,12 +257,13 @@ async function syncMetaTemplates(req) {
       existing.metaTemplateId = normalized.metaTemplateId || existing.metaTemplateId;
       existing.rejectedReason = normalized.rejectedReason;
       existing.lastSyncedAt = normalized.lastSyncedAt;
+      existing.wabaId = creds.wabaId;
       await existing.save();
       synced.push(existing);
       continue;
     }
 
-    const created = await templatesRepository.createTemplate({ workspaceId: req.workspace.id, ...normalized });
+    const created = await templatesRepository.createTemplate({ workspaceId: req.workspace.id, wabaId: creds.wabaId, ...normalized });
     synced.push(created);
   }
 

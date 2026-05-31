@@ -2,9 +2,9 @@ const { Template } = require("@infra/database/Template");
 const { Event } = require("@infra/database/Event");
 const { HttpError } = require("@shared/utils/httpError");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
-const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { assertNormalizedPhone } = require("@shared/services/contactService");
 const { debit, credit, messageCostForTemplateCategory } = require("@modules/wallet/services/wallet.core.service");
+const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 
 async function triggerEvent(req, res) {
   const {
@@ -25,7 +25,7 @@ async function triggerEvent(req, res) {
     throw new HttpError(400, "Template must be approved before sending");
   }
 
-  await getCredentialsForUser(req.workspace.id);
+  await assertTemplateBelongsToCurrentWaba({ template, workspaceId: req.workspace.id });
 
   const event = await Event.create({
     workspaceId: req.workspace.id,

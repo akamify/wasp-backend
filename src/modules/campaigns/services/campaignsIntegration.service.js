@@ -15,6 +15,7 @@ const {
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
+const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 
 function isUpstashRequestLimitError(err) {
     const msg = String(err?.message || "").toLowerCase();
@@ -63,10 +64,11 @@ async function sendApiCampaignByName(req) {
     const template = await templatesRepository.getTemplateById({
         id: apiCampaign.templateId,
         workspaceId,
-        select: "_id status category name language components",
+        select: "_id status category name language components wabaId",
     });
     if (!template) throw new HttpError(404, "Template not found");
     if (template.status !== "approved") throw new HttpError(400, "Template must be approved");
+    await assertTemplateBelongsToCurrentWaba({ template, workspaceId });
 
     const estimate = await computeCampaignEstimate({ workspaceId, template, recipients });
     if (walletChargesEnabled() && estimate.estimatedCredits > 0) {

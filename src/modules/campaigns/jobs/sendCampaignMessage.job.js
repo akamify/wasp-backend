@@ -6,6 +6,7 @@ const { debit, credit, messageCostForTemplateCategory } = require("@modules/wall
 const { isCustomerServiceWindowOpen } = require("@shared/services/pricingService");
 const { CAMPAIGN_STATUSES } = require("@modules/campaigns/constants/campaign.constants");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
+const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 
 async function finalizeCampaignIfDone({ workspaceId, campaignId }) {
     try {
@@ -68,6 +69,7 @@ async function sendCampaignMessageJob(job) {
 
     const template = await Template.findOne({ _id: templateId, workspaceId });
     if (!template) throw new Error("Template not found");
+    await assertTemplateBelongsToCurrentWaba({ template, workspaceId });
 
     const windowOpen = await isCustomerServiceWindowOpen({ workspaceId, phone: to });
     const chargeAmount = windowOpen ? 0 : messageCostForTemplateCategory(template.category, 1);

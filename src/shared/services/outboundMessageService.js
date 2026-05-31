@@ -10,6 +10,7 @@ const {
   normalizeTemplate,
   renderTemplatePreview,
 } = require("@shared/utils/templateStructure");
+const { assertTemplateBelongsToWaba } = require("@shared/services/templateOwnershipService");
 
 async function sendTemplateMessageForUser({
   userId,
@@ -27,6 +28,7 @@ async function sendTemplateMessageForUser({
   sentBy,
 }) {
   const creds = await getCredentialsForUser(userId);
+  assertTemplateBelongsToWaba(template, creds.wabaId);
   const normalizedTemplate = normalizeTemplate(template.toObject ? template.toObject() : template);
   const sendComponents = buildComponentsFromTemplate(normalizedTemplate, {
     variables,

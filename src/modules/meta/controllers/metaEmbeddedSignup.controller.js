@@ -2,9 +2,10 @@ const axios = require("axios");
 const { HttpError } = require("@shared/utils/httpError");
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { hashForLookup } = require("@shared/utils/hash");
-const { encryptString } = require("@shared/utils/crypto");
+const { decryptString, encryptString } = require("@shared/utils/crypto");
 const { encryptSecret } = require("@shared/utils/secretCrypto");
 const { getMetaAppConfig } = require("@core/config/metaAppConfig");
+const { stampUntaggedTemplatesForWaba } = require("@shared/services/templateOwnershipService");
 
 function graphBaseUrl() {
   const version = process.env.META_GRAPH_VERSION || "v25.0";
@@ -249,6 +250,14 @@ async function exchangeEmbeddedSignupCode(req, res) {
   }
 
   const now = new Date();
+  const existingCredentials = await WhatsAppCredentials.findOne({ workspaceId }).select(
+    "+businessAccountIdEnc businessAccountIdPlain"
+  );
+  const previousWabaId = String(
+    existingCredentials?.businessAccountIdPlain ||
+      (existingCredentials?.businessAccountIdEnc ? decryptString(existingCredentials.businessAccountIdEnc) : "")
+  ).trim();
+  await stampUntaggedTemplatesForWaba({ workspaceId, wabaId: previousWabaId });
   await WhatsAppCredentials.findOneAndUpdate(
     { workspaceId },
     {
@@ -336,7 +345,8 @@ async function disconnectWhatsAppConnection(req, res) {
 
   try {
     const token = row.accessTokenEnc ? require("@shared/utils/crypto").decryptString(row.accessTokenEnc) : "";
-    const wabaId = row.businessAccountIdEnc ? require("@shared/utils/crypto").decryptString(row.businessAccountIdEnc) : "";
+    const wabaId = row.businessAccountIdEnc ? decryptString(row.businessAccountIdEnc) : "";
+    await stampUntaggedTemplatesForWaba({ workspaceId: req.workspace.id, wabaId });
     if (token && wabaId) {
       const baseURL = graphBaseUrl();
       await axios.delete(`${baseURL}/${wabaId}/subscribed_apps`, {
