@@ -33,7 +33,7 @@ async function metaSubscriptionHealth(req, res) {
 
   const [creds, credsDoc] = await Promise.all([
     getCredentialsForUser(req.workspace.id),
-    WhatsAppCredentials.findOne({ workspaceId: req.workspace.id }).select("lastWebhookAt lastWebhookField lastWebhookObject"),
+    WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select("lastWebhookAt lastWebhookField lastWebhookObject"),
   ]);
   const baseURL = graphBaseUrl(creds.graphApiVersion);
   const client = axios.create({ baseURL, timeout: 20000 });

@@ -10,9 +10,13 @@ function assertTemplateBelongsToWaba(template, wabaId) {
   const currentWabaId = normalizeWabaId(wabaId);
   const templateWabaId = normalizeWabaId(template?.wabaId);
   if (!currentWabaId || !templateWabaId || templateWabaId !== currentWabaId) {
+    // eslint-disable-next-line no-console
+    console.warn("[templates] send rejected template not in active WABA", {
+      workspaceId: template?.workspaceId ? String(template.workspaceId) : null,
+    });
     throw new HttpError(
-      409,
-      "Template belongs to a different WhatsApp account. Sync templates for the currently connected account."
+      400,
+      "This template belongs to a previous WhatsApp account. Refresh templates for the current account."
     );
   }
 }
@@ -32,9 +36,17 @@ async function stampUntaggedTemplatesForWaba({ workspaceId, wabaId }) {
   );
 }
 
+async function markTemplatesStaleForInactiveWabas({ workspaceId, activeWabaId }) {
+  await Template.updateMany(
+    { workspaceId, wabaId: { $ne: normalizeWabaId(activeWabaId) } },
+    { $set: { isActive: false, staleReason: "old_waba_connection" } }
+  );
+}
+
 module.exports = {
   assertTemplateBelongsToCurrentWaba,
   assertTemplateBelongsToWaba,
   normalizeWabaId,
+  markTemplatesStaleForInactiveWabas,
   stampUntaggedTemplatesForWaba,
 };

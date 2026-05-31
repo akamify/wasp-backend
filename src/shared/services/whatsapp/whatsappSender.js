@@ -333,6 +333,15 @@ async function submitTemplate({
 }) {
   const baseURL = graphBaseUrl(graphApiVersion);
   const client = axios.create({ baseURL, timeout: 20000 });
+  const tokenDebug = await debugToken({ inputToken: accessToken, graphApiVersion });
+  const tokenScopes = new Set((tokenDebug?.scopes || []).map((scope) => String(scope)));
+  if (tokenDebug?.isValid && !tokenScopes.has("business_management")) {
+    throw Object.assign(new Error("Meta template submit permission missing"), {
+      tokenDebug,
+      providerError:
+        "Meta token is missing business_management. Regenerate the System User token with business_management, whatsapp_business_management, whatsapp_business_messaging, and whatsapp_business_manage_events, then reconnect WhatsApp.",
+    });
+  }
 
   const createPayload = {
     name: template.name,
@@ -424,14 +433,12 @@ async function submitTemplate({
 
       // Permissions error: usually missing `whatsapp_business_management` scope or token not granted WABA access.
       // Attach debug_token output when available to help diagnose quickly.
-      let tokenDebug = null;
       let providerError = null;
       if (Number(metaCode) === 200) {
-        tokenDebug = await debugToken({ inputToken: accessToken, graphApiVersion });
         const scopes = new Set((tokenDebug?.scopes || []).map((s) => String(s)));
         if (tokenDebug?.isValid && !scopes.has("business_management")) {
           providerError =
-            "Meta token is missing `business_management` permission. Regenerate the System User access token with `business_management`, `whatsapp_business_management`, and `whatsapp_business_messaging`, then save credentials again.";
+            "Meta token is missing business_management. Regenerate the System User token with business_management, whatsapp_business_management, whatsapp_business_messaging, and whatsapp_business_manage_events, then reconnect WhatsApp.";
         } else if (tokenDebug?.isValid && !scopes.has("whatsapp_business_management")) {
           providerError =
             "Meta token is missing `whatsapp_business_management` permission. Regenerate the System User access token with the required WhatsApp permissions, then save credentials again.";
@@ -491,7 +498,7 @@ async function fetchMessageTemplatesPage({
   try {
     const res = await client.get(`/${wabaId}/message_templates`, {
       params: {
-        fields: "name,status,category,language,components,rejected_reason",
+        fields: "id,name,status,category,language,components,rejected_reason",
         limit,
         ...(after ? { after } : {}),
       },
@@ -505,7 +512,7 @@ async function fetchMessageTemplatesPage({
         method: "GET",
         url: `/${wabaId}/message_templates`,
         params: {
-          fields: "name,status,category,language,components,rejected_reason",
+          fields: "id,name,status,category,language,components,rejected_reason",
           limit,
           ...(after ? { after } : {}),
         },
@@ -546,6 +553,26 @@ async function fetchAllMessageTemplates({
 
   const target = String(exactName || "").trim().toLowerCase();
   return items.filter((item) => String(item?.name || "").trim().toLowerCase() === target);
+}
+
+async function fetchWabaName({ accessToken, wabaId, graphApiVersion }) {
+  const baseURL = graphBaseUrl(graphApiVersion);
+  const client = axios.create({ baseURL, timeout: 12000 });
+  try {
+    const res = await client.get(`/${wabaId}`, {
+      params: { fields: "name" },
+      headers: authHeaders(accessToken),
+    });
+    return String(res?.data?.name || "").trim() || null;
+  } catch (err) {
+    throw Object.assign(new Error("Meta WABA lookup failed"), {
+      metaDebug: toMetaErrorInfo(err, "fetch_waba_name", {
+        method: "GET",
+        url: `/${wabaId}`,
+        params: { fields: "name" },
+      }),
+    });
+  }
 }
 
 async function sendTemplateMessage({
@@ -732,6 +759,7 @@ module.exports = {
   submitTemplate,
   fetchTemplateStatus,
   fetchAllMessageTemplates,
+  fetchWabaName,
   sendTemplateMessage,
   sendTextMessage,
   sendMediaMessage,

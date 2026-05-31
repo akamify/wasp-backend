@@ -5,7 +5,8 @@ const { hashForLookup } = require("@shared/utils/hash");
 const { decryptString, encryptString } = require("@shared/utils/crypto");
 const { encryptSecret } = require("@shared/utils/secretCrypto");
 const { getMetaAppConfig } = require("@core/config/metaAppConfig");
-const { stampUntaggedTemplatesForWaba } = require("@shared/services/templateOwnershipService");
+const { markTemplatesStaleForInactiveWabas, stampUntaggedTemplatesForWaba } = require("@shared/services/templateOwnershipService");
+const templatesService = require("@modules/templates/services/templates.service");
 
 function graphBaseUrl() {
   const version = process.env.META_GRAPH_VERSION || "v25.0";
@@ -250,7 +251,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
   }
 
   const now = new Date();
-  const existingCredentials = await WhatsAppCredentials.findOne({ workspaceId }).select(
+  const existingCredentials = await WhatsAppCredentials.findOne({ workspaceId, isActive: { $ne: false } }).select(
     "+businessAccountIdEnc businessAccountIdPlain"
   );
   const previousWabaId = String(
@@ -258,33 +259,45 @@ async function exchangeEmbeddedSignupCode(req, res) {
       (existingCredentials?.businessAccountIdEnc ? decryptString(existingCredentials.businessAccountIdEnc) : "")
   ).trim();
   await stampUntaggedTemplatesForWaba({ workspaceId, wabaId: previousWabaId });
-  await WhatsAppCredentials.findOneAndUpdate(
-    { workspaceId },
-    {
-      $set: {
-        accessTokenEnc: encryptString(businessToken),
-        businessTokenEnc: encryptSecret(businessToken),
-        phoneNumberIdEnc: encryptString(String(validatedPhoneNumber.id)),
-        businessAccountIdEnc: encryptString(wabaId),
-        phoneNumberIdHash: hashForLookup(String(validatedPhoneNumber.id)),
-        businessAccountIdHash: hashForLookup(wabaId),
-        phoneNumberIdPlain: String(validatedPhoneNumber.id),
-        businessAccountIdPlain: wabaId,
-        displayPhoneNumber: String(validatedPhoneNumber?.display_phone_number || "").trim() || null,
-        graphApiVersion: process.env.META_GRAPH_VERSION || "v25.0",
-        isValid: true,
-        status: "active",
-        webhookSubscribed: subscribed,
-        connectionMethod: "embedded_signup",
-        lastError: null,
-        lastValidatedAt: now,
-        connectedAt: now,
-        lastEditedAt: now,
-        lastEditedBy: req.user?.id || null,
-      },
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+  await WhatsAppCredentials.updateMany(
+    { workspaceId, isActive: { $ne: false } },
+    { $set: { isActive: false, status: "disconnected", disconnectedAt: now } }
   );
+  await markTemplatesStaleForInactiveWabas({ workspaceId, activeWabaId: wabaId });
+  await WhatsAppCredentials.create({
+    workspaceId,
+    accessTokenEnc: encryptString(businessToken),
+    businessTokenEnc: encryptSecret(businessToken),
+    phoneNumberIdEnc: encryptString(String(validatedPhoneNumber.id)),
+    businessAccountIdEnc: encryptString(wabaId),
+    phoneNumberIdHash: hashForLookup(String(validatedPhoneNumber.id)),
+    businessAccountIdHash: hashForLookup(wabaId),
+    phoneNumberIdPlain: String(validatedPhoneNumber.id),
+    businessAccountIdPlain: wabaId,
+    phoneNumberId: String(validatedPhoneNumber.id),
+    wabaId,
+    displayPhoneNumber: String(validatedPhoneNumber?.display_phone_number || "").trim() || null,
+    graphApiVersion: process.env.META_GRAPH_VERSION || "v25.0",
+    isValid: true,
+    isActive: true,
+    status: "active",
+    webhookSubscribed: subscribed,
+    connectionMethod: "embedded_signup",
+    lastError: null,
+    lastValidatedAt: now,
+    connectedAt: now,
+    disconnectedAt: null,
+    lastEditedAt: now,
+    lastEditedBy: req.user?.id || null,
+  });
+  await templatesService.syncMetaTemplates({ workspace: req.workspace, body: {} }).catch((err) => {
+    // eslint-disable-next-line no-console
+    console.warn("[templates] refresh after reconnect failed", {
+      workspaceId,
+      maskedWabaId: maskId(wabaId),
+      reason: sanitizeMetaError(err, "Template refresh failed"),
+    });
+  });
 
   if (debug) {
     // eslint-disable-next-line no-console
@@ -306,8 +319,8 @@ async function exchangeEmbeddedSignupCode(req, res) {
 }
 
 async function getWhatsAppConnection(req, res) {
-  const row = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id }).select(
-    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberIdPlain businessAccountIdPlain isValid"
+  const row = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select(
+    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain wabaName isValid isActive"
   );
   if (!row) {
     return res.json({
@@ -326,11 +339,12 @@ async function getWhatsAppConnection(req, res) {
   return res.json({
     connected: row.isValid && row.status === "active",
     status: row.status || (row.isValid ? "active" : "pending"),
-    waba_id: row.businessAccountIdPlain || null,
-    phone_number_id: row.phoneNumberIdPlain || null,
-    waba_id_masked: mask(row.businessAccountIdPlain),
-    phone_number_id_masked: mask(row.phoneNumberIdPlain),
+    waba_id: row.wabaId || row.businessAccountIdPlain || null,
+    phone_number_id: row.phoneNumberId || row.phoneNumberIdPlain || null,
+    waba_id_masked: mask(row.wabaId || row.businessAccountIdPlain),
+    phone_number_id_masked: mask(row.phoneNumberId || row.phoneNumberIdPlain),
     display_phone_number: row.displayPhoneNumber || null,
+    waba_name: row.wabaName || null,
     webhook_subscribed: Boolean(row.webhookSubscribed),
     connected_at: row.connectedAt || null,
     last_error: row.lastError || null,
@@ -338,7 +352,7 @@ async function getWhatsAppConnection(req, res) {
 }
 
 async function disconnectWhatsAppConnection(req, res) {
-  const row = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id }).select(
+  const row = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select(
     "+accessTokenEnc +businessAccountIdEnc status"
   );
   if (!row) return res.json({ success: true, status: "disconnected" });
@@ -356,7 +370,11 @@ async function disconnectWhatsAppConnection(req, res) {
     }
   } catch {}
 
-  await WhatsAppCredentials.deleteOne({ _id: row._id });
+  await WhatsAppCredentials.updateOne(
+    { _id: row._id },
+    { $set: { isActive: false, isValid: false, status: "disconnected", disconnectedAt: new Date() } }
+  );
+  await markTemplatesStaleForInactiveWabas({ workspaceId: req.workspace.id, activeWabaId: "" });
   return res.json({ success: true, status: "disconnected" });
 }
 

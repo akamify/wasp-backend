@@ -2,25 +2,21 @@ const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { decryptString } = require("@shared/utils/crypto");
 const { hashForLookup } = require("@shared/utils/hash");
 const { HttpError } = require("@shared/utils/httpError");
+const { resolveActiveConnection } = require("@shared/services/whatsappConnectionService");
 
 async function getCredentialsForUser(userId) {
-  const doc = await WhatsAppCredentials.findOne({ workspaceId: userId }).select(
-    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid"
-  );
-
-  if (!doc) throw new HttpError(400, "WhatsApp credentials not configured");
-  if (!doc.isValid) throw new HttpError(400, "WhatsApp credentials are not validated");
-
-  const accessToken = decryptString(doc.accessTokenEnc);
-  const phoneNumberId = decryptString(doc.phoneNumberIdEnc);
-  const businessAccountId = decryptString(doc.businessAccountIdEnc);
+  const connection = await resolveActiveConnection(userId);
+  if (!connection) throw new HttpError(400, "Active WhatsApp connection not configured");
 
   return {
-    accessToken,
-    phoneNumberId,
-    businessAccountId,
-    wabaId: businessAccountId,
-    graphApiVersion: doc.graphApiVersion,
+    accessToken: connection.accessToken,
+    phoneNumberId: connection.phoneNumberId,
+    businessAccountId: connection.wabaId,
+    wabaId: connection.wabaId,
+    displayPhoneNumber: connection.displayPhoneNumber,
+    wabaName: connection.wabaName,
+    connectedAt: connection.connectedAt,
+    graphApiVersion: connection.graphApiVersion,
   };
 }
 
@@ -29,7 +25,7 @@ async function findTenantByPhoneNumberId(phoneNumberId) {
   if (!normalized) return null;
 
   // Stable fast path for multi-tenant routing.
-  const byPlain = await WhatsAppCredentials.findOne({ phoneNumberIdPlain: normalized }).select(
+  const byPlain = await WhatsAppCredentials.findOne({ phoneNumberIdPlain: normalized, isActive: { $ne: false } }).select(
     "workspaceId phoneNumberIdHash phoneNumberIdPlain"
   );
   if (byPlain) return byPlain;
@@ -38,7 +34,7 @@ async function findTenantByPhoneNumberId(phoneNumberId) {
   let byHash = null;
   try {
     const phoneNumberIdHash = hashForLookup(normalized);
-    byHash = await WhatsAppCredentials.findOne({ phoneNumberIdHash }).select(
+    byHash = await WhatsAppCredentials.findOne({ phoneNumberIdHash, isActive: { $ne: false } }).select(
       "workspaceId phoneNumberIdHash phoneNumberIdPlain"
     );
   } catch {
@@ -50,7 +46,7 @@ async function findTenantByPhoneNumberId(phoneNumberId) {
   // NOTE: We intentionally do NOT filter by isValid here.
   // Webhooks should still route to the right workspace even if the connection is mid-setup
   // or a validation flag drifted.
-  const docs = await WhatsAppCredentials.find({}).select("workspaceId +phoneNumberIdEnc");
+  const docs = await WhatsAppCredentials.find({ isActive: { $ne: false } }).select("workspaceId +phoneNumberIdEnc");
   for (const doc of docs) {
     try {
       const raw = decryptString(doc.phoneNumberIdEnc);
@@ -74,7 +70,7 @@ async function findTenantByWabaId(wabaId) {
   const normalized = String(wabaId || "").trim();
   if (!normalized) return null;
 
-  const byPlain = await WhatsAppCredentials.findOne({ businessAccountIdPlain: normalized }).select(
+  const byPlain = await WhatsAppCredentials.findOne({ businessAccountIdPlain: normalized, isActive: { $ne: false } }).select(
     "workspaceId businessAccountIdHash businessAccountIdPlain"
   );
   if (byPlain) return byPlain;
@@ -82,7 +78,7 @@ async function findTenantByWabaId(wabaId) {
   let byHash = null;
   try {
     const businessAccountIdHash = hashForLookup(normalized);
-    byHash = await WhatsAppCredentials.findOne({ businessAccountIdHash }).select(
+    byHash = await WhatsAppCredentials.findOne({ businessAccountIdHash, isActive: { $ne: false } }).select(
       "workspaceId businessAccountIdHash businessAccountIdPlain"
     );
   } catch {
@@ -91,7 +87,7 @@ async function findTenantByWabaId(wabaId) {
   if (byHash) return byHash;
 
   // NOTE: We intentionally do NOT filter by isValid here for webhook routing resiliency.
-  const docs = await WhatsAppCredentials.find({}).select("workspaceId +businessAccountIdEnc");
+  const docs = await WhatsAppCredentials.find({ isActive: { $ne: false } }).select("workspaceId +businessAccountIdEnc");
   for (const doc of docs) {
     try {
       const raw = decryptString(doc.businessAccountIdEnc);

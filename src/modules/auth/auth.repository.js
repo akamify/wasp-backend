@@ -34,7 +34,7 @@ async function findWorkspaceForUserAndId({ workspaceId, ownerId }) {
 }
 
 async function hasValidMetaCredentials(workspaceId) {
-  return WhatsAppCredentials.exists({ workspaceId, isValid: true });
+  return WhatsAppCredentials.exists({ workspaceId, isValid: true, isActive: { $ne: false } });
 }
 
 async function findUserForLoginByEmail(emailLower) {

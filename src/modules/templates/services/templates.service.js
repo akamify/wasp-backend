@@ -1,15 +1,19 @@
 const { HttpError } = require("@shared/utils/httpError");
-const { getCredentialsForUser } = require("@shared/services/credentialsService");
+const { resolveActiveConnection, maskId } = require("@shared/services/whatsappConnectionService");
 const {
   submitTemplate,
   fetchTemplateStatus,
   fetchAllMessageTemplates,
+  fetchWabaName,
   deleteMessageTemplate,
 } = require("@shared/utils/whatsappSender");
 const { normalizeTemplate } = require("@shared/utils/templateStructure");
 const { templatesRepository } = require("@modules/templates/repositories/index");
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
 const { assertTemplateBelongsToWaba } = require("@shared/services/templateOwnershipService");
+
+const MISSING_BUSINESS_MANAGEMENT =
+  "Meta token is missing business_management. Regenerate the System User token with business_management, whatsapp_business_management, whatsapp_business_messaging, and whatsapp_business_manage_events, then reconnect WhatsApp.";
 
 function normalizeRemoteStatus(status) {
   const s = String(status || "").toLowerCase();
@@ -22,17 +26,66 @@ function normalizeRemoteStatus(status) {
 }
 
 function normalizeRemoteTemplate(remote) {
+  const languageCode = String(remote?.language || "en_US").trim();
   return {
     name: String(remote?.name || "").trim(),
-    language: String(remote?.language || "en_US").trim(),
+    language: languageCode,
+    languageCode,
     category: String(remote?.category || "utility").trim().toLowerCase(),
     components: Array.isArray(remote?.components) ? remote.components : [],
     status: normalizeRemoteStatus(remote?.status),
     source: "meta",
     metaTemplateId: remote?.id ? String(remote.id) : undefined,
     rejectedReason: remote?.rejected_reason || undefined,
+    isActive: true,
+    staleReason: null,
+    deletedAt: null,
+    syncedAt: new Date(),
     lastSyncedAt: new Date(),
   };
+}
+
+function connectionMetadata(connection, staleTemplateCount = 0, templateCount = 0) {
+  return {
+    currentWabaIdMasked: connection ? maskId(connection.wabaId) : null,
+    currentPhoneNumberIdMasked: connection ? maskId(connection.phoneNumberId) : null,
+    displayPhoneNumber: connection?.displayPhoneNumber || null,
+    wabaName: connection?.wabaName || null,
+    templateCount,
+    staleTemplateCountIgnored: staleTemplateCount,
+  };
+}
+
+function isMetaTemplateNotFound(err) {
+  const metaError = err?.metaDebug?.meta || err?.metaDebug?.raw?.error || err?.response?.data?.error || {};
+  const code = Number(metaError?.code);
+  const subcode = Number(metaError?.error_subcode);
+  const errorUserTitle = String(metaError?.error_user_title || "").toLowerCase();
+  const message = String(
+    metaError?.message ||
+      err?.message ||
+      ""
+  ).toLowerCase();
+  return (
+    (code === 100 && subcode === 2593002) ||
+    errorUserTitle.includes("message template not found") ||
+    message.includes("message template not found") ||
+    message.includes("template does not exist")
+  );
+}
+
+function permissionSubmitMessage(err) {
+  const providerError = String(err?.providerError || "");
+  if (providerError.startsWith("Meta token is missing business_management.")) {
+    return MISSING_BUSINESS_MANAGEMENT;
+  }
+  return providerError || err?.message || "Template submission failed";
+}
+
+async function requireActiveConnection(workspaceId) {
+  const connection = await resolveActiveConnection(workspaceId);
+  if (!connection) throw new HttpError(400, "Active WhatsApp connection not configured");
+  return connection;
 }
 
 async function createTemplate(req) {
@@ -45,32 +98,46 @@ async function createTemplate(req) {
   });
 
   const normalized = normalizeTemplate({ ...req.body, source: "local" });
-  const creds = await getCredentialsForUser(req.workspace.id);
-
+  const connection = await requireActiveConnection(req.workspace.id);
   let metaResponse;
   try {
     metaResponse = await submitTemplate({
-      accessToken: creds.accessToken,
-      wabaId: creds.wabaId,
+      accessToken: connection.accessToken,
+      wabaId: connection.wabaId,
       template: normalized,
-      graphApiVersion: creds.graphApiVersion,
+      graphApiVersion: connection.graphApiVersion,
     });
   } catch (err) {
-    throw new HttpError(400, "Template submission failed", {
-      message: err.message,
+    const message = permissionSubmitMessage(err);
+    if (message === MISSING_BUSINESS_MANAGEMENT) {
+      // eslint-disable-next-line no-console
+      console.warn("[templates] submit failed permission", {
+        workspaceId: String(req.workspace.id),
+        maskedWabaId: maskId(connection.wabaId),
+        missingScope: "business_management",
+      });
+    }
+    throw new HttpError(400, message, {
+      message,
       metaDebug: err.metaDebug || null,
       tokenDebug: err.tokenDebug || null,
-      providerError: err.providerError || null,
     });
   }
 
+  const languageCode = String(normalized.language || "").trim();
   const tpl = await templatesRepository.createTemplate({
     ...normalized,
     workspaceId: req.workspace.id,
-    wabaId: creds.wabaId,
+    wabaId: connection.wabaId,
+    phoneNumberId: connection.phoneNumberId,
+    languageCode,
     source: "local",
+    isActive: true,
+    deletedAt: null,
+    staleReason: null,
     metaTemplateId: metaResponse?.id || undefined,
     status: normalizeRemoteStatus(metaResponse?.status),
+    syncedAt: new Date(),
     lastSyncedAt: new Date(),
   });
 
@@ -78,37 +145,69 @@ async function createTemplate(req) {
 }
 
 async function listTemplates(req) {
-  const creds = await getCredentialsForUser(req.workspace.id);
-  const filter = { workspaceId: req.workspace.id, wabaId: creds.wabaId };
-  if (req.query.status) filter.status = req.query.status;
-  const templates = await templatesRepository.listTemplates(filter);
-  return { success: true, templates };
+  const connection = await resolveActiveConnection(req.workspace.id);
+  if (!connection) {
+    return { success: true, templates: [], metadata: connectionMetadata(null) };
+  }
+
+  const [templates, staleTemplateCount] = await Promise.all([
+    templatesRepository.listTemplates({
+      workspaceId: req.workspace.id,
+      wabaId: connection.wabaId,
+      status: req.query.status,
+    }),
+    templatesRepository.countHiddenStaleTemplates({ workspaceId: req.workspace.id, wabaId: connection.wabaId }),
+  ]);
+  // eslint-disable-next-line no-console
+  console.info("[templates] active WABA template filter applied", {
+    workspaceId: String(req.workspace.id),
+    maskedWabaId: maskId(connection.wabaId),
+    templateCount: templates.length,
+  });
+
+  if (staleTemplateCount > 0) {
+    // eslint-disable-next-line no-console
+    console.info("[templates] stale old-waba templates hidden", {
+      workspaceId: String(req.workspace.id),
+      maskedWabaId: maskId(connection.wabaId),
+      staleTemplateCount,
+    });
+  }
+  return {
+    success: true,
+    templates,
+    metadata: connectionMetadata(connection, staleTemplateCount, templates.length),
+  };
 }
 
 async function getTemplate(req) {
-  const creds = await getCredentialsForUser(req.workspace.id);
-  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
-  if (!template) throw new HttpError(404, "Template not found");
+  const connection = await requireActiveConnection(req.workspace.id);
+  const template = await templatesRepository.getTemplate({
+    id: req.params.id,
+    workspaceId: req.workspace.id,
+    wabaId: connection.wabaId,
+  });
+  if (!template) throw new HttpError(404, "Template not found for the currently connected WhatsApp account");
   return { success: true, template };
 }
 
 async function updateTemplate(req) {
-  const creds = await getCredentialsForUser(req.workspace.id);
-  const existing = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
-  if (!existing) throw new HttpError(404, "Template not found");
+  const connection = await requireActiveConnection(req.workspace.id);
+  const existing = await templatesRepository.getTemplate({
+    id: req.params.id,
+    workspaceId: req.workspace.id,
+    wabaId: connection.wabaId,
+  });
+  if (!existing) throw new HttpError(404, "Template not found for the currently connected WhatsApp account");
 
-  if (
-    req.body?.category &&
-    String(req.body.category).trim().toLowerCase() !== String(existing.category || "").trim().toLowerCase()
-  ) {
+  if (req.body?.category && String(req.body.category).trim().toLowerCase() !== String(existing.category).trim().toLowerCase()) {
     throw new HttpError(400, "Template category cannot be changed after creation");
   }
-
   if (existing.metaTemplateId) {
-    if (req.body?.name && String(req.body.name).trim() !== String(existing.name || "").trim()) {
+    if (req.body?.name && String(req.body.name).trim() !== String(existing.name).trim()) {
       throw new HttpError(400, "Template name cannot be changed after it is linked to Meta");
     }
-    if (req.body?.language && String(req.body.language).trim() !== String(existing.language || "").trim()) {
+    if (req.body?.language && String(req.body.language).trim() !== String(existing.language).trim()) {
       throw new HttpError(400, "Template language cannot be changed after it is linked to Meta");
     }
   }
@@ -116,169 +215,231 @@ async function updateTemplate(req) {
   const normalized = normalizeTemplate({ ...existing.toObject(), ...req.body });
   existing.name = normalized.name;
   existing.language = normalized.language;
-  existing.category = existing.category;
+  existing.languageCode = normalized.language;
   existing.components = normalized.components;
-  const template = await existing.save();
-  return { success: true, template };
+  return { success: true, template: await existing.save() };
 }
 
 async function deleteTemplate(req) {
-  const creds = await getCredentialsForUser(req.workspace.id);
-  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
+  const connection = await requireActiveConnection(req.workspace.id);
+  const template = await templatesRepository.getWorkspaceTemplate({ id: req.params.id, workspaceId: req.workspace.id });
   if (!template) throw new HttpError(404, "Template not found");
 
-  const shouldDeleteOnMeta = template.source === "meta" || !!template.metaTemplateId;
-  let metaDelete = null;
+  if (String(template.wabaId || "") !== String(connection.wabaId)) {
+    await templatesRepository.softDeleteTemplate({
+      id: template._id,
+      workspaceId: req.workspace.id,
+      staleReason: "old_waba_connection",
+    });
+    // eslint-disable-next-line no-console
+    console.info("[templates] stale template local delete", {
+      workspaceId: String(req.workspace.id),
+      maskedActiveWabaId: maskId(connection.wabaId),
+      maskedTemplateWabaId: maskId(template.wabaId),
+    });
+    return { success: true, warning: "Removed stale local template from previous WhatsApp account." };
+  }
 
-  if (shouldDeleteOnMeta) {
+  let warning = null;
+  if (template.source === "meta" || template.metaTemplateId) {
     try {
-      metaDelete = await deleteMessageTemplate({
-        accessToken: creds.accessToken,
-        wabaId: creds.wabaId,
+      await deleteMessageTemplate({
+        accessToken: connection.accessToken,
+        wabaId: connection.wabaId,
         templateName: template.name,
-        graphApiVersion: creds.graphApiVersion,
+        graphApiVersion: connection.graphApiVersion,
       });
     } catch (err) {
-      throw new HttpError(400, "Meta template delete failed", { message: err.message, metaDebug: err.metaDebug || null });
+      if (!isMetaTemplateNotFound(err)) {
+        throw new HttpError(400, "Meta template delete failed", { message: err.message, metaDebug: err.metaDebug || null });
+      }
+      // eslint-disable-next-line no-console
+      console.info("[templates] meta template not found -> local cleanup", {
+        workspaceId: String(req.workspace.id),
+        maskedWabaId: maskId(connection.wabaId),
+      });
+      warning = "Template was not found on Meta, so it was removed locally.";
     }
   }
 
-  await templatesRepository.deleteTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
-  return { success: true, meta: metaDelete };
+  await templatesRepository.softDeleteTemplate({ id: template._id, workspaceId: req.workspace.id });
+  return { success: true, ...(warning ? { warning } : {}) };
 }
 
 async function submitForApproval(req) {
-  const creds = await getCredentialsForUser(req.workspace.id);
-  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
-  if (!template) throw new HttpError(404, "Template not found");
+  const connection = await requireActiveConnection(req.workspace.id);
+  const template = await templatesRepository.getTemplate({
+    id: req.params.id,
+    workspaceId: req.workspace.id,
+    wabaId: connection.wabaId,
+  });
+  if (!template) throw new HttpError(404, "Template not found for the currently connected WhatsApp account");
+  assertTemplateBelongsToWaba(template, connection.wabaId);
 
-  if (String(template.name || "").trim().toLowerCase() === "hello_world") {
-    throw new HttpError(
-      400,
-      "The Meta sample template `hello_world` cannot be submitted/edited. Create a new template with a different name."
-    );
+  if (String(template.name).trim().toLowerCase() === "hello_world") {
+    throw new HttpError(400, "The Meta sample template `hello_world` cannot be submitted/edited. Create a new template with a different name.");
   }
 
-  assertTemplateBelongsToWaba(template, creds.wabaId);
   const normalizedTemplate = normalizeTemplate(template.toObject());
-
-  template.name = normalizedTemplate.name;
-  template.language = normalizedTemplate.language;
-  template.category = normalizedTemplate.category;
-  template.components = normalizedTemplate.components;
-
   let apiRes;
   try {
     apiRes = await submitTemplate({
-      accessToken: creds.accessToken,
-      wabaId: creds.wabaId,
+      accessToken: connection.accessToken,
+      wabaId: connection.wabaId,
       template: normalizedTemplate,
       metaTemplateId: template.metaTemplateId,
-      graphApiVersion: creds.graphApiVersion,
+      graphApiVersion: connection.graphApiVersion,
     });
   } catch (err) {
-    throw new HttpError(400, "Template submission failed", { message: err.message, metaDebug: err.metaDebug || null });
+    const message = permissionSubmitMessage(err);
+    if (message === MISSING_BUSINESS_MANAGEMENT) {
+      // eslint-disable-next-line no-console
+      console.warn("[templates] submit failed permission", {
+        workspaceId: String(req.workspace.id),
+        maskedWabaId: maskId(connection.wabaId),
+        missingScope: "business_management",
+      });
+    }
+    throw new HttpError(400, message, { message, metaDebug: err.metaDebug || null, tokenDebug: err.tokenDebug || null });
   }
 
-  const remoteStatus = normalizeRemoteStatus(apiRes?.status);
   template.metaTemplateId = apiRes?.id || template.metaTemplateId;
-  template.status = remoteStatus;
+  template.status = normalizeRemoteStatus(apiRes?.status);
   template.source = "local";
+  template.syncedAt = new Date();
   template.lastSyncedAt = new Date();
   await template.save();
-
   return { success: true, template, meta: apiRes };
 }
 
 async function syncStatus(req) {
-  const creds = await getCredentialsForUser(req.workspace.id);
-  const template = await templatesRepository.getTemplate({ id: req.params.id, workspaceId: req.workspace.id, wabaId: creds.wabaId });
-  if (!template) throw new HttpError(404, "Template not found");
-  assertTemplateBelongsToWaba(template, creds.wabaId);
+  const connection = await requireActiveConnection(req.workspace.id);
+  const template = await templatesRepository.getTemplate({
+    id: req.params.id,
+    workspaceId: req.workspace.id,
+    wabaId: connection.wabaId,
+  });
+  if (!template) throw new HttpError(404, "Template not found for the currently connected WhatsApp account");
 
-  let remote;
-  try {
-    remote = await fetchTemplateStatus({
-      accessToken: creds.accessToken,
-      wabaId: creds.wabaId,
-      templateName: template.name,
-      metaTemplateId: template.metaTemplateId,
-      graphApiVersion: creds.graphApiVersion,
-    });
-  } catch (err) {
-    throw new HttpError(400, "Failed to fetch template status", { message: err.message, metaDebug: err.metaDebug || null });
+  const remote = await fetchTemplateStatus({
+    accessToken: connection.accessToken,
+    wabaId: connection.wabaId,
+    templateName: template.name,
+    metaTemplateId: template.metaTemplateId,
+    graphApiVersion: connection.graphApiVersion,
+  });
+  if (!remote) {
+    template.isActive = false;
+    template.staleReason = "missing_from_meta";
+    await template.save();
+    throw new HttpError(404, "Template not found in active Meta WABA. Refresh templates.");
   }
-
-  if (!remote) throw new HttpError(404, "Template not found in Meta account (by name)");
 
   template.status = normalizeRemoteStatus(remote.status);
   template.rejectedReason = remote.rejected_reason || template.rejectedReason;
-  if (Array.isArray(remote.components) && remote.components.length > 0) template.components = remote.components;
+  if (Array.isArray(remote.components) && remote.components.length) template.components = remote.components;
+  template.syncedAt = new Date();
   template.lastSyncedAt = new Date();
   await template.save();
-
   return { success: true, template, meta: remote };
 }
 
 async function syncMetaTemplates(req) {
-  const creds = await getCredentialsForUser(req.workspace.id);
+  const connection = await requireActiveConnection(req.workspace.id);
   const exactName = req.body?.name ? String(req.body.name).trim() : undefined;
+  // eslint-disable-next-line no-console
+  console.info("[templates] refresh started", {
+    workspaceId: String(req.workspace.id),
+    maskedWabaId: maskId(connection.wabaId),
+  });
 
   let remoteTemplates;
   try {
     remoteTemplates = await fetchAllMessageTemplates({
-      accessToken: creds.accessToken,
-      wabaId: creds.wabaId,
-      graphApiVersion: creds.graphApiVersion,
+      accessToken: connection.accessToken,
+      wabaId: connection.wabaId,
+      graphApiVersion: connection.graphApiVersion,
       exactName,
     });
   } catch (err) {
     throw new HttpError(400, "Failed to fetch Meta templates", { message: err.message, metaDebug: err.metaDebug || null });
   }
+  // eslint-disable-next-line no-console
+  console.info("[templates] meta list success", {
+    workspaceId: String(req.workspace.id),
+    maskedWabaId: maskId(connection.wabaId),
+    count: remoteTemplates.length,
+  });
+  const wabaName = await fetchWabaName({
+    accessToken: connection.accessToken,
+    wabaId: connection.wabaId,
+    graphApiVersion: connection.graphApiVersion,
+  }).catch(() => null);
+  if (wabaName && wabaName !== connection.wabaName) {
+    await connection.doc.updateOne({ $set: { wabaName } });
+    connection.wabaName = wabaName;
+  }
 
   const synced = [];
+  const activeKeys = [];
   for (const remote of remoteTemplates) {
     const normalized = normalizeRemoteTemplate(remote);
-    if (!normalized.name) continue;
+    if (!normalized.name || !normalized.languageCode) continue;
+    activeKeys.push({ name: normalized.name, languageCode: normalized.languageCode });
 
     const existing = await templatesRepository.findTemplateForMetaSync({
       workspaceId: req.workspace.id,
-      wabaId: creds.wabaId,
+      wabaId: connection.wabaId,
       name: normalized.name,
-      metaTemplateId: normalized.metaTemplateId,
+      languageCode: normalized.languageCode,
     });
-
     if (existing) {
-      existing.language = normalized.language;
-      existing.category = normalized.category;
-      existing.components = normalized.components;
-      existing.status = normalized.status;
-      existing.source = "meta";
-      existing.metaTemplateId = normalized.metaTemplateId || existing.metaTemplateId;
-      existing.rejectedReason = normalized.rejectedReason;
-      existing.lastSyncedAt = normalized.lastSyncedAt;
-      existing.wabaId = creds.wabaId;
-      await existing.save();
-      synced.push(existing);
+      Object.assign(existing, normalized, {
+        phoneNumberId: connection.phoneNumberId,
+        wabaId: connection.wabaId,
+      });
+      synced.push(await existing.save());
       continue;
     }
-
-    const created = await templatesRepository.createTemplate({ workspaceId: req.workspace.id, wabaId: creds.wabaId, ...normalized });
-    synced.push(created);
+    synced.push(await templatesRepository.createTemplate({
+      workspaceId: req.workspace.id,
+      wabaId: connection.wabaId,
+      phoneNumberId: connection.phoneNumberId,
+      ...normalized,
+    }));
   }
 
-  return { success: true, count: synced.length, templates: synced };
+  if (!exactName) {
+    await templatesRepository.markCurrentWabaTemplatesStaleExcept({
+      workspaceId: req.workspace.id,
+      wabaId: connection.wabaId,
+      activeKeys,
+    });
+    await templatesRepository.markWorkspaceOldWabaTemplatesStale({
+      workspaceId: req.workspace.id,
+      activeWabaId: connection.wabaId,
+    });
+  }
+
+  const [templates, staleTemplateCount] = await Promise.all([
+    templatesRepository.listTemplates({ workspaceId: req.workspace.id, wabaId: connection.wabaId }),
+    templatesRepository.countHiddenStaleTemplates({ workspaceId: req.workspace.id, wabaId: connection.wabaId }),
+  ]);
+  return {
+    success: true,
+    count: templates.length,
+    templates,
+    metadata: connectionMetadata(connection, staleTemplateCount, templates.length),
+  };
 }
 
 module.exports = {
   createTemplate,
-  listTemplates,
-  getTemplate,
-  updateTemplate,
   deleteTemplate,
+  getTemplate,
+  listTemplates,
   submitForApproval,
-  syncStatus,
   syncMetaTemplates,
+  syncStatus,
+  updateTemplate,
 };
-
-

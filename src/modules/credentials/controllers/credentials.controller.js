@@ -4,7 +4,8 @@ const { encryptString, decryptString } = require("@shared/utils/crypto");
 const { hashForLookup } = require("@shared/utils/hash");
 const { HttpError } = require("@shared/utils/httpError");
 const { validateCredentials } = require("@shared/utils/whatsappSender");
-const { stampUntaggedTemplatesForWaba } = require("@shared/services/templateOwnershipService");
+const { markTemplatesStaleForInactiveWabas, stampUntaggedTemplatesForWaba } = require("@shared/services/templateOwnershipService");
+const templatesService = require("@modules/templates/services/templates.service");
 
 function mask(value) {
   const s = String(value || "");
@@ -25,7 +26,7 @@ async function upsertCredentials(req, res) {
 
   const businessId = wabaId || businessAccountId;
 
-  const existing = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id }).select(
+  const existing = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select(
     "+phoneNumberIdEnc +businessAccountIdEnc isValid"
   );
   let currentWabaId = "";
@@ -54,28 +55,36 @@ async function upsertCredentials(req, res) {
       graphApiVersion: graphApiVersion || metaGraphVersion,
     });
     await stampUntaggedTemplatesForWaba({ workspaceId: req.workspace.id, wabaId: currentWabaId });
-
-    const doc = await WhatsAppCredentials.findOneAndUpdate(
-      { workspaceId: req.workspace.id },
-      {
-        $set: {
-          accessTokenEnc: encryptString(accessToken),
-          phoneNumberIdEnc: encryptString(phoneNumberId),
-          businessAccountIdEnc: encryptString(businessId),
-          phoneNumberIdHash: hashForLookup(phoneNumberId),
-          businessAccountIdHash: hashForLookup(businessId),
-          phoneNumberIdPlain: String(phoneNumberId),
-          businessAccountIdPlain: String(businessId),
-          graphApiVersion: graphApiVersion || metaGraphVersion,
-          isValid: true,
-          lastValidatedAt: new Date(),
-          lastEditedAt: new Date(),
-          lastEditedBy: req.user?.id || null,
-          lastEditedReason: String(overrideReason || "").trim() || null,
-        },
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+    const now = new Date();
+    await WhatsAppCredentials.updateMany(
+      { workspaceId: req.workspace.id, isActive: { $ne: false } },
+      { $set: { isActive: false, status: "disconnected", disconnectedAt: now } }
     );
+    await markTemplatesStaleForInactiveWabas({ workspaceId: req.workspace.id, activeWabaId: businessId });
+
+    const doc = await WhatsAppCredentials.create({
+      workspaceId: req.workspace.id,
+      accessTokenEnc: encryptString(accessToken),
+      phoneNumberIdEnc: encryptString(phoneNumberId),
+      businessAccountIdEnc: encryptString(businessId),
+      phoneNumberIdHash: hashForLookup(phoneNumberId),
+      businessAccountIdHash: hashForLookup(businessId),
+      phoneNumberIdPlain: String(phoneNumberId),
+      businessAccountIdPlain: String(businessId),
+      phoneNumberId: String(phoneNumberId),
+      wabaId: String(businessId),
+      graphApiVersion: graphApiVersion || metaGraphVersion,
+      isValid: true,
+      isActive: true,
+      status: "active",
+      connectedAt: now,
+      disconnectedAt: null,
+      lastValidatedAt: now,
+      lastEditedAt: now,
+      lastEditedBy: req.user?.id || null,
+      lastEditedReason: String(overrideReason || "").trim() || null,
+    });
+    await templatesService.syncMetaTemplates({ workspace: req.workspace, body: {} }).catch(() => null);
 
     res.json({
       success: true,
@@ -99,7 +108,7 @@ async function upsertCredentials(req, res) {
 }
 
 async function getCredentials(req, res) {
-  const doc = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id }).select(
+  const doc = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select(
     "+phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid lastValidatedAt createdAt updatedAt"
   );
   if (!doc) throw new HttpError(404, "WhatsApp credentials not found");

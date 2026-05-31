@@ -11,6 +11,17 @@ const {
   renderTemplatePreview,
 } = require("@shared/utils/templateStructure");
 const { assertTemplateBelongsToWaba } = require("@shared/services/templateOwnershipService");
+const { HttpError } = require("@shared/utils/httpError");
+
+function isMissingMetaTemplate(err) {
+  const message = String(
+    err?.metaDebug?.meta?.message ||
+      err?.metaDebug?.raw?.error?.message ||
+      err?.response?.data?.error?.message ||
+      ""
+  ).toLowerCase();
+  return message.includes("template name does not exist") || message.includes("template does not exist");
+}
 
 async function sendTemplateMessageForUser({
   userId,
@@ -29,6 +40,19 @@ async function sendTemplateMessageForUser({
 }) {
   const creds = await getCredentialsForUser(userId);
   assertTemplateBelongsToWaba(template, creds.wabaId);
+  const resolvedLanguageCode = String(languageCode || template?.languageCode || template?.language || "").trim();
+  const templateLanguageCode = String(template?.languageCode || template?.language || "").trim();
+  if (!templateLanguageCode || resolvedLanguageCode !== templateLanguageCode) {
+    // eslint-disable-next-line no-console
+    console.warn("[templates] send rejected template not in active WABA", {
+      workspaceId: String(userId),
+      reason: "language_mismatch",
+    });
+    throw new HttpError(
+      409,
+      "Template does not exist for the currently connected WhatsApp account. Refresh templates or create this template for the active WABA."
+    );
+  }
   const normalizedTemplate = normalizeTemplate(template.toObject ? template.toObject() : template);
   const sendComponents = buildComponentsFromTemplate(normalizedTemplate, {
     variables,
@@ -45,15 +69,30 @@ async function sendTemplateMessageForUser({
     otpCode,
   });
 
-  const apiResponse = await sendTemplateMessage({
-    accessToken: creds.accessToken,
-    phoneNumberId: creds.phoneNumberId,
-    to,
-    templateName: normalizedTemplate.name,
-    languageCode: languageCode || normalizedTemplate.language,
-    components: sendComponents,
-    graphApiVersion: creds.graphApiVersion,
-  });
+  let apiResponse;
+  try {
+    apiResponse = await sendTemplateMessage({
+      accessToken: creds.accessToken,
+      phoneNumberId: creds.phoneNumberId,
+      to,
+      templateName: normalizedTemplate.name,
+      languageCode: resolvedLanguageCode,
+      components: sendComponents,
+      graphApiVersion: creds.graphApiVersion,
+    });
+  } catch (err) {
+    if (isMissingMetaTemplate(err) && template?._id) {
+      await require("@infra/database/Template").Template.updateOne(
+        { _id: template._id, workspaceId: userId, wabaId: creds.wabaId },
+        { $set: { isActive: false, staleReason: "missing_from_meta_send" } }
+      ).catch(() => {});
+      throw new HttpError(
+        409,
+        "Template does not exist for the currently connected WhatsApp account. Refresh templates or create this template for the active WABA."
+      );
+    }
+    throw err;
+  }
 
   const waMessageId = Array.isArray(apiResponse?.messages)
     ? apiResponse.messages[0]?.id
@@ -78,7 +117,7 @@ async function sendTemplateMessageForUser({
       to,
       template: {
         name: normalizedTemplate.name,
-        language: languageCode || normalizedTemplate.language,
+        language: resolvedLanguageCode,
       },
       runtime: {
         variables: variables || [],

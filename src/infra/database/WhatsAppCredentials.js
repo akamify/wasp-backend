@@ -6,7 +6,6 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Workspace",
       required: true,
-      unique: true,
       index: true,
     },
 
@@ -21,11 +20,15 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
     // Plain IDs are not secrets; keep them indexed for stable webhook routing across env hash/key changes.
     phoneNumberIdPlain: { type: String, default: null, index: true },
     businessAccountIdPlain: { type: String, default: null, index: true },
+    phoneNumberId: { type: String, default: null, index: true },
+    wabaId: { type: String, default: null, index: true },
 
     graphApiVersion: { type: String, default: "v22.0" },
     isValid: { type: Boolean, default: false },
     lastValidatedAt: { type: Date },
     displayPhoneNumber: { type: String, default: null },
+    wabaName: { type: String, default: null },
+    isActive: { type: Boolean, default: true, index: true },
     businessTokenEnc: { type: String, default: null, select: false },
     connectionMethod: { type: String, enum: ["embedded_signup"], default: "embedded_signup", index: true },
     webhookSubscribed: { type: Boolean, default: false, index: true },
@@ -37,6 +40,7 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
     },
     lastError: { type: String, default: null },
     connectedAt: { type: Date, default: null },
+    disconnectedAt: { type: Date, default: null },
 
     // Connection governance (workspace can have only one connection; edits are audited)
     lastEditedAt: { type: Date, default: null },
@@ -56,6 +60,11 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
     lastWebhookObject: { type: String, default: null },
   },
   { timestamps: true }
+);
+
+WhatsAppCredentialsSchema.index(
+  { workspaceId: 1, isActive: 1 },
+  { unique: true, partialFilterExpression: { isActive: true } }
 );
 
 const WhatsAppCredentials = mongoose.model(

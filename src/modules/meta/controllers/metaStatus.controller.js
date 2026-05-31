@@ -33,7 +33,7 @@ async function metaStatus(req, res) {
   // This endpoint is dynamic and should not be cached by browsers/proxies.
   res.set("Cache-Control", "no-store");
 
-  const doc = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id }).select(
+  const doc = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select(
     "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid lastValidatedAt createdAt updatedAt messagingLimitTierCached messagingLimitCurrentCached messagingLimitNextCached lastLimitsUpdateAt"
   );
 

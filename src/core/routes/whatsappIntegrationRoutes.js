@@ -9,6 +9,7 @@ const {
   getWhatsAppConnection,
   disconnectWhatsAppConnection,
 } = require("@modules/meta/controllers/metaEmbeddedSignup.controller");
+const { syncMetaTemplates } = require("@modules/templates/controllers/templates.controller");
 
 const router = express.Router();
 
@@ -27,5 +28,6 @@ router.post(
   asyncHandler(exchangeEmbeddedSignupCode)
 );
 router.post("/disconnect", auth, requireWorkspace, asyncHandler(disconnectWhatsAppConnection));
+router.post("/templates/refresh", auth, requireWorkspace, asyncHandler(syncMetaTemplates));
 
 module.exports = router;

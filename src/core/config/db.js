@@ -3,9 +3,9 @@ const mongoose = require("mongoose");
 const staleIndexesByCollection = {
   contacts: ["userId_1_phone_1"],
   conversations: ["userId_1_phone_1"],
-  templates: ["userId_1_name_1"],
+  templates: ["userId_1_name_1", "workspaceId_1_name_1"],
   messages: ["userId_1_whatsappMessageId_1"],
-  whatsappcredentials: ["userId_1"],
+  whatsappcredentials: ["userId_1", "workspaceId_1"],
 };
 
 async function cleanupLegacyIndexes(db) {
@@ -27,9 +27,10 @@ async function cleanupLegacyIndexes(db) {
   }
 }
 
-async function dedupeByKey(db, collectionName, keyFields) {
+async function dedupeByKey(db, collectionName, keyFields, filter = null) {
   const collection = db.collection(collectionName);
   const pipeline = [
+    ...(filter ? [{ $match: filter }] : []),
     {
       $group: {
         _id: keyFields.reduce((acc, field) => ({ ...acc, [field]: `$${field}` }), {}),
@@ -66,7 +67,7 @@ async function createUniqueIndexSafe(db, collectionName, key, options = {}) {
   } catch (err) {
     if (err?.codeName !== "DuplicateKey") throw err;
     const keyFields = Object.keys(key);
-    await dedupeByKey(db, collectionName, keyFields);
+    await dedupeByKey(db, collectionName, keyFields, options.partialFilterExpression || null);
     await db.collection(collectionName).createIndex(key, options);
   }
 }
@@ -74,7 +75,12 @@ async function createUniqueIndexSafe(db, collectionName, key, options = {}) {
 async function ensureWorkspaceIndexes(db) {
   await createUniqueIndexSafe(db, "contacts", { workspaceId: 1, phone: 1 }, { unique: true });
   await createUniqueIndexSafe(db, "conversations", { workspaceId: 1, phone: 1 }, { unique: true });
-  await createUniqueIndexSafe(db, "templates", { workspaceId: 1, name: 1 }, { unique: true });
+  await createUniqueIndexSafe(
+    db,
+    "templates",
+    { workspaceId: 1, wabaId: 1, name: 1, languageCode: 1 },
+    { unique: true }
+  );
   await createUniqueIndexSafe(
     db,
     "messages",
@@ -84,7 +90,31 @@ async function ensureWorkspaceIndexes(db) {
       partialFilterExpression: { whatsappMessageId: { $type: "string" } },
     }
   );
-  await createUniqueIndexSafe(db, "whatsappcredentials", { workspaceId: 1 }, { unique: true });
+  await createUniqueIndexSafe(
+    db,
+    "whatsappcredentials",
+    { workspaceId: 1, isActive: 1 },
+    { unique: true, partialFilterExpression: { isActive: true } }
+  );
+}
+
+async function backfillScopedFields(db) {
+  await db.collection("whatsappcredentials").updateMany(
+    { isActive: { $exists: false } },
+    { $set: { isActive: true } }
+  );
+  await db.collection("templates").updateMany(
+    { languageCode: { $exists: false } },
+    [{ $set: { languageCode: "$language" } }]
+  );
+  await db.collection("templates").updateMany(
+    { isActive: { $exists: false } },
+    { $set: { isActive: true, deletedAt: null } }
+  );
+  await db.collection("templates").updateMany(
+    { $or: [{ wabaId: null }, { wabaId: "" }, { wabaId: { $exists: false } }] },
+    { $set: { isActive: false, staleReason: "missing_waba_id" } }
+  );
 }
 
 async function connectDB(mongoUri) {
@@ -96,6 +126,7 @@ async function connectDB(mongoUri) {
   }
   mongoose.set("strictQuery", true);
   await mongoose.connect(uri);
+  await backfillScopedFields(mongoose.connection.db);
   await cleanupLegacyIndexes(mongoose.connection.db);
   await ensureWorkspaceIndexes(mongoose.connection.db);
 }

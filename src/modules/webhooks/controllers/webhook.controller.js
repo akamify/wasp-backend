@@ -262,6 +262,7 @@ async function receive(req, res) {
           phoneNumberIdPlain: String(phoneNumberId),
           businessAccountIdPlain: String(wabaIdFromEntry),
           status: "active",
+          isActive: { $ne: false },
         }).select("workspaceId");
       }
       if (!tenant) {

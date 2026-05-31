@@ -22,9 +22,11 @@ function normalizeRemoteStatus(status) {
 }
 
 function normalizeRemoteTemplate(remote) {
+  const languageCode = String(remote?.language || "en_US").trim();
   return {
     name: String(remote?.name || "").trim(),
-    language: String(remote?.language || "en_US").trim(),
+    language: languageCode,
+    languageCode,
     category: String(remote?.category || "utility").trim().toLowerCase(),
     components: Array.isArray(remote?.components) ? remote.components : [],
     status: normalizeRemoteStatus(remote?.status),
@@ -32,6 +34,10 @@ function normalizeRemoteTemplate(remote) {
     metaTemplateId: remote?.id ? String(remote.id) : undefined,
     rejectedReason: remote?.rejected_reason || undefined,
     lastSyncedAt: new Date(),
+    syncedAt: new Date(),
+    isActive: true,
+    deletedAt: null,
+    staleReason: null,
   };
 }
 
@@ -83,6 +89,7 @@ async function adminUpdateMasterTemplate(req, res) {
 
   existing.name = normalized.name;
   existing.language = normalized.language;
+  existing.languageCode = normalized.language;
   existing.category = existing.category;
   existing.components = normalized.components;
   const saved = await existing.save();
@@ -188,18 +195,14 @@ async function adminSyncMetaTemplates(req, res) {
 
     const existing = await Template.findOne({
       workspaceId: String(workspace._id),
-      $or: [
-        ...(normalized.metaTemplateId ? [{ wabaId: creds.wabaId, metaTemplateId: normalized.metaTemplateId }] : []),
-        { wabaId: creds.wabaId, name: normalized.name },
-        ...(normalized.metaTemplateId ? [{ wabaId: null, metaTemplateId: normalized.metaTemplateId }] : []),
-        { wabaId: null, name: normalized.name },
-        ...(normalized.metaTemplateId ? [{ metaTemplateId: normalized.metaTemplateId }] : []),
-        { name: normalized.name },
-      ],
+      wabaId: creds.wabaId,
+      name: normalized.name,
+      languageCode: normalized.languageCode,
     });
 
     if (existing) {
       existing.language = normalized.language;
+      existing.languageCode = normalized.languageCode;
       existing.category = normalized.category;
       existing.components = normalized.components;
       existing.status = normalized.status;
@@ -208,6 +211,7 @@ async function adminSyncMetaTemplates(req, res) {
       existing.rejectedReason = normalized.rejectedReason;
       existing.lastSyncedAt = normalized.lastSyncedAt;
       existing.wabaId = creds.wabaId;
+      existing.phoneNumberId = creds.phoneNumberId;
       await existing.save();
       synced.push(existing);
       continue;
