@@ -41,6 +41,10 @@ function maskPhone(value) {
   return `${s.slice(0, 3)}***${s.slice(-2)}`;
 }
 
+function sanitizeScope(value) {
+  return String(value || "").replace(/[^a-zA-Z0-9_.:-]/g, "").slice(0, 100);
+}
+
 function logGraphCall({ operation, path, wabaId, phoneNumberId }) {
   if (String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() !== "true") return;
   // eslint-disable-next-line no-console
@@ -60,9 +64,8 @@ async function exchangeEmbeddedSignupCode(req, res) {
   const missing = {
     code: !code,
     waba_id: !wabaId,
-    phone_number_id: !phoneNumberId,
   };
-  if (missing.code || missing.waba_id || missing.phone_number_id) {
+  if (missing.code || missing.waba_id) {
     return res.status(400).json({
       success: false,
       message: "Embedded signup details missing. Please complete signup popup flow.",
@@ -124,77 +127,83 @@ async function exchangeEmbeddedSignupCode(req, res) {
 
   const client = axios.create({ baseURL, timeout: 20000 });
   const headers = { Authorization: `Bearer ${businessToken}` };
+  let debugTokenData = null;
+  try {
+    logGraphCall({
+      operation: "debug_business_token",
+      path: "/debug_token",
+      wabaId,
+      phoneNumberId,
+    });
+    const debugTokenRes = await client.get("/debug_token", {
+      params: {
+        input_token: businessToken,
+        access_token: `${appId}|${appSecret}`,
+      },
+    });
+    debugTokenData = debugTokenRes?.data?.data || null;
+  } catch (err) {
+    throw new HttpError(400, "Could not validate the Meta business token", {
+      message: sanitizeMetaError(err, "Meta business token debug failed"),
+    });
+  }
+
+  const scopes = Array.isArray(debugTokenData?.scopes) ? debugTokenData.scopes.map(sanitizeScope).filter(Boolean) : [];
+  const granularScopes = Array.isArray(debugTokenData?.granular_scopes) ? debugTokenData.granular_scopes : [];
+  const targetIds = [
+    ...new Set(
+      granularScopes.flatMap((scope) =>
+        Array.isArray(scope?.target_ids) ? scope.target_ids.map((targetId) => String(targetId).trim()).filter(Boolean) : []
+      )
+    ),
+  ];
+  const targetIncludesWaba = targetIds.includes(wabaId);
+  // eslint-disable-next-line no-console
+  console.info("[embedded-signup] debug_token", {
+    scopes,
+    granularScopes: granularScopes.map((scope) => ({
+      scope: sanitizeScope(scope?.scope),
+      target_ids: Array.isArray(scope?.target_ids) ? scope.target_ids.map(maskId) : [],
+    })),
+    targetIds: targetIds.map(maskId),
+    targetIncludesRequestedWaba: targetIncludesWaba,
+  });
+  if (debugTokenData?.is_valid !== true) {
+    throw new HttpError(400, "Meta returned an invalid business token. Please reconnect WhatsApp.");
+  }
+  if (!targetIncludesWaba) {
+    throw new HttpError(400, "Meta business token does not grant access to the WABA returned by the signup popup. Please reconnect WhatsApp.");
+  }
+
   let validatedPhoneNumber = null;
 
   try {
-    let phoneRows = [];
-    try {
-      logGraphCall({
-        operation: "list_waba_phone_numbers_minimal_fields",
-        path: `/${wabaId}/phone_numbers?fields=id,display_phone_number`,
-        wabaId,
-        phoneNumberId,
-      });
-      const phoneListRes = await client.get(`/${wabaId}/phone_numbers`, {
-        headers,
-        params: { fields: "id,display_phone_number" },
-      });
-      phoneRows = Array.isArray(phoneListRes?.data?.data) ? phoneListRes.data.data : [];
-      if (debug) {
-        // eslint-disable-next-line no-console
-        console.info("[embedded-signup] minimal phone list success", { count: phoneRows.length });
-      }
-    } catch (minimalErr) {
-      if (debug) {
-        // eslint-disable-next-line no-console
-        console.warn("[embedded-signup] minimal phone list failed", {
-          reason: sanitizeMetaError(minimalErr, "phone list minimal fields failed"),
-        });
-      }
-      const metaCode = Number(minimalErr?.response?.data?.error?.code || 0);
-      if (metaCode !== 200) throw minimalErr;
+    logGraphCall({
+      operation: "list_waba_phone_numbers",
+      path: `/${wabaId}/phone_numbers?fields=id,display_phone_number`,
+      wabaId,
+      phoneNumberId,
+    });
+    const phoneListRes = await client.get(`/${wabaId}/phone_numbers`, {
+      headers,
+      params: { fields: "id,display_phone_number" },
+    });
+    const phoneRows = Array.isArray(phoneListRes?.data?.data) ? phoneListRes.data.data : [];
 
-      // Retry once without fields for restrictive permission cases.
-      logGraphCall({
-        operation: "list_waba_phone_numbers_no_fields_fallback",
-        path: `/${wabaId}/phone_numbers`,
-        wabaId,
-        phoneNumberId,
+    if (!phoneNumberId) {
+      return res.json({
+        success: false,
+        needsPhoneSelection: true,
+        message: "Meta did not return a phone number. Please select a phone number and reconnect WhatsApp.",
+        phones: phoneRows.map((item) => ({
+          id: String(item?.id || "").trim(),
+          display_phone_number: String(item?.display_phone_number || "").trim() || null,
+        })),
       });
-      const fallbackRes = await client.get(`/${wabaId}/phone_numbers`, { headers });
-      phoneRows = Array.isArray(fallbackRes?.data?.data) ? fallbackRes.data.data : [];
-      if (debug) {
-        // eslint-disable-next-line no-console
-        console.info("[embedded-signup] no-fields fallback success", { count: phoneRows.length });
-      }
     }
 
-    const matched = phoneRows.find((item) => String(item?.id || "").trim() === phoneNumberId);
-
-    if (matched) {
-      validatedPhoneNumber = matched;
-    } else if (phoneRows.length === 1) {
-      validatedPhoneNumber = phoneRows[0];
-      if (debug) {
-        // eslint-disable-next-line no-console
-        console.warn("[embedded-signup] Provided phone_number_id mismatch; using only returned WABA phone number", {
-          providedPhoneNumberId: maskId(phoneNumberId),
-          resolvedPhoneNumberId: maskId(validatedPhoneNumber?.id),
-        });
-      }
-    } else {
-      await WhatsAppCredentials.findOneAndUpdate(
-        { workspaceId },
-        {
-          $set: {
-            status: "failed",
-            connectionMethod: "embedded_signup",
-            webhookSubscribed: false,
-            lastError: "Selected phone number could not be matched to the selected WABA. Please reconnect WhatsApp and select the correct phone number.",
-          },
-        },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      );
+    validatedPhoneNumber = phoneRows.find((item) => String(item?.id || "").trim() === phoneNumberId) || null;
+    if (!validatedPhoneNumber) {
       throw new HttpError(400, "Selected phone number could not be matched to the selected WABA. Please reconnect WhatsApp and select the correct phone number.");
     }
 
@@ -206,7 +215,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
           id: maskId(item?.id),
           display_phone_number: maskPhone(item?.display_phone_number),
         })),
-        matchedProvided: !!matched,
+        matchedProvided: true,
       });
     }
   } catch (err) {
@@ -231,21 +240,12 @@ async function exchangeEmbeddedSignupCode(req, res) {
       console.info("[embedded-signup] subscribed_apps result", { subscribed });
     }
   } catch (err) {
-    await WhatsAppCredentials.findOneAndUpdate(
-      { workspaceId },
-      {
-        $set: {
-          status: "failed",
-          connectionMethod: "embedded_signup",
-          webhookSubscribed: false,
-          lastError: "Could not subscribe WABA to webhook",
-        },
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
     throw new HttpError(400, "Could not subscribe WABA to webhook", {
       message: sanitizeMetaError(err, "WABA webhook subscription failed"),
     });
+  }
+  if (!subscribed) {
+    throw new HttpError(400, "Could not subscribe WABA to webhook");
   }
 
   const now = new Date();
@@ -255,11 +255,11 @@ async function exchangeEmbeddedSignupCode(req, res) {
       $set: {
         accessTokenEnc: encryptString(businessToken),
         businessTokenEnc: encryptSecret(businessToken),
-        phoneNumberIdEnc: encryptString(String(validatedPhoneNumber?.id || phoneNumberId)),
+        phoneNumberIdEnc: encryptString(String(validatedPhoneNumber.id)),
         businessAccountIdEnc: encryptString(wabaId),
-        phoneNumberIdHash: hashForLookup(String(validatedPhoneNumber?.id || phoneNumberId)),
+        phoneNumberIdHash: hashForLookup(String(validatedPhoneNumber.id)),
         businessAccountIdHash: hashForLookup(wabaId),
-        phoneNumberIdPlain: String(validatedPhoneNumber?.id || phoneNumberId),
+        phoneNumberIdPlain: String(validatedPhoneNumber.id),
         businessAccountIdPlain: wabaId,
         displayPhoneNumber: String(validatedPhoneNumber?.display_phone_number || "").trim() || null,
         graphApiVersion: process.env.META_GRAPH_VERSION || "v25.0",
@@ -290,7 +290,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
     connected: true,
     status: "active",
     waba_id_masked: mask(wabaId),
-    phone_number_id_masked: mask(String(validatedPhoneNumber?.id || phoneNumberId)),
+    phone_number_id_masked: mask(String(validatedPhoneNumber.id)),
     display_phone_number: String(validatedPhoneNumber?.display_phone_number || "").trim() || null,
     webhook_subscribed: subscribed,
   });
