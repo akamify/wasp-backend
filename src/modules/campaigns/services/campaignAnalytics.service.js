@@ -21,7 +21,7 @@ async function getCampaignMetrics(req) {
     const campaign = await campaignsRepository.getCampaignById({ id, workspaceId: req.workspace.id });
     if (!campaign) throw new HttpError(404, "Campaign not found");
 
-    const match = { workspaceId: campaign.workspaceId, campaignId: campaign._id, direction: "outbound" };
+    const match = { workspaceId: campaign.workspaceId, wabaId: campaign.wabaId, campaignId: campaign._id, direction: "outbound" };
     const statusRankExpr = {
         $switch: {
             branches: [
@@ -42,7 +42,7 @@ async function getCampaignMetrics(req) {
     const countsByRank = Object.fromEntries(contactAgg.map((row) => [String(row._id), Number(row.count || 0)]));
     const phones = await Message.distinct("phone", match);
     const repliedPhones = phones.length
-        ? await Message.distinct("phone", { workspaceId: campaign.workspaceId, direction: "inbound", phone: { $in: phones }, createdAt: { $gte: campaign.createdAt } })
+        ? await Message.distinct("phone", { workspaceId: campaign.workspaceId, wabaId: campaign.wabaId, direction: "inbound", phone: { $in: phones }, createdAt: { $gte: campaign.createdAt } })
         : [];
 
     return {
@@ -76,7 +76,7 @@ async function listCampaignMessages(req) {
     const tabRank = tabRankMap[String(tab || "").toLowerCase()];
     if (typeof tabRank !== "number") return { success: true, tab, page, limit, total: 0, items: [] };
 
-    const baseMatch = { workspaceId: campaign.workspaceId, campaignId: campaign._id, direction: "outbound" };
+    const baseMatch = { workspaceId: campaign.workspaceId, wabaId: campaign.wabaId, campaignId: campaign._id, direction: "outbound" };
     const statusRankExpr = {
         $switch: {
             branches: [
@@ -112,7 +112,7 @@ async function listCampaignMessages(req) {
     ]);
     const total = Number(countAgg?.[0]?.total || 0);
     const phones = itemsAgg.map((m) => m.phone).filter(Boolean);
-    const contacts = phones.length ? await contactsRepository.findContactsByPhones({ workspaceId: campaign.workspaceId, phones, select: "phone name" }) : [];
+    const contacts = phones.length ? await contactsRepository.findContactsByPhones({ workspaceId: campaign.workspaceId, wabaId: campaign.wabaId, phones, select: "phone name" }) : [];
     const contactMap = new Map(contacts.map((c) => [String(c.phone), String(c.name || "")]));
     return { success: true, tab, page, limit, total, items: itemsAgg.map((m) => ({ id: String(m._id || m.phone || ""), phone: m.phone, name: contactMap.get(String(m.phone)) || "", status: m.status, createdAt: m.createdAt, whatsappMessageId: m.whatsappMessageId || null, error: m.error || null, statusTimestamps: m.statusTimestamps || null })) };
 }
@@ -125,16 +125,16 @@ async function listCampaignReplies(req) {
     const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
     const page = Math.min(Math.max(Number(req.query.page || 1), 1), 50000);
     const skip = (page - 1) * limit;
-    const phones = await messagesRepository.distinctPhones({ workspaceId: campaign.workspaceId, campaignId: campaign._id, direction: "outbound" });
+    const phones = await messagesRepository.distinctPhones({ workspaceId: campaign.workspaceId, wabaId: campaign.wabaId, campaignId: campaign._id, direction: "outbound" });
     if (!phones.length) return { success: true, page, limit, total: 0, items: [] };
-    const pipeline = [{ $match: { workspaceId: campaign.workspaceId, direction: "inbound", phone: { $in: phones }, createdAt: { $gte: campaign.createdAt } } }, { $sort: { createdAt: -1 } }, { $group: { _id: "$phone", phone: { $first: "$phone" }, text: { $first: "$text" }, createdAt: { $first: "$createdAt" } } }];
+    const pipeline = [{ $match: { workspaceId: campaign.workspaceId, wabaId: campaign.wabaId, direction: "inbound", phone: { $in: phones }, createdAt: { $gte: campaign.createdAt } } }, { $sort: { createdAt: -1 } }, { $group: { _id: "$phone", phone: { $first: "$phone" }, text: { $first: "$text" }, createdAt: { $first: "$createdAt" } } }];
     const [grouped, totalAgg] = await Promise.all([
         messagesRepository.aggregateMessages([...pipeline, { $skip: skip }, { $limit: limit }]),
         messagesRepository.aggregateMessages([...pipeline, { $count: "total" }]),
     ]);
     const total = Number(totalAgg?.[0]?.total || 0);
     const replyPhones = grouped.map((r) => String(r.phone || "")).filter(Boolean);
-    const contacts = replyPhones.length ? await contactsRepository.findContactsByPhones({ workspaceId: campaign.workspaceId, phones: replyPhones, select: "phone name" }) : [];
+    const contacts = replyPhones.length ? await contactsRepository.findContactsByPhones({ workspaceId: campaign.workspaceId, wabaId: campaign.wabaId, phones: replyPhones, select: "phone name" }) : [];
     const contactMap = new Map(contacts.map((c) => [String(c.phone), String(c.name || "")]));
     return { success: true, page, limit, total, items: grouped.map((r) => ({ phone: String(r.phone || ""), name: contactMap.get(String(r.phone)) || "", text: String(r.text || ""), createdAt: r.createdAt })) };
 }

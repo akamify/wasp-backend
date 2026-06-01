@@ -56,7 +56,7 @@ function addMonths(d, months) {
   return x;
 }
 
-async function buildSeries({ workspaceId, range }) {
+async function buildSeries({ workspaceId, wabaId, range }) {
   const workspaceObjectId = mongoose.Types.ObjectId.isValid(String(workspaceId || ""))
     ? new mongoose.Types.ObjectId(String(workspaceId))
     : null;
@@ -66,6 +66,7 @@ async function buildSeries({ workspaceId, range }) {
   // (template + non-template sends).
   const baseMatch = {
     workspaceId: workspaceObjectId,
+    wabaId,
     direction: "outbound",
   };
 
@@ -249,10 +250,13 @@ async function buildSeries({ workspaceId, range }) {
 async function overview(req, res) {
   const workspaceId = req.workspace.id;
   const range = normalizeRange(req.query.range);
+  const activeConnection = await resolveActiveConnection(workspaceId);
+  const wabaId = activeConnection?.wabaId || "__no_active_waba__";
 
   // Include all outbound messages so analytics matches dashboard activity.
   const msgBase = {
     workspaceId,
+    wabaId,
     direction: "outbound",
   };
 
@@ -300,21 +304,20 @@ async function overview(req, res) {
   const lastWeekStart = startOfDay(addDays(now, -13));
   const lastWeekEnd = startOfDay(addDays(now, -6));
   const [contactsThisWeek, contactsLastWeek] = await Promise.all([
-    Contact.countDocuments({ workspaceId, createdAt: { $gte: thisWeekStart } }),
-    Contact.countDocuments({ workspaceId, createdAt: { $gte: lastWeekStart, $lt: lastWeekEnd } }),
+    Contact.countDocuments({ workspaceId, wabaId, createdAt: { $gte: thisWeekStart } }),
+    Contact.countDocuments({ workspaceId, wabaId, createdAt: { $gte: lastWeekStart, $lt: lastWeekEnd } }),
   ]);
 
   const todayStart = startOfDay(now);
   const tomorrowStart = startOfDay(addDays(now, 1));
-  const activeConnection = await resolveActiveConnection(workspaceId);
   const activeTemplateFilter = activeConnection
     ? { workspaceId, wabaId: activeConnection.wabaId, isActive: { $ne: false }, deletedAt: null }
     : { workspaceId, _id: null };
 
   const [campaignsCount, templatesCount, contactsTotal, todaySent] = await Promise.all([
-    Campaign.countDocuments({ workspaceId }),
+    Campaign.countDocuments({ workspaceId, wabaId }),
     Template.countDocuments(activeTemplateFilter),
-    Contact.countDocuments({ workspaceId }),
+    Contact.countDocuments({ workspaceId, wabaId }),
     Message.countDocuments({
       ...sentBase,
       createdAt: { $gte: todayStart, $lt: tomorrowStart },
@@ -325,7 +328,7 @@ async function overview(req, res) {
   const readRatePct = clampPct(sent ? (read / sent) * 100 : 0);
   const monthlyGrowthPct = pctChange(thisMonthSent, lastMonthSent);
   const contactGrowthPct = pctChange(contactsThisWeek, contactsLastWeek);
-  const series = await buildSeries({ workspaceId, range });
+  const series = await buildSeries({ workspaceId, wabaId, range });
 
   res.json({
     success: true,
@@ -362,23 +365,26 @@ async function templatePerformance(req, res) {
   const [sent, delivered, read, failed, clicks] = await Promise.all([
     Message.countDocuments({
       workspaceId,
+      wabaId: activeConnection.wabaId,
       direction: "outbound",
       templateId,
       "statusTimestamps.sentAt": { $exists: true },
     }),
     Message.countDocuments({
       workspaceId,
+      wabaId: activeConnection.wabaId,
       direction: "outbound",
       templateId,
       "statusTimestamps.deliveredAt": { $exists: true },
     }),
     Message.countDocuments({
       workspaceId,
+      wabaId: activeConnection.wabaId,
       direction: "outbound",
       templateId,
       "statusTimestamps.readAt": { $exists: true },
     }),
-    Message.countDocuments({ workspaceId, direction: "outbound", templateId, status: "failed" }),
+    Message.countDocuments({ workspaceId, wabaId: activeConnection.wabaId, direction: "outbound", templateId, status: "failed" }),
     ClickLog.countDocuments({ workspaceId, templateId }),
   ]);
 

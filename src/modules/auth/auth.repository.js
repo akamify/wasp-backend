@@ -89,16 +89,16 @@ async function findUserForMe(userId) {
 }
 
 async function findUserForApiKeyStatus(userId) {
-  return User.findById(userId).select("+apiKeyEnc apiKeys");
+  return User.findById(userId).select("+apiKeyEnc apiKeys +apiKeys.keyEnc");
 }
 
 async function findUserForApiKeyOtp(userId) {
-  return User.findById(userId).select("email name apiKeys +apiKeyEnc +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose");
+  return User.findById(userId).select("email name apiKeys +apiKeyEnc +apiKeys.keyEnc +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose");
 }
 
 async function findUserForVerifyApiKeyOtp(userId) {
   return User.findById(userId).select(
-    "email name apiKeys +apiKeyHash +apiKeyEnc +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose"
+    "email name apiKeys +apiKeyHash +apiKeyEnc +apiKeys.keyEnc +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose"
   );
 }
 

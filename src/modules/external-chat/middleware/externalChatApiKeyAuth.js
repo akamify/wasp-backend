@@ -22,7 +22,7 @@ async function externalChatApiKeyAuth(req, res, next) {
     "apiKeys.keyHash": apiKeyHash,
   }).select(
     "_id role status terminationState accountBlocked allowedApiPermissions " +
-    "apiKeys._id apiKeys.name apiKeys.permissions apiKeys.revoked apiKeys.revokedAt apiKeys.lastUsedAt " +
+    "apiKeys._id apiKeys.workspaceId apiKeys.wabaId apiKeys.name apiKeys.permissions apiKeys.revoked apiKeys.revokedAt apiKeys.lastUsedAt " +
     "+apiKeys.keyHash"
   )
 
@@ -67,6 +67,8 @@ async function externalChatApiKeyAuth(req, res, next) {
   req.auth = {
     userId: String(user._id),
     apiKeyId: String(keyDoc._id),
+    workspaceId: keyDoc.workspaceId ? String(keyDoc.workspaceId) : null,
+    wabaId: keyDoc.wabaId ? String(keyDoc.wabaId) : null,
     permissions,
     isApiKey: true,
   };

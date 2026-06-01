@@ -2,6 +2,7 @@ const { Conversation } = require("@infra/database/Conversation");
 const { ConversationEvent } = require("@infra/database/ConversationEvent");
 const { HttpError } = require("@shared/utils/httpError");
 const { normalizePhone } = require("@shared/services/contactService");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function parseLimit(req) {
   const raw = Number(req.query.limit || 50);
@@ -19,10 +20,11 @@ function mapEvent(doc) {
 }
 
 async function listOwnerConversationEvents(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   const phone = normalizePhone(req.params.phone);
   if (!phone) throw new HttpError(400, "Invalid phone number");
 
-  const conversation = await Conversation.findOne({ workspaceId: req.workspace.id, phone }).select("_id phone");
+  const conversation = await Conversation.findOne({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone }).select("_id phone");
   if (!conversation) throw new HttpError(404, "Conversation not found");
 
   const limit = parseLimit(req);
@@ -37,10 +39,11 @@ async function listOwnerConversationEvents(req, res) {
 }
 
 async function listEmployeeConversationEvents(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   const phone = normalizePhone(req.params.phone);
   if (!phone) throw new HttpError(400, "Invalid phone number");
 
-  const conversation = await Conversation.findOne({ workspaceId: req.workspace.id, phone }).select(
+  const conversation = await Conversation.findOne({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone }).select(
     "_id phone assignedEmployeeId"
   );
   if (!conversation) throw new HttpError(404, "Conversation not found");
@@ -62,4 +65,3 @@ async function listEmployeeConversationEvents(req, res) {
 }
 
 module.exports = { listOwnerConversationEvents, listEmployeeConversationEvents };
-

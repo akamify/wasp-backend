@@ -107,13 +107,15 @@ function assertNormalizedPhone(phone) {
   return normalizedPhone;
 }
 
-async function upsertContactForUser({ userId, phone, patch = {}, createIfMissing = true }) {
+async function upsertContactForUser({ userId, wabaId, phoneNumberId, phone, patch = {}, createIfMissing = true }) {
   const normalizedPhone = assertNormalizedPhone(phone);
   const update = buildContactUpdate(patch);
 
   if (createIfMissing) {
     update.$setOnInsert = {
       workspaceId: userId,
+      wabaId,
+      phoneNumberId: phoneNumberId || null,
       phone: normalizedPhone,
       source: patch.source || "manual",
     };
@@ -121,14 +123,14 @@ async function upsertContactForUser({ userId, phone, patch = {}, createIfMissing
     update.$set = { ...(update.$set || {}), source: patch.source };
   }
 
-  return Contact.findOneAndUpdate({ workspaceId: userId, phone: normalizedPhone }, update, {
+  return Contact.findOneAndUpdate({ workspaceId: userId, wabaId, phone: normalizedPhone }, update, {
     upsert: createIfMissing,
     returnDocument: "after",
     setDefaultsOnInsert: false,
   });
 }
 
-async function touchContactFromMessage({ userId, phone, direction, preview, occurredAt, name }) {
+async function touchContactFromMessage({ userId, wabaId, phoneNumberId, phone, direction, preview, occurredAt, name }) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return null;
 
@@ -143,6 +145,8 @@ async function touchContactFromMessage({ userId, phone, direction, preview, occu
 
   return upsertContactForUser({
     userId,
+    wabaId,
+    phoneNumberId,
     phone: normalizedPhone,
     patch,
     createIfMissing: true,

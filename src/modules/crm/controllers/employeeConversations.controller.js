@@ -6,10 +6,11 @@ const { normalizePhone } = require("@shared/services/contactService");
 const { markConversationEmployeeRead } = require("@shared/services/conversationService");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { markMessageAsRead } = require("@shared/utils/whatsappSender");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
-async function attachContacts(workspaceId, conversations) {
+async function attachContacts(workspaceId, wabaId, conversations) {
   const phones = Array.from(new Set(conversations.map((item) => item.phone).filter(Boolean)));
-  const contacts = await Contact.find({ workspaceId, phone: { $in: phones } }).select("_id phone name company tags");
+  const contacts = await Contact.find({ workspaceId, wabaId, phone: { $in: phones } }).select("_id phone name company tags");
   const contactMap = new Map(contacts.map((contact) => [contact.phone, contact]));
 
   return conversations.map((conversation) => {
@@ -40,6 +41,7 @@ function previewFromMessage(message, fallback = "") {
 }
 
 async function listEmployeeConversations(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
@@ -47,17 +49,18 @@ async function listEmployeeConversations(req, res) {
   const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
   const conversations = await Conversation.find({
     workspaceId: req.workspace.id,
+    wabaId: scope.wabaId,
     assignedEmployeeId: req.employee.id,
   })
     .sort({ lastMessageAt: -1 })
     .limit(limit);
 
-  let items = await attachContacts(req.workspace.id, conversations);
+  let items = await attachContacts(req.workspace.id, scope.wabaId, conversations);
   const phones = items.map((item) => item.phone).filter(Boolean);
 
   if (phones.length) {
     const latestRows = await Message.aggregate([
-      { $match: { workspaceId: conversations[0].workspaceId, phone: { $in: phones } } },
+      { $match: { workspaceId: conversations[0].workspaceId, wabaId: scope.wabaId, phone: { $in: phones } } },
       { $sort: { createdAt: -1, _id: -1 } },
       { $group: { _id: "$phone", latest: { $first: { phone: "$phone", text: "$text", payload: "$payload", display: "$display", createdAt: "$createdAt" } } } },
     ]);
@@ -88,6 +91,7 @@ async function listEmployeeConversations(req, res) {
 }
 
 async function getEmployeeConversation(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
@@ -96,8 +100,8 @@ async function getEmployeeConversation(req, res) {
   if (!phone) throw new HttpError(400, "Invalid phone number");
 
   const [conversation, contact] = await Promise.all([
-    Conversation.findOne({ workspaceId: req.workspace.id, phone, assignedEmployeeId: req.employee.id }),
-    Contact.findOne({ workspaceId: req.workspace.id, phone }).select("_id phone name company email language notes tags"),
+    Conversation.findOne({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone, assignedEmployeeId: req.employee.id }),
+    Contact.findOne({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone }).select("_id phone name company email language notes tags"),
   ]);
 
   if (!conversation) throw new HttpError(403, "Forbidden");
@@ -118,6 +122,7 @@ async function readEmployeeConversation(req, res) {
     const creds = await getCredentialsForUser(req.workspace.id);
     const pendingInbound = await Message.find({
       workspaceId: req.workspace.id,
+      wabaId: creds.wabaId,
       phone,
       direction: "inbound",
       status: "received",
@@ -146,6 +151,7 @@ async function readEmployeeConversation(req, res) {
 
   const conversation = await markConversationEmployeeRead({
     workspaceId: req.workspace.id,
+    wabaId: (await requireActiveWabaScope(req.workspace.id)).wabaId,
     phone,
     employeeId: req.employee.id,
   });
@@ -158,4 +164,3 @@ module.exports = {
   getEmployeeConversation,
   readEmployeeConversation,
 };
-

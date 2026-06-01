@@ -3,6 +3,7 @@ const { Campaign } = require("@infra/database/Campaign");
 const { Message } = require("@infra/database/Message");
 const { Template } = require("@infra/database/Template");
 const { HttpError } = require("@shared/utils/httpError");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function normalizeLimit(value, max) {
   const n = Number(value || 0);
@@ -27,10 +28,11 @@ function messageErrorSummary(errorObj) {
 }
 
 async function listApiCampaignReports(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   const limit = normalizeLimit(req.query.limit, 200);
   const cursor = req.query.cursor ? String(req.query.cursor) : null;
 
-  const query = { workspaceId: req.workspace.id, type: "api" };
+  const query = { workspaceId: req.workspace.id, wabaId: scope.wabaId, type: "api" };
   if (cursor && mongoose.Types.ObjectId.isValid(cursor)) {
     query._id = { $lt: cursor };
   }
@@ -45,7 +47,7 @@ async function listApiCampaignReports(req, res) {
 
   const templateIds = Array.from(new Set(page.map((c) => String(c.templateId || "")).filter(Boolean)));
   const templates = templateIds.length
-    ? await Template.find({ _id: { $in: templateIds }, workspaceId: req.workspace.id }).select("_id name")
+    ? await Template.find({ _id: { $in: templateIds }, workspaceId: req.workspace.id, wabaId: scope.wabaId }).select("_id name")
     : [];
   const templateNameById = new Map(templates.map((t) => [String(t._id), t.name]));
 
@@ -69,15 +71,16 @@ async function listApiCampaignReports(req, res) {
 }
 
 async function getApiCampaignReport(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   const id = String(req.params.id || "").trim();
   if (!mongoose.Types.ObjectId.isValid(id)) throw new HttpError(400, "Invalid campaign id");
 
-  const campaign = await Campaign.findOne({ _id: id, workspaceId: req.workspace.id, type: "api" }).select(
+  const campaign = await Campaign.findOne({ _id: id, workspaceId: req.workspace.id, wabaId: scope.wabaId, type: "api" }).select(
     "_id name templateId status totals lastError scheduledAt createdAt updatedAt"
   );
   if (!campaign) throw new HttpError(404, "Campaign not found");
 
-  const template = await Template.findOne({ _id: campaign.templateId, workspaceId: req.workspace.id }).select(
+  const template = await Template.findOne({ _id: campaign.templateId, workspaceId: req.workspace.id, wabaId: scope.wabaId }).select(
     "_id name category language status createdAt"
   );
 
@@ -85,6 +88,7 @@ async function getApiCampaignReport(req, res) {
     {
       $match: {
         workspaceId: new mongoose.Types.ObjectId(String(req.workspace.id)),
+        wabaId: scope.wabaId,
         campaignId: new mongoose.Types.ObjectId(String(campaign._id)),
         direction: "outbound",
       },
@@ -95,6 +99,7 @@ async function getApiCampaignReport(req, res) {
 
   const failedMessages = await Message.find({
     workspaceId: req.workspace.id,
+    wabaId: scope.wabaId,
     campaignId: campaign._id,
     direction: "outbound",
     status: { $in: ["failed", "timeout_unknown"] },

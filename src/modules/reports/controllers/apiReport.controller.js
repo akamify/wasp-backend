@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const { Message } = require("@infra/database/Message");
 const { HttpError } = require("@shared/utils/httpError");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function escapeRegex(input) {
   return String(input || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -19,6 +20,7 @@ function parseObjectId(value) {
 }
 
 async function listApiMessages(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   const page = Math.max(Number(req.query.page || 1), 1);
   const limit = Math.min(Math.max(Number(req.query.limit || 25), 1), 100);
   const skip = (page - 1) * limit;
@@ -28,6 +30,7 @@ async function listApiMessages(req, res) {
 
   const match = {
     workspaceId: new mongoose.Types.ObjectId(String(req.workspace.id)),
+    wabaId: scope.wabaId,
     direction: "outbound",
   };
 
@@ -143,13 +146,14 @@ async function listApiMessages(req, res) {
 }
 
 async function getApiMessageDetail(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   const id = parseObjectId(req.params.id);
   if (!id) throw new HttpError(400, "Invalid id");
 
   const workspaceId = new mongoose.Types.ObjectId(String(req.workspace.id));
 
   const rows = await Message.aggregate([
-    { $match: { _id: id, workspaceId } },
+    { $match: { _id: id, workspaceId, wabaId: scope.wabaId } },
     {
       $lookup: {
         from: "templates",

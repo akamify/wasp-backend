@@ -1,6 +1,7 @@
 const { Conversation } = require("@infra/database/Conversation");
 const { HttpError } = require("@shared/utils/httpError");
 const { normalizePhone } = require("@shared/services/contactService");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function requireConversationAccess(mode) {
   return async (req, res, next) => {
@@ -12,7 +13,8 @@ function requireConversationAccess(mode) {
       if (!employeeId) return next(new HttpError(401, "Unauthorized"));
       if (!phone) return next(new HttpError(400, "Invalid phone number"));
 
-      const conversation = await Conversation.findOne({ workspaceId, phone }).select(
+      const scope = await requireActiveWabaScope(workspaceId);
+      const conversation = await Conversation.findOne({ workspaceId, wabaId: scope.wabaId, phone }).select(
         "_id workspaceId phone assignedEmployeeId assignmentLockedUntil"
       );
       if (!conversation) return next(new HttpError(404, "Conversation not found"));

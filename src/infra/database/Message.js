@@ -42,6 +42,8 @@ const MessageSchema = new mongoose.Schema(
       kind: { type: String, enum: ["owner", "admin", "employee", "system", "api"], required: true, default: "system" },
       actorId: { type: mongoose.Schema.Types.ObjectId, required: false },
     },
+    wabaId: { type: String, trim: true, index: true, default: null },
+    phoneNumberId: { type: String, trim: true, index: true, default: null },
     lastAssignedEmployeeId: { type: mongoose.Schema.Types.ObjectId, ref: "Employee", default: null, index: true },
     lastAssignedAt: { type: Date, default: null },
     leadStatusSnapshot: { type: String, default: null },
@@ -55,7 +57,7 @@ const MessageSchema = new mongoose.Schema(
 
 // Only enforce uniqueness when Meta message ID is actually present.
 MessageSchema.index(
-  { workspaceId: 1, whatsappMessageId: 1 },
+  { workspaceId: 1, wabaId: 1, whatsappMessageId: 1 },
   {
     unique: true,
     partialFilterExpression: {

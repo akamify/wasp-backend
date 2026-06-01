@@ -20,6 +20,8 @@ const ContactSchema = new mongoose.Schema(
       of: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    wabaId: { type: String, trim: true, index: true, default: null },
+    phoneNumberId: { type: String, trim: true, index: true, default: null },
     source: {
       type: String,
       enum: ["manual", "inbound", "outbound", "imported"],
@@ -32,7 +34,7 @@ const ContactSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-ContactSchema.index({ workspaceId: 1, phone: 1 }, { unique: true });
+ContactSchema.index({ workspaceId: 1, wabaId: 1, phone: 1 }, { unique: true });
 
 const Contact = mongoose.model("Contact", ContactSchema);
 

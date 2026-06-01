@@ -7,6 +7,7 @@ async function computeCampaignEstimate({ workspaceId, template, recipients }) {
     const recipientPhones = recipients.map((r) => r.to);
     const openWindowRows = await Conversation.find({
         workspaceId,
+        wabaId: template.wabaId,
         phone: { $in: recipientPhones },
         lastInboundAt: { $gte: since },
     })

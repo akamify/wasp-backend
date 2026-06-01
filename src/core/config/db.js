@@ -1,10 +1,10 @@
 const mongoose = require("mongoose");
 
 const staleIndexesByCollection = {
-  contacts: ["userId_1_phone_1"],
-  conversations: ["userId_1_phone_1"],
+  contacts: ["userId_1_phone_1", "workspaceId_1_phone_1"],
+  conversations: ["userId_1_phone_1", "workspaceId_1_phone_1"],
   templates: ["userId_1_name_1", "workspaceId_1_name_1"],
-  messages: ["userId_1_whatsappMessageId_1"],
+  messages: ["userId_1_whatsappMessageId_1", "workspaceId_1_whatsappMessageId_1"],
   whatsappcredentials: ["userId_1", "workspaceId_1"],
 };
 
@@ -73,8 +73,8 @@ async function createUniqueIndexSafe(db, collectionName, key, options = {}) {
 }
 
 async function ensureWorkspaceIndexes(db) {
-  await createUniqueIndexSafe(db, "contacts", { workspaceId: 1, phone: 1 }, { unique: true });
-  await createUniqueIndexSafe(db, "conversations", { workspaceId: 1, phone: 1 }, { unique: true });
+  await createUniqueIndexSafe(db, "contacts", { workspaceId: 1, wabaId: 1, phone: 1 }, { unique: true });
+  await createUniqueIndexSafe(db, "conversations", { workspaceId: 1, wabaId: 1, phone: 1 }, { unique: true });
   await createUniqueIndexSafe(
     db,
     "templates",
@@ -84,7 +84,7 @@ async function ensureWorkspaceIndexes(db) {
   await createUniqueIndexSafe(
     db,
     "messages",
-    { workspaceId: 1, whatsappMessageId: 1 },
+    { workspaceId: 1, wabaId: 1, whatsappMessageId: 1 },
     {
       unique: true,
       partialFilterExpression: { whatsappMessageId: { $type: "string" } },

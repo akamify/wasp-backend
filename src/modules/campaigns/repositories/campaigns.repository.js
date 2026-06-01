@@ -1,15 +1,19 @@
 const { Campaign } = require("@infra/database/Campaign");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
-function listCampaignsByWorkspace(workspaceId, limit) {
-    return Campaign.find({ workspaceId }).sort({ createdAt: -1 }).limit(limit);
+async function listCampaignsByWorkspace(workspaceId, limit) {
+    const scope = await requireActiveWabaScope(workspaceId);
+    return Campaign.find({ workspaceId, wabaId: scope.wabaId }).sort({ createdAt: -1 }).limit(limit);
 }
 
-function getCampaignById({ id, workspaceId }) {
-    return Campaign.findOne({ _id: id, workspaceId });
+async function getCampaignById({ id, workspaceId }) {
+    const scope = await requireActiveWabaScope(workspaceId);
+    return Campaign.findOne({ _id: id, workspaceId, wabaId: scope.wabaId });
 }
 
-function getCampaignByIdLean({ id, workspaceId, select }) {
-    return Campaign.findOne({ _id: id, workspaceId }).select(select || undefined).lean();
+async function getCampaignByIdLean({ id, workspaceId, select }) {
+    const scope = await requireActiveWabaScope(workspaceId);
+    return Campaign.findOne({ _id: id, workspaceId, wabaId: scope.wabaId }).select(select || undefined).lean();
 }
 
 function createCampaign(data) {
@@ -28,9 +32,11 @@ function incrementCampaignTotals(query, update) {
     return Campaign.updateOne(query, update);
 }
 
-function countCampaignsCreatedBetween({ workspaceId, start, end }) {
+async function countCampaignsCreatedBetween({ workspaceId, start, end }) {
+    const scope = await requireActiveWabaScope(workspaceId);
     return Campaign.countDocuments({
         workspaceId,
+        wabaId: scope.wabaId,
         createdAt: { $gte: start, $lt: end },
     });
 }

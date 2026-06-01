@@ -4,6 +4,8 @@ const { publishWorkspaceEvent } = require("@shared/services/realtimeService");
 
 async function touchConversation({
   userId,
+  wabaId,
+  phoneNumberId,
   phone,
   lastMessageAt,
   lastInboundAt,
@@ -20,11 +22,13 @@ async function touchConversation({
       ...(lastInboundAt ? { lastCustomerMessageAt: lastInboundAt } : {}),
       ...(lastMessagePreview !== undefined ? { lastMessagePreview } : {}),
       normalizedPhone,
+      wabaId,
+      phoneNumberId: phoneNumberId || null,
     },
   };
   if (incrementUnread) update.$inc = { unreadCount: 1, ownerUnreadCount: 1 };
 
-  const conversation = await Conversation.findOneAndUpdate({ workspaceId: userId, phone: normalizedPhone }, update, {
+  const conversation = await Conversation.findOneAndUpdate({ workspaceId: userId, wabaId, phone: normalizedPhone }, update, {
     upsert: true,
     returnDocument: "after",
     setDefaultsOnInsert: true,
@@ -50,12 +54,12 @@ async function touchConversation({
   return conversation;
 }
 
-async function markConversationRead({ userId, phone }) {
+async function markConversationRead({ userId, wabaId, phone }) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return null;
 
   const conversation = await Conversation.findOneAndUpdate(
-    { workspaceId: userId, phone: normalizedPhone },
+    { workspaceId: userId, wabaId, phone: normalizedPhone },
     { $set: { unreadCount: 0, ownerUnreadCount: 0 } },
     { returnDocument: "after" }
   );
@@ -71,12 +75,12 @@ async function markConversationRead({ userId, phone }) {
   return conversation;
 }
 
-async function markConversationEmployeeRead({ workspaceId, phone, employeeId }) {
+async function markConversationEmployeeRead({ workspaceId, wabaId, phone, employeeId }) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return null;
 
   const conversation = await Conversation.findOneAndUpdate(
-    { workspaceId, phone: normalizedPhone, assignedEmployeeId: employeeId },
+    { workspaceId, wabaId, phone: normalizedPhone, assignedEmployeeId: employeeId },
     { $set: { employeeUnreadCount: 0 } },
     { returnDocument: "after" }
   );

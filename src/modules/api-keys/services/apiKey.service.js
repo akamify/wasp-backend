@@ -2,6 +2,7 @@ const { HttpError } = require("@shared/utils/httpError");
 const { sha256Hex } = require("@shared/utils/hash");
 const repo = require("@modules/api-keys/repositories/apiKey.repository");
 const { generateApiKeyRaw } = require("@modules/api-keys/utils/generateApiKey");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function normalizeKeyItem(item) {
   return {
@@ -18,24 +19,30 @@ function normalizeKeyItem(item) {
   };
 }
 
-async function listMyApiKeys({ userId }) {
+async function listMyApiKeys({ userId, workspaceId }) {
+  const scope = workspaceId ? await requireActiveWabaScope(workspaceId) : null;
   const user = await repo.listApiKeys(userId);
   if (!user) throw new HttpError(404, "User not found");
   return {
     success: true,
     accountBlocked: Boolean(user.accountBlocked),
     allowedApiPermissions: user.allowedApiPermissions || { campaignSend: true, chatAccess: false },
-    apiKeys: Array.isArray(user.apiKeys) ? user.apiKeys.map(normalizeKeyItem) : [],
+    apiKeys: Array.isArray(user.apiKeys)
+      ? user.apiKeys.filter((key) => !scope || (String(key.workspaceId || "") === scope.workspaceId && String(key.wabaId || "") === scope.wabaId)).map(normalizeKeyItem)
+      : [],
   };
 }
 
-async function generateApiKey({ userId, name }) {
+async function generateApiKey({ userId, workspaceId, name }) {
+  const scope = await requireActiveWabaScope(workspaceId);
   const user = await repo.findUserById(userId, "allowedApiPermissions");
   if (!user) throw new HttpError(404, "User not found");
   const raw = generateApiKeyRaw();
   const keyHash = sha256Hex(raw);
   const created = await repo.addApiKey({
     userId,
+    workspaceId: scope.workspaceId,
+    wabaId: scope.wabaId,
     keyHash,
     name: name || "Primary key",
     permissions: {
@@ -47,13 +54,13 @@ async function generateApiKey({ userId, name }) {
   return { success: true, apiKey: raw, key: normalizeKeyItem(created) };
 }
 
-async function regenerateApiKey({ userId, keyId, name }) {
+async function regenerateApiKey({ userId, workspaceId, keyId, name }) {
   if (keyId) {
     await repo.revokeApiKey({ userId, keyId });
   } else {
     await repo.clearLegacyApiKey({ userId });
   }
-  return generateApiKey({ userId, name: name || "Regenerated key" });
+  return generateApiKey({ userId, workspaceId, name: name || "Regenerated key" });
 }
 
 async function deleteApiKey({ userId, keyId }) {

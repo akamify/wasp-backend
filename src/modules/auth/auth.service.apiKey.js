@@ -5,6 +5,7 @@ const { sendEmail } = require("@shared/services/emailService");
 const repo = require("@modules/auth/auth.repository");
 const apiKeyRepo = require("@modules/api-keys/repositories/apiKey.repository");
 const { generateApiKeyRaw } = require("@modules/api-keys/utils/generateApiKey");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 const {
   generateApiKey,
   generateOtpCode,
@@ -23,13 +24,17 @@ async function ensureMetaSetupForWorkspace(workspaceId) {
 
 async function apiKeyStatus({ workspaceId, userId }) {
   await ensureMetaSetupForWorkspace(workspaceId);
+  const scope = await requireActiveWabaScope(workspaceId);
   const user = await repo.findUserForApiKeyStatus(userId);
   if (!user) throw new HttpError(404, "User not found");
-  const hasApiKey = !!user.apiKeyEnc || (Array.isArray(user.apiKeys) && user.apiKeys.some((k) => !k.revoked));
+  const activeKey = (user.apiKeys || []).find(
+    (k) => !k.revoked && String(k.workspaceId || "") === scope.workspaceId && String(k.wabaId || "") === scope.wabaId
+  );
+  const hasApiKey = Boolean(activeKey);
   let maskedKey = "";
-  if (user.apiKeyEnc) {
+  if (activeKey?.keyEnc) {
     try {
-      const key = decryptString(user.apiKeyEnc);
+      const key = decryptString(activeKey.keyEnc);
       const start = key.slice(0, 4);
       const end = key.slice(-3);
       maskedKey = `${start}***${end}`;
@@ -47,10 +52,14 @@ async function requestApiKeyOtp({ workspaceId, userId, purpose }) {
   if (!normalizedPurpose) throw new HttpError(400, "Invalid purpose");
 
   await ensureMetaSetupForWorkspace(workspaceId);
+  const scope = await requireActiveWabaScope(workspaceId);
   const user = await repo.findUserForApiKeyOtp(userId);
   if (!user) throw new HttpError(404, "User not found");
 
-  if (normalizedPurpose === "reveal" && !user.apiKeyEnc) {
+  const activeKey = (user.apiKeys || []).find(
+    (k) => !k.revoked && String(k.workspaceId || "") === scope.workspaceId && String(k.wabaId || "") === scope.wabaId
+  );
+  if (normalizedPurpose === "reveal" && !activeKey?.keyEnc) {
     throw new HttpError(404, "No API key exists yet. Generate one first.");
   }
 
@@ -93,6 +102,7 @@ async function verifyApiKeyOtp({ workspaceId, userId, purpose, otp }) {
   if (!/^\d{6}$/.test(code)) throw new HttpError(400, "Invalid OTP code");
 
   await ensureMetaSetupForWorkspace(workspaceId);
+  const scope = await requireActiveWabaScope(workspaceId);
   const user = await repo.findUserForVerifyApiKeyOtp(userId);
   if (!user) throw new HttpError(404, "User not found");
 
@@ -112,12 +122,20 @@ async function verifyApiKeyOtp({ workspaceId, userId, purpose, otp }) {
 
   if (normalizedPurpose === "rotate") {
     const apiKey = generateApiKeyRaw();
-    user.apiKeyHash = sha256Hex(apiKey);
-    user.apiKeyEnc = encryptString(apiKey);
+    const keyEnc = encryptString(apiKey);
     user.apiKeys = Array.isArray(user.apiKeys) ? user.apiKeys : [];
+    for (const key of user.apiKeys) {
+      if (!key.revoked && String(key.workspaceId || "") === scope.workspaceId && String(key.wabaId || "") === scope.wabaId) {
+        key.revoked = true;
+        key.revokedAt = new Date();
+      }
+    }
     user.apiKeys.push({
+      workspaceId: scope.workspaceId,
+      wabaId: scope.wabaId,
       name: "Primary key",
       keyHash: sha256Hex(apiKey),
+      keyEnc,
       permissions: { campaignSend: true, chatAccess: false },
       revoked: false,
     });
@@ -125,12 +143,15 @@ async function verifyApiKeyOtp({ workspaceId, userId, purpose, otp }) {
     return { success: true, message: "API key generated successfully.", apiKey };
   }
 
-  if (!user.apiKeyEnc) {
+  const activeKey = (user.apiKeys || []).find(
+    (k) => !k.revoked && String(k.workspaceId || "") === scope.workspaceId && String(k.wabaId || "") === scope.wabaId
+  );
+  if (!activeKey?.keyEnc) {
     await user.save();
     throw new HttpError(404, "No API key exists yet. Generate one first.");
   }
 
-  const apiKey = decryptString(user.apiKeyEnc);
+  const apiKey = decryptString(activeKey.keyEnc);
   await user.save();
   return { success: true, message: "API key revealed successfully.", apiKey };
 }

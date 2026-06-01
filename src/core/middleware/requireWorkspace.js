@@ -2,6 +2,7 @@ const { Workspace } = require("@infra/database/Workspace");
 const { HttpError } = require("@shared/utils/httpError");
 const { WorkspaceMember } = require("@infra/database/WorkspaceMember");
 const { resolveWorkspaceAccess } = require("@modules/workspaces/services/workspacePermission.service");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function pickWorkspaceId(req) {
   return (
@@ -58,6 +59,13 @@ async function requireWorkspace(req, res, next) {
       permissions: access.permissions,
     };
     req.workspaceAccess = access;
+
+    if (req.auth?.isApiKey) {
+      const scope = await requireActiveWabaScope(req.workspace.id);
+      if (String(req.auth.workspaceId || "") !== scope.workspaceId || String(req.auth.wabaId || "") !== scope.wabaId) {
+        return next(new HttpError(403, "This API key belongs to a previous WhatsApp account. Generate a new API key for the current account."));
+      }
+    }
 
     // Effective API permissions are always a strict intersection of
     // user/key-level permissions and workspace-level permissions.

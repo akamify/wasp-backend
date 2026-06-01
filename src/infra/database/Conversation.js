@@ -8,6 +8,8 @@ const ConversationSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    wabaId: { type: String, trim: true, index: true, default: null },
+    phoneNumberId: { type: String, trim: true, index: true, default: null },
     phone: { type: String, required: true, index: true },
     lastMessageAt: { type: Date, index: true },
     lastInboundAt: { type: Date, index: true, default: null },
@@ -47,7 +49,7 @@ const ConversationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-ConversationSchema.index({ workspaceId: 1, phone: 1 }, { unique: true });
+ConversationSchema.index({ workspaceId: 1, wabaId: 1, phone: 1 }, { unique: true });
 ConversationSchema.index({ workspaceId: 1, assignedEmployeeId: 1, lastMessageAt: -1 });
 
 const Conversation = mongoose.model("Conversation", ConversationSchema);

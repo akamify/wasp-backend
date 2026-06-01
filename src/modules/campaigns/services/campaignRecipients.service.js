@@ -21,7 +21,7 @@ async function retryFailedCampaign(req) {
 
     const workspaceObjectId = new mongoose.Types.ObjectId(req.workspace.id);
     const failedRows = await messagesRepository.aggregateMessages([
-        { $match: { workspaceId: workspaceObjectId, campaignId: baseCampaign._id, direction: "outbound", status: { $in: ["failed", "timeout_unknown"] } } },
+        { $match: { workspaceId: workspaceObjectId, wabaId: baseCampaign.wabaId, campaignId: baseCampaign._id, direction: "outbound", status: { $in: ["failed", "timeout_unknown"] } } },
         { $sort: { createdAt: -1 } },
         { $group: { _id: "$phone", phone: { $first: "$phone" }, runtime: { $first: "$payload.runtime" } } },
     ]);
@@ -53,6 +53,7 @@ async function retryFailedCampaign(req) {
 
     const retryCampaign = await campaignsRepository.createCampaign({
         workspaceId: req.workspace.id,
+        wabaId: template.wabaId,
         name: `Retry - ${baseCampaign.name}`.slice(0, 140),
         templateId: template._id,
         status: CAMPAIGN_STATUSES.QUEUED,
@@ -71,6 +72,7 @@ async function listFailedRecipients(req) {
     if (!campaign) throw new HttpError(404, "Campaign not found");
     const phones = await messagesRepository.distinctPhones({
         workspaceId: campaign.workspaceId,
+        wabaId: campaign.wabaId,
         campaignId: campaign._id,
         direction: "outbound",
         status: { $in: ["failed", "timeout_unknown"] },

@@ -3,7 +3,7 @@ const otpService = require("@modules/api-keys/services/apiKeyOtp.service");
 const permissionService = require("@modules/api-keys/services/apiKeyPermission.service");
 
 async function listApiKeys(req, res) {
-  res.json(await apiKeyService.listMyApiKeys({ userId: req.user.id }));
+  res.json(await apiKeyService.listMyApiKeys({ userId: req.user.id, workspaceId: req.workspace.id }));
 }
 
 async function listUserApiKeys(req, res) {
@@ -11,11 +11,11 @@ async function listUserApiKeys(req, res) {
 }
 
 async function generateApiKey(req, res) {
-  res.json(await apiKeyService.generateApiKey({ userId: req.user.id, name: req.body?.name }));
+  res.json(await apiKeyService.generateApiKey({ userId: req.user.id, workspaceId: req.workspace.id, name: req.body?.name }));
 }
 
 async function regenerateApiKey(req, res) {
-  res.json(await apiKeyService.regenerateApiKey({ userId: req.user.id, keyId: req.body?.keyId, name: req.body?.name }));
+  res.json(await apiKeyService.regenerateApiKey({ userId: req.user.id, workspaceId: req.workspace.id, keyId: req.body?.keyId, name: req.body?.name }));
 }
 
 async function deleteApiKey(req, res) {

@@ -20,6 +20,7 @@ const { toExternalMessageDto } = require("@modules/external-chat/dto/externalMes
 const { externalReadyPayload, externalPingPayload } = require("@modules/external-chat/dto/externalRealtime.dto");
 const { resolveExternalChatAccessState } = require("@modules/external-chat/services/externalChatAccess.service");
 const { mapExternalRealtimeEvent } = require("@modules/external-chat/services/externalRealtimeMap.service");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function ok(res, message, data) {
   return res.json({ success: true, message, data: data || {} });
@@ -32,7 +33,8 @@ function graphBaseUrl(graphApiVersion) {
 
 async function listConversations(req, res) {
   const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
-  const conversations = await Conversation.find({ workspaceId: req.workspace.id }).sort({ lastMessageAt: -1 }).limit(limit);
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const conversations = await Conversation.find({ workspaceId: req.workspace.id, wabaId: scope.wabaId }).sort({ lastMessageAt: -1 }).limit(limit);
   return ok(res, "CONVERSATIONS_LISTED", {
     items: conversations.map(toExternalConversationDto),
     pagination: {
@@ -48,7 +50,8 @@ async function listConversationMessages(req, res) {
   if (!phone) throw new HttpError(400, "Invalid phone number", { code: "INVALID_PHONE" });
 
   const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 500);
-  const messages = await Message.find({ workspaceId: req.workspace.id, phone }).sort({ createdAt: -1 }).limit(limit);
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const messages = await Message.find({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone }).sort({ createdAt: -1 }).limit(limit);
 
   return ok(res, "CONVERSATION_MESSAGES_LISTED", {
     phone,
@@ -64,6 +67,7 @@ async function readConversation(req, res) {
     const creds = await getCredentialsForUser(req.workspace.id);
     const pendingInbound = await Message.find({
       workspaceId: req.workspace.id,
+      wabaId: creds.wabaId,
       phone,
       direction: "inbound",
       status: "received",
@@ -99,7 +103,8 @@ async function readConversation(req, res) {
     // Best-effort only.
   }
 
-  const conversation = await markConversationRead({ userId: req.workspace.id, phone });
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const conversation = await markConversationRead({ userId: req.workspace.id, wabaId: scope.wabaId, phone });
   return ok(res, "CONVERSATION_MARKED_READ", {
     phone,
     conversation: toExternalConversationDto(conversation) || null,

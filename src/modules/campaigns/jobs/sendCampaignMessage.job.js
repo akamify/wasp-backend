@@ -40,7 +40,7 @@ async function sendCampaignMessageJob(job) {
         throw new Error("Invalid job payload");
     }
 
-    const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals");
+    const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals wabaId");
     if (!campaign) throw new Error("Campaign not found");
     const status = String(campaign.status || "");
     if (
@@ -67,7 +67,7 @@ async function sendCampaignMessageJob(job) {
         return { ok: true, skipped: true, status: updatedStatus };
     }
 
-    const template = await Template.findOne({ _id: templateId, workspaceId });
+    const template = await Template.findOne({ _id: templateId, workspaceId, wabaId: campaign.wabaId });
     if (!template) throw new Error("Template not found");
     await assertTemplateBelongsToCurrentWaba({ template, workspaceId });
 
@@ -99,6 +99,7 @@ async function sendCampaignMessageJob(job) {
             const now = new Date();
             await Message.create({
                 workspaceId,
+                wabaId: campaign.wabaId,
                 campaignId,
                 templateId,
                 phone: to,

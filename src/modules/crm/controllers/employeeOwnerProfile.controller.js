@@ -11,6 +11,7 @@ const bcrypt = require("bcryptjs");
 const employeeAuthService = require("@modules/crm/services/employeeAuth.service");
 const { writeAuditLog } = require("@shared/services/auditLog.service");
 const { Conversation } = require("@infra/database/Conversation");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 async function requireActiveCrmWorkspaceForOwner({ workspaceId, ownerId }) {
   const workspace = await Workspace.findOne({ _id: workspaceId, ownerId, isActive: true }).select(
@@ -54,6 +55,7 @@ function fillSeries(days, rows) {
 
 async function getEmployeeProfile(req, res) {
   await requireActiveCrmWorkspaceForOwner({ workspaceId: req.workspace.id, ownerId: req.user.id });
+  const scope = await requireActiveWabaScope(req.workspace.id);
   const employeeId = String(req.params.employeeId || "").trim();
   const employee = await Employee.findOne({ _id: employeeId, workspaceId: req.workspace.id }).select(
     "_id email name role status permissions assignedChatsCount lastLoginAt lastActivityAt createdAt updatedAt deletedAt"
@@ -75,7 +77,7 @@ async function getEmployeeProfile(req, res) {
       assignedEmployeeId: employee._id,
       $or: [{ status: "CLOSED" }, { closedAt: { $ne: null } }],
     }),
-    Conversation.countDocuments({ workspaceId: req.workspace.id, assignedEmployeeId: employee._id }),
+    Conversation.countDocuments({ workspaceId: req.workspace.id, wabaId: scope.wabaId, assignedEmployeeId: employee._id }),
     CrmLead.aggregate([
       {
         $match: {

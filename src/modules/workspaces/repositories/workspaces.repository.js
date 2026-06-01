@@ -107,18 +107,19 @@ async function getWorkspaceOverviewData(workspaceId) {
   const startOfMonth = new Date();
   startOfMonth.setUTCDate(1);
   startOfMonth.setUTCHours(0, 0, 0, 0);
-  const [workspace, subscription, wallet, whatsappConnection, members, contactsCount, conversationsCount, templatesCount, campaignsSentThisMonth, messagesSentThisMonth, recentActivity] =
+  const whatsappConnection = await WhatsAppCredentials.findOne({ workspaceId, isActive: { $ne: false } }).sort({ connectedAt: -1 });
+  const activeWabaId = whatsappConnection?.wabaId || "__no_active_waba__";
+  const [workspace, subscription, wallet, members, contactsCount, conversationsCount, templatesCount, campaignsSentThisMonth, messagesSentThisMonth, recentActivity] =
     await Promise.all([
       Workspace.findById(workspaceId),
       Subscription.findOne({ workspaceId }).sort({ createdAt: -1 }),
       Wallet.findOne({ workspaceId }),
-      WhatsAppCredentials.findOne({ workspaceId, isActive: { $ne: false } }).sort({ connectedAt: -1 }),
       WorkspaceMember.find({ workspaceId, status: "active" }).sort({ createdAt: 1 }),
-      Contact.countDocuments({ workspaceId }),
-      Conversation.countDocuments({ workspaceId }),
-      Template.countDocuments({ workspaceId, isActive: { $ne: false }, deletedAt: null }),
-      Campaign.countDocuments({ workspaceId, createdAt: { $gte: startOfMonth }, status: { $in: ["queued", "running", "completed"] } }),
-      Message.countDocuments({ workspaceId, createdAt: { $gte: startOfMonth }, direction: "outbound" }),
+      Contact.countDocuments({ workspaceId, wabaId: activeWabaId }),
+      Conversation.countDocuments({ workspaceId, wabaId: activeWabaId }),
+      Template.countDocuments({ workspaceId, wabaId: activeWabaId, isActive: { $ne: false }, deletedAt: null }),
+      Campaign.countDocuments({ workspaceId, wabaId: activeWabaId, createdAt: { $gte: startOfMonth }, status: { $in: ["queued", "running", "completed"] } }),
+      Message.countDocuments({ workspaceId, wabaId: activeWabaId, createdAt: { $gte: startOfMonth }, direction: "outbound" }),
       WorkspaceActivityLog.find({ workspaceId }).sort({ createdAt: -1 }).limit(20),
     ]);
   const plan = subscription?.planId ? await Plan.findById(subscription.planId) : null;

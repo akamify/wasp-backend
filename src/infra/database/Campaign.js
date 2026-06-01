@@ -8,6 +8,8 @@ const CampaignSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    wabaId: { type: String, trim: true, index: true, default: null },
+    phoneNumberId: { type: String, trim: true, index: true, default: null },
     name: { type: String, required: true, trim: true },
     templateId: { type: mongoose.Schema.Types.ObjectId, ref: "Template", required: true, index: true },
     type: {
@@ -35,6 +37,7 @@ const CampaignSchema = new mongoose.Schema(
 );
 
 CampaignSchema.index({ workspaceId: 1, createdAt: -1 });
+CampaignSchema.index({ workspaceId: 1, wabaId: 1, createdAt: -1 });
 
 const Campaign = mongoose.model("Campaign", CampaignSchema);
 

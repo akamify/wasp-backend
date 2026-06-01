@@ -9,6 +9,7 @@ const { isCustomerServiceWindowOpen } = require("@shared/services/pricingService
 const { renderTemplatePreviewParts } = require("@shared/utils/templateStructure");
 const { publishWorkspaceEvent } = require("@shared/services/realtimeService");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function isDuplicateKeyError(err) {
   return err?.code === 11000 || err?.name === "MongoServerError";
@@ -48,8 +49,11 @@ function buildDetails(err) {
 
 async function safeLogFailedOutboundMessage({ userId, templateId, phone, err }) {
   try {
+    const scope = await requireActiveWabaScope(userId);
     await Message.create({
       workspaceId: userId,
+      wabaId: scope.wabaId,
+      phoneNumberId: scope.phoneNumberId || null,
       templateId,
       phone,
       direction: "outbound",
@@ -271,11 +275,12 @@ async function sendText(req, res) {
 }
 
 async function listLogs(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   const page = Math.max(Number(req.query.page || 1), 1);
   const limit = Math.min(Math.max(Number(req.query.limit || 25), 1), 100);
   const skip = (page - 1) * limit;
 
-  const filter = { workspaceId: req.workspace.id, direction: "outbound" };
+  const filter = { workspaceId: req.workspace.id, wabaId: scope.wabaId, direction: "outbound" };
   if (req.query.status && req.query.status !== "all") filter.status = req.query.status;
   if (req.query.templateId) filter.templateId = req.query.templateId;
   if (req.query.search) {
@@ -296,6 +301,7 @@ async function listLogs(req, res) {
 }
 
 async function messagesByPhone(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
@@ -304,7 +310,7 @@ async function messagesByPhone(req, res) {
   if (!phone) throw new HttpError(400, "Invalid phone number");
   const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 500);
 
-  const messages = await Message.find({ workspaceId: req.workspace.id, phone })
+  const messages = await Message.find({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone })
     .sort({ createdAt: -1 })
     .limit(limit);
 
@@ -317,7 +323,7 @@ async function messagesByPhone(req, res) {
   );
 
   const templates = templateIds.length
-    ? await Template.find({ _id: { $in: templateIds }, workspaceId: req.workspace.id })
+    ? await Template.find({ _id: { $in: templateIds }, workspaceId: req.workspace.id, wabaId: scope.wabaId })
     : [];
   const templateMap = new Map(templates.map((t) => [String(t._id), t]));
 
@@ -391,6 +397,7 @@ async function messagesByPhone(req, res) {
 }
 
 async function messageStatusByWaId(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
@@ -401,6 +408,7 @@ async function messageStatusByWaId(req, res) {
 
   const message = await Message.findOne({
     workspaceId: req.workspace.id,
+    wabaId: scope.wabaId,
     whatsappMessageId: waId,
   });
 

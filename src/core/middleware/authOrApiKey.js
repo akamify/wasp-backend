@@ -65,6 +65,8 @@ async function authOrApiKey(req, res, next) {
     req.auth = {
       userId: String(user._id),
       apiKeyId: keyDoc ? String(keyDoc._id) : null,
+      workspaceId: keyDoc?.workspaceId ? String(keyDoc.workspaceId) : null,
+      wabaId: keyDoc?.wabaId ? String(keyDoc.wabaId) : null,
       permissions: {
         campaignSend: permissions.campaignSend,
         chatAccess: permissions.chatAccess,

@@ -16,11 +16,13 @@ async function listApiKeys(userId) {
   return user;
 }
 
-async function addApiKey({ userId, keyHash, name, permissions }) {
+async function addApiKey({ userId, workspaceId, wabaId, keyHash, name, permissions }) {
   const user = await User.findById(userId).select("+apiKeys");
   if (!user) return null;
   user.apiKeys = Array.isArray(user.apiKeys) ? user.apiKeys : [];
   user.apiKeys.push({
+    workspaceId,
+    wabaId,
     name: name || "Default",
     keyHash,
     permissions: {

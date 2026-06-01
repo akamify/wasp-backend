@@ -12,7 +12,7 @@ async function apiKeyAuth(req, res, next) {
   const apiKeyHash = sha256Hex(apiKey);
   const user = await User.findOne({
     $or: [{ apiKeyHash }, { "apiKeys.keyHash": apiKeyHash }],
-  }).select("_id role accountBlocked allowedApiPermissions apiKeys");
+  }).select("_id role status terminationState accountBlocked allowedApiPermissions apiKeys");
   if (!user) return next(new HttpError(401, "Invalid API key"));
   if (!canLoginStatus(user.status)) return next(new HttpError(403, getBlockedLoginMessage(user.status)));
   if (user.accountBlocked) return next(new HttpError(403, "This user is inactive"));
@@ -37,6 +37,8 @@ async function apiKeyAuth(req, res, next) {
   req.auth = {
     userId: String(user._id),
     apiKeyId: keyDoc ? String(keyDoc._id) : null,
+    workspaceId: keyDoc?.workspaceId ? String(keyDoc.workspaceId) : null,
+    wabaId: keyDoc?.wabaId ? String(keyDoc.wabaId) : null,
     permissions: {
       campaignSend: permissions.campaignSend,
       chatAccess: permissions.chatAccess,

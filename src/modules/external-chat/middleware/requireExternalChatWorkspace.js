@@ -1,5 +1,6 @@
 const { Workspace } = require("@infra/database/Workspace");
 const { HttpError } = require("@shared/utils/httpError");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function pickHeaderWorkspaceId(req) {
   const value = req.headers["x-workspace-id"];
@@ -56,6 +57,11 @@ async function requireExternalChatWorkspace(req, res, next) {
         externalChatApiAccess: Boolean(workspace?.features?.externalChatApiAccess),
       },
     };
+
+    const scope = await requireActiveWabaScope(req.workspace.id);
+    if (String(req.auth?.workspaceId || "") !== scope.workspaceId || String(req.auth?.wabaId || "") !== scope.wabaId) {
+      return next(new HttpError(403, "This API key belongs to a previous WhatsApp account. Generate a new API key for the current account."));
+    }
 
     if (req.auth?.permissions) {
       req.auth.permissions = {

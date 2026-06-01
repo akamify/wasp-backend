@@ -119,6 +119,8 @@ async function sendTemplateMessageForUser({
 
   const message = await Message.create({
     workspaceId: userId,
+    wabaId: creds.wabaId,
+    phoneNumberId: creds.phoneNumberId,
     ...(campaignId ? { campaignId } : {}),
     templateId: normalizedTemplate._id,
     phone: resolvedPhone,
@@ -149,6 +151,8 @@ async function sendTemplateMessageForUser({
 
   const conversation = await touchConversation({
     userId,
+    wabaId: creds.wabaId,
+    phoneNumberId: creds.phoneNumberId,
     phone: resolvedPhone,
     lastMessageAt: now,
     lastMessagePreview: previewText,
@@ -156,6 +160,8 @@ async function sendTemplateMessageForUser({
   });
   await touchContactFromMessage({
     userId,
+    wabaId: creds.wabaId,
+    phoneNumberId: creds.phoneNumberId,
     phone: resolvedPhone,
     direction: "outbound",
     preview: previewText,
@@ -222,6 +228,8 @@ async function sendTextMessageForUser({ userId, to, text, sentBy }) {
 
   const message = await Message.create({
     workspaceId: userId,
+    wabaId: creds.wabaId,
+    phoneNumberId: creds.phoneNumberId,
     phone: resolvedPhone,
     direction: "outbound",
     whatsappMessageId: waMessageId,
@@ -232,8 +240,8 @@ async function sendTextMessageForUser({ userId, to, text, sentBy }) {
     payload: { to, text },
   });
 
-  const conversation = await touchConversation({ userId, phone: resolvedPhone, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
-  await touchContactFromMessage({ userId, phone: resolvedPhone, direction: "outbound", preview: text, occurredAt: now });
+  const conversation = await touchConversation({ userId, wabaId: creds.wabaId, phoneNumberId: creds.phoneNumberId, phone: resolvedPhone, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
+  await touchContactFromMessage({ userId, wabaId: creds.wabaId, phoneNumberId: creds.phoneNumberId, phone: resolvedPhone, direction: "outbound", preview: text, occurredAt: now });
   if (conversation) {
     const patch = { lastEmployeeReplyAt: now };
     if (!conversation.firstResponseAt && conversation.lastCustomerMessageAt) {
@@ -307,6 +315,8 @@ async function sendMediaMessageForUser({
 
   const message = await Message.create({
     workspaceId: userId,
+    wabaId: creds.wabaId,
+    phoneNumberId: creds.phoneNumberId,
     ...(campaignId ? { campaignId } : {}),
     phone: resolvedPhone,
     direction: "outbound",
@@ -321,6 +331,8 @@ async function sendMediaMessageForUser({
 
   const conversation = await touchConversation({
     userId,
+    wabaId: creds.wabaId,
+    phoneNumberId: creds.phoneNumberId,
     phone: resolvedPhone,
     lastMessageAt: now,
     lastMessagePreview: message.text || "",
@@ -328,6 +340,8 @@ async function sendMediaMessageForUser({
   });
   await touchContactFromMessage({
     userId,
+    wabaId: creds.wabaId,
+    phoneNumberId: creds.phoneNumberId,
     phone: resolvedPhone,
     direction: "outbound",
     preview: message.text || "",

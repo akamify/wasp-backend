@@ -16,6 +16,7 @@ const { sendTemplateMessageForUser } = require("@shared/services/outboundMessage
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function isUpstashRequestLimitError(err) {
     const msg = String(err?.message || "").toLowerCase();
@@ -44,12 +45,17 @@ async function resolveWorkspaceIdFromApiKeyUser(req) {
 async function sendApiCampaignByName(req) {
     const requestId = buildPublicRequestId();
     const workspaceId = await resolveWorkspaceIdFromApiKeyUser(req);
+    const scope = await requireActiveWabaScope(workspaceId);
+    if (String(req.auth?.workspaceId || "") !== scope.workspaceId || String(req.auth?.wabaId || "") !== scope.wabaId) {
+        throw new HttpError(403, "This API key belongs to a previous WhatsApp account. Generate a new API key for the current account.");
+    }
 
     const campaignName = String(req.body?.campaignName || "").trim();
     if (!campaignName) throw new HttpError(400, "campaignName is required");
 
     const apiCampaign = await require("@infra/database/Campaign").Campaign.findOne({
         workspaceId,
+        wabaId: scope.wabaId,
         type: "api",
         name: campaignName,
     }).select("_id name templateId type");
@@ -179,6 +185,7 @@ async function sendApiCampaignByName(req) {
                     try {
                         await Message.create({
                             workspaceId,
+                            wabaId: scope.wabaId,
                             campaignId: String(apiCampaign._id),
                             templateId: template._id,
                             phone: recipient.to,

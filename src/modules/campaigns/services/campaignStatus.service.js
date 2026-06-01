@@ -66,8 +66,8 @@ async function deleteCampaign(req) {
     } catch {}
 
     const [msgDelete, campDelete] = await Promise.all([
-        messagesRepository.deleteMessages({ workspaceId: req.workspace.id, campaignId: campaign._id }),
-        campaignsRepository.deleteCampaign({ _id: campaign._id, workspaceId: req.workspace.id }),
+        messagesRepository.deleteMessages({ workspaceId: req.workspace.id, wabaId: campaign.wabaId, campaignId: campaign._id }),
+        campaignsRepository.deleteCampaign({ _id: campaign._id, workspaceId: req.workspace.id, wabaId: campaign.wabaId }),
     ]);
     return { success: true, deleted: { campaignId: String(campaign._id), campaigns: Number(campDelete?.deletedCount || 0), messages: Number(msgDelete?.deletedCount || 0) } };
 }

@@ -347,8 +347,11 @@ async function receive(req, res) {
         const ts = asDateFromSeconds(s.timestamp);
         const phone = s.recipient_id ? normalizePhone(s.recipient_id) : undefined;
 
+        const resolvedWabaId = wabaIdFromEntry || tenant?.wabaId || tenant?.businessAccountIdPlain || "";
         const set = {
           status: newStatus,
+          ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
+          ...(phoneNumberId ? { phoneNumberId } : {}),
           ...(phone ? { phone } : {}),
           ...(newStatus === "failed" && s.errors ? { error: s.errors } : {}),
         };
@@ -360,13 +363,15 @@ async function receive(req, res) {
 
         try {
           const filter = hasValidWorkspaceId
-            ? { workspaceId: workspaceIdRaw, whatsappMessageId: waId }
+            ? { workspaceId: workspaceIdRaw, ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}), whatsappMessageId: waId }
             : { whatsappMessageId: waId };
           const update = hasValidWorkspaceId
             ? {
               $set: set,
               $setOnInsert: {
                 workspaceId: workspaceIdRaw,
+                ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
+                ...(phoneNumberId ? { phoneNumberId } : {}),
                 // Keep phone only in $set to avoid Mongo conflicting update operators.
                 // When recipient_id is missing in status webhook, fallback to placeholder.
                 ...(phone ? {} : { phone: "unknown" }),
@@ -454,6 +459,7 @@ async function receive(req, res) {
         if (!waId || !from) continue;
 
         const ts = asDateFromSeconds(m.timestamp);
+        const resolvedWabaId = wabaIdFromEntry || tenant?.wabaId || tenant?.businessAccountIdPlain || "";
         const type = String(m.type || "").trim().toLowerCase();
         const isDeletedOrUnsupported =
           type === "unsupported" ||
@@ -497,10 +503,12 @@ async function receive(req, res) {
           if (isDuplicate) continue;
 
           const msgDoc = await Message.findOneAndUpdate(
-            { workspaceId: workspaceIdRaw, whatsappMessageId: waId },
+            { workspaceId: workspaceIdRaw, ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}), whatsappMessageId: waId },
             {
               $set: {
                 workspaceId: workspaceIdRaw,
+                wabaId: resolvedWabaId || null,
+                phoneNumberId: phoneNumberId || null,
                 phone: from,
                 direction: "inbound",
                 status: "received",
@@ -516,6 +524,8 @@ async function receive(req, res) {
 
           const convo = await touchConversation({
             userId: workspaceIdRaw,
+            wabaId: resolvedWabaId,
+            phoneNumberId,
             phone: from,
             lastMessageAt: ts,
             lastInboundAt: ts,
@@ -539,6 +549,8 @@ async function receive(req, res) {
 
           await touchContactFromMessage({
             userId: workspaceIdRaw,
+            wabaId: resolvedWabaId,
+            phoneNumberId,
             phone: from,
             direction: "inbound",
             preview: text.slice(0, 160),
@@ -559,7 +571,7 @@ async function receive(req, res) {
               const jobId = `lead:${String(workspaceIdRaw)}:${String(from)}:${bucket}`;
               await q.add(
                 "crm.lead.detect_and_assign",
-                { workspaceId: String(workspaceIdRaw), phone: String(from), inboundAt: ts.toISOString() },
+                { workspaceId: String(workspaceIdRaw), wabaId: String(resolvedWabaId), phone: String(from), inboundAt: ts.toISOString() },
                 { jobId }
               );
             }

@@ -13,8 +13,11 @@ const UserSchema = new mongoose.Schema(
     apiKeyEnc: { type: String, default: null, select: false },
     apiKeys: [
       {
+        workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: "Workspace", index: true, default: null },
+        wabaId: { type: String, trim: true, index: true, default: null },
         name: { type: String, trim: true },
         keyHash: { type: String, required: true, select: false },
+        keyEnc: { type: String, default: null, select: false },
         permissions: {
           campaignSend: { type: Boolean, default: true },
           chatAccess: { type: Boolean, default: false },

@@ -7,6 +7,7 @@ const { createRedisConnection } = require("@infra/redis/redisClient");
 const { writeConversationEvent } = require("@modules/crm/services/conversationEvent.service");
 const leadRepo = require("@modules/crm/repositories/lead.repository");
 const assignmentRepo = require("@modules/crm/repositories/assignment.repository");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function toObjectId(value) {
   if (!value) return null;
@@ -25,6 +26,7 @@ async function setEmployeePhoneMembership({ employeeId, phone, add }) {
 
 async function assignConversation({
   workspaceId,
+  wabaId,
   phone,
   toEmployeeId,
   mode,
@@ -33,6 +35,7 @@ async function assignConversation({
 }) {
   const workspace = await Workspace.findById(workspaceId).select("_id crmEnabled crmSettings isActive");
   if (!workspace || !workspace.isActive || !workspace.crmEnabled) return { assigned: false, reason: "crm_disabled" };
+  const scope = wabaId ? { wabaId: String(wabaId) } : await requireActiveWabaScope(workspaceId);
 
   const now = new Date();
   const lockMinutes = Number(workspace.crmSettings?.assignmentLockMinutes || 5);
@@ -43,7 +46,7 @@ async function assignConversation({
   if (!employee) return { assigned: false, reason: "no_employee" };
 
   // Optimistic locking on assignmentVersion.
-  let conversation = await Conversation.findOne({ workspaceId, phone }).select(
+  let conversation = await Conversation.findOne({ workspaceId, wabaId: scope.wabaId, phone }).select(
     "_id assignedEmployeeId assignmentVersion lastInboundAt"
   );
   if (!conversation) return { assigned: false, reason: "no_conversation" };

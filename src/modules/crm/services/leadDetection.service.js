@@ -4,6 +4,7 @@ const { getCrmLeadAssignmentQueue } = require("@infra/queues/crmLeadAssignment.q
 const leadRepo = require("@modules/crm/repositories/lead.repository");
 const { pickEmployeeByMode } = require("@modules/crm/services/leadDistribution.service");
 const { assignConversation } = require("@modules/crm/services/leadAssignment.service");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function parseHHMM(value) {
   const s = String(value || "").trim();
@@ -42,14 +43,15 @@ function nextFromTimeDate({ now, fromTime }) {
   return next;
 }
 
-async function detectAndAssignLead({ workspaceId, phone, inboundAt }) {
+async function detectAndAssignLead({ workspaceId, wabaId, phone, inboundAt }) {
   const workspace = await Workspace.findOne({ _id: workspaceId, isActive: true }).select("_id crmEnabled crmSettings");
   if (!workspace || !workspace.crmEnabled) return { ok: true, skipped: "crm_disabled" };
 
   const windowHours = Number(workspace.crmSettings?.leadWindowHours || 22);
   const windowMs = Math.max(1, windowHours) * 60 * 60 * 1000;
 
-  const conversation = await Conversation.findOne({ workspaceId, phone }).select(
+  const scope = wabaId ? { wabaId: String(wabaId) } : await requireActiveWabaScope(workspaceId);
+  const conversation = await Conversation.findOne({ workspaceId, wabaId: scope.wabaId, phone }).select(
     "_id assignedEmployeeId lastInboundAt lastLeadCreatedAt leadStatus"
   );
   if (!conversation) return { ok: true, skipped: "no_conversation" };
@@ -118,7 +120,7 @@ async function detectAndAssignLead({ workspaceId, phone, inboundAt }) {
           // IMPORTANT: do not pass inboundAt here. The delayed job must evaluate schedule
           // using the execution time (not the original inbound message time),
           // otherwise it can get stuck in an infinite outside_schedule loop.
-          { workspaceId, phone },
+          { workspaceId, wabaId: scope.wabaId, phone },
           { jobId, delay: delayMs }
         )
         .catch(() => {});
@@ -132,6 +134,7 @@ async function detectAndAssignLead({ workspaceId, phone, inboundAt }) {
 
   const assigned = await assignConversation({
     workspaceId,
+    wabaId: scope.wabaId,
     phone,
     toEmployeeId: employeeId,
     mode: effectiveMode,

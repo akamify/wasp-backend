@@ -42,7 +42,7 @@ async function createCampaign(req) {
     }
     if (normalizedType === CAMPAIGN_TYPES.API) {
         if (normalizedRecipients.length > 0) throw new HttpError(400, "API campaigns should not include recipients. Provide contacts when sending via integrations.");
-        const campaign = await campaignsRepository.createCampaign({ workspaceId: req.workspace.id, name, templateId: template._id, status: CAMPAIGN_STATUSES.RUNNING, type: CAMPAIGN_TYPES.API, scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined, totals: { total: 0, queued: 0, sent: 0, failed: 0 } });
+        const campaign = await campaignsRepository.createCampaign({ workspaceId: req.workspace.id, wabaId: template.wabaId, name, templateId: template._id, status: CAMPAIGN_STATUSES.RUNNING, type: CAMPAIGN_TYPES.API, scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined, totals: { total: 0, queued: 0, sent: 0, failed: 0 } });
         emitCampaignEvent(CAMPAIGN_EVENTS.CREATED, { campaignId: String(campaign._id), workspaceId: req.workspace.id });
         return { success: true, campaign, message: "API campaign created. Contacts will be provided by integrations at send time." };
     }
@@ -60,7 +60,7 @@ async function createCampaign(req) {
         }
     }
     const campaign = await campaignsRepository.createCampaign({
-        workspaceId: req.workspace.id, name, templateId: template._id,
+        workspaceId: req.workspace.id, wabaId: template.wabaId, name, templateId: template._id,
         status: normalizedType === CAMPAIGN_TYPES.API && !scheduledAt ? CAMPAIGN_STATUSES.RUNNING : CAMPAIGN_STATUSES.QUEUED,
         type: normalizedType || CAMPAIGN_TYPES.BROADCAST, scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
         totals: { total: normalizedRecipients.length, queued: normalizedRecipients.length, sent: 0, failed: 0 },
@@ -83,7 +83,7 @@ async function createCampaign(req) {
             let sentCount = 0, failedCount = 0, lastFailure = null;
             const since = new Date(Date.now() - CUSTOMER_SERVICE_WINDOW_MS);
             const recipientPhones = normalizedRecipients.map((r) => r.to);
-            const openNowRows = await Conversation.find({ workspaceId: req.workspace.id, phone: { $in: recipientPhones }, lastInboundAt: { $gte: since } }).select("phone").lean();
+            const openNowRows = await Conversation.find({ workspaceId: req.workspace.id, wabaId: template.wabaId, phone: { $in: recipientPhones }, lastInboundAt: { $gte: since } }).select("phone").lean();
             const openNowSet = new Set(openNowRows.map((row) => String(row.phone || "")));
             campaign.status = CAMPAIGN_STATUSES.RUNNING;
             await campaign.save();
@@ -99,7 +99,7 @@ async function createCampaign(req) {
                     lastFailure = err?.response?.data?.error?.error_data?.details || err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || "Campaign send failed";
                     try {
                         const now = new Date();
-                        await Message.create({ workspaceId: req.workspace.id, campaignId: campaign._id, templateId: template._id, phone: recipient.to, direction: "outbound", status: "failed", statusTimestamps: { failedAt: now }, text: "", payload: { to: recipient.to, template: { id: String(template._id), name: template.name, language: template.language }, runtime: { variables: recipient.variables || [], headerVariables: recipient.headerVariables || [], otpCode: recipient.otpCode || "", buttonValues: recipient.buttonValues || [], buttonTtlMinutes: recipient.buttonTtlMinutes || [], flowTokens: recipient.flowTokens || [], flowActionData: recipient.flowActionData || [] } }, error: err?.response?.data || err?.message || err || { message: String(lastFailure) } });
+                        await Message.create({ workspaceId: req.workspace.id, wabaId: template.wabaId, campaignId: campaign._id, templateId: template._id, phone: recipient.to, direction: "outbound", status: "failed", statusTimestamps: { failedAt: now }, text: "", payload: { to: recipient.to, template: { id: String(template._id), name: template.name, language: template.language }, runtime: { variables: recipient.variables || [], headerVariables: recipient.headerVariables || [], otpCode: recipient.otpCode || "", buttonValues: recipient.buttonValues || [], buttonTtlMinutes: recipient.buttonTtlMinutes || [], flowTokens: recipient.flowTokens || [], flowActionData: recipient.flowActionData || [] } }, error: err?.response?.data || err?.message || err || { message: String(lastFailure) } });
                     } catch {}
                     try {
                         const chargeAmount = openNowSet.has(String(recipient.to)) ? 0 : messageCostForTemplateCategory(template.category, 1);

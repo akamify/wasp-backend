@@ -9,20 +9,20 @@ async function listContacts({ filter, skip, limit }) {
   return { contacts, total };
 }
 
-async function getContact({ id, workspaceId }) {
-  return Contact.findOne({ _id: id, workspaceId });
+async function getContact({ id, workspaceId, wabaId }) {
+  return Contact.findOne({ _id: id, workspaceId, wabaId });
 }
 
-async function findByPhone({ workspaceId, phone }) {
-  return Contact.findOne({ workspaceId, phone });
+async function findByPhone({ workspaceId, wabaId, phone }) {
+  return Contact.findOne({ workspaceId, wabaId, phone });
 }
 
-async function findIdByPhone({ workspaceId, phone }) {
-  return Contact.findOne({ workspaceId, phone }).select("_id");
+async function findIdByPhone({ workspaceId, wabaId, phone }) {
+  return Contact.findOne({ workspaceId, wabaId, phone }).select("_id");
 }
 
-async function findDuplicateByPhone({ workspaceId, phone, excludeId }) {
-  return Contact.findOne({ workspaceId, phone, _id: { $ne: excludeId } }).select("_id");
+async function findDuplicateByPhone({ workspaceId, wabaId, phone, excludeId }) {
+  return Contact.findOne({ workspaceId, wabaId, phone, _id: { $ne: excludeId } }).select("_id");
 }
 
 async function createContact(data) {
@@ -63,12 +63,12 @@ async function updateContact(existingDoc, updates) {
   return existingDoc.save();
 }
 
-async function deleteContact({ id, workspaceId }) {
-  return Contact.deleteOne({ _id: id, workspaceId });
+async function deleteContact({ id, workspaceId, wabaId }) {
+  return Contact.deleteOne({ _id: id, workspaceId, wabaId });
 }
 
-async function findContactsForExport({ workspaceId, ids }) {
-  return Contact.find({ _id: { $in: ids }, workspaceId })
+async function findContactsForExport({ workspaceId, wabaId, ids }) {
+  return Contact.find({ _id: { $in: ids }, workspaceId, wabaId })
     .select("name phone company tags attributes")
     .sort({ updatedAt: -1, name: 1 })
     .lean();

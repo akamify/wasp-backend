@@ -6,10 +6,11 @@ const { markConversationRead } = require("@shared/services/conversationService")
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { markMessageAsRead } = require("@shared/utils/whatsappSender");
 const { HttpError } = require("@shared/utils/httpError");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
-async function attachContacts(userId, conversations) {
+async function attachContacts(userId, wabaId, conversations) {
   const phones = Array.from(new Set(conversations.map((item) => item.phone).filter(Boolean)));
-  const contacts = await Contact.find({ workspaceId: userId, phone: { $in: phones } }).select(
+  const contacts = await Contact.find({ workspaceId: userId, wabaId, phone: { $in: phones } }).select(
     "_id phone name company tags attributes"
   );
   const contactMap = new Map(contacts.map((contact) => [contact.phone, contact]));
@@ -85,21 +86,22 @@ function mapConversationListItemForPublic(item) {
 }
 
 async function listConversations(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
 
   const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
-  const conversations = await Conversation.find({ workspaceId: req.workspace.id })
+  const conversations = await Conversation.find({ workspaceId: req.workspace.id, wabaId: scope.wabaId })
     .sort({ lastMessageAt: -1 })
     .limit(limit);
 
-  let items = await attachContacts(req.workspace.id, conversations);
+  let items = await attachContacts(req.workspace.id, scope.wabaId, conversations);
   const phones = items.map((item) => item.phone).filter(Boolean);
 
   if (phones.length) {
     const latestRows = await Message.aggregate([
-      { $match: { workspaceId: conversations[0].workspaceId, phone: { $in: phones } } },
+      { $match: { workspaceId: conversations[0].workspaceId, wabaId: scope.wabaId, phone: { $in: phones } } },
       { $sort: { createdAt: -1, _id: -1 } },
       {
         $group: {
@@ -159,6 +161,7 @@ async function listConversations(req, res) {
 }
 
 async function getConversation(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
@@ -167,8 +170,8 @@ async function getConversation(req, res) {
   if (!phone) throw new HttpError(400, "Invalid phone number");
 
   const [conversation, contact] = await Promise.all([
-    Conversation.findOne({ workspaceId: req.workspace.id, phone }),
-    Contact.findOne({ workspaceId: req.workspace.id, phone }).select(
+    Conversation.findOne({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone }),
+    Contact.findOne({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone }).select(
       "_id phone name company email language notes tags attributes"
     ),
   ]);
@@ -186,6 +189,7 @@ async function getConversation(req, res) {
 }
 
 async function readConversation(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   const phone = normalizePhone(req.params.phone);
   if (!phone) throw new HttpError(400, "Invalid phone number");
 
@@ -195,6 +199,7 @@ async function readConversation(req, res) {
     const creds = await getCredentialsForUser(req.workspace.id);
     const pendingInbound = await Message.find({
       workspaceId: req.workspace.id,
+      wabaId: scope.wabaId,
       phone,
       direction: "inbound",
       status: "received",
@@ -230,20 +235,21 @@ async function readConversation(req, res) {
     // Ignore credential/Meta issues; keeping read endpoint resilient.
   }
 
-  const conversation = await markConversationRead({ userId: req.workspace.id, phone });
+  const conversation = await markConversationRead({ userId: req.workspace.id, wabaId: scope.wabaId, phone });
   res.json({ success: true, conversation: conversation || null, phone });
 }
 
 async function clearConversation(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
   const phone = normalizePhone(req.params.phone);
   if (!phone) throw new HttpError(400, "Invalid phone number");
 
   // Delete messages for this conversation but keep the Contact record intact.
-  await Message.deleteMany({ workspaceId: req.workspace.id, phone });
+  await Message.deleteMany({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone });
 
   // Reset or remove the Conversation entry so it no longer shows recent activity.
   await Conversation.updateOne(
-    { workspaceId: req.workspace.id, phone },
+    { workspaceId: req.workspace.id, wabaId: scope.wabaId, phone },
     { $set: { lastMessageAt: null, lastMessagePreview: "", unreadCount: 0 } }
   );
 
