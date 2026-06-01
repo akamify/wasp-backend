@@ -20,7 +20,7 @@ const PlanSchema = new mongoose.Schema(
     },
     buttonText: { type: String, default: "" },
     badgeText: { type: String, default: "" },
-    status: { type: String, enum: ["in_review", "published", "disabled"], default: "in_review", index: true },
+    status: { type: String, enum: ["draft", "in_review", "published", "archived", "disabled"], default: "in_review", index: true },
     publicVisible: { type: Boolean, default: true, index: true },
     purchasable: { type: Boolean, default: true, index: true },
     recommended: { type: Boolean, default: false },
@@ -60,6 +60,7 @@ const PlanSchema = new mongoose.Schema(
       maxExportsPerMonth: { type: Number, default: 0 },
       maxStorageMb: { type: Number, default: 0 },
     },
+    entitlements: { type: mongoose.Schema.Types.Mixed, default: {} },
     featureRows: [
       {
         label: { type: String, required: true, trim: true },

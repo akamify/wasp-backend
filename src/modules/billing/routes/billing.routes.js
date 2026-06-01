@@ -4,11 +4,12 @@ const { auth } = require("@core/middleware/auth");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
 const { listPlans } = require("@modules/billing/controllers/plan.controller");
 const { getCurrentSubscription, getSubscriptionHistory } = require("@modules/billing/controllers/subscription.controller");
+const { requireWorkspacePermission } = require("@modules/workspaces/middleware/requireWorkspacePermission");
 
 const router = express.Router();
 
 router.get("/plans", asyncHandler(listPlans));
-router.get("/current", auth, requireWorkspace, asyncHandler(getCurrentSubscription));
-router.get("/history", auth, requireWorkspace, asyncHandler(getSubscriptionHistory));
+router.get("/current", auth, requireWorkspace, requireWorkspacePermission("billing.view"), asyncHandler(getCurrentSubscription));
+router.get("/history", auth, requireWorkspace, requireWorkspacePermission("billing.view"), asyncHandler(getSubscriptionHistory));
 
 module.exports = router;

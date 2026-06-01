@@ -10,12 +10,15 @@ const SubscriptionSchema = new mongoose.Schema(
     planType: { type: String, enum: ["basic", "pro", "custom"], required: true, index: true },
     status: {
       type: String,
-      enum: ["active", "past_due", "cancelled", "expired", "suspended"],
+      enum: ["trialing", "active", "past_due", "cancelled", "expired", "free", "suspended"],
       default: "active",
       index: true,
     },
     currentPeriodStart: { type: Date, required: true, index: true },
     currentPeriodEnd: { type: Date, required: true, index: true },
+    startedAt: { type: Date, default: null },
+    purchasedAt: { type: Date, default: null },
+    validUntil: { type: Date, default: null },
     durationMonths: { type: Number, required: true, min: 1, max: 24 },
     autoRenewEnabled: { type: Boolean, default: true, index: true },
     cancelAtPeriodEnd: { type: Boolean, default: false, index: true },
@@ -25,6 +28,9 @@ const SubscriptionSchema = new mongoose.Schema(
     lastRenewalAt: { type: Date, default: null },
     razorpaySubscriptionId: { type: String, default: "", index: true },
     razorpayPlanId: { type: String, default: "", index: true },
+    billingProvider: { type: String, default: "razorpay", trim: true },
+    providerSubscriptionId: { type: String, default: "", index: true },
+    metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
     latestCheckoutIntentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "BillingCheckoutIntent",
@@ -56,4 +62,3 @@ SubscriptionSchema.index(
 const Subscription = mongoose.model("Subscription", SubscriptionSchema);
 
 module.exports = { Subscription };
-

@@ -11,6 +11,7 @@ const WalletSchema = new mongoose.Schema(
     },
     balance: { type: Number, default: 0 }, // INR
     currency: { type: String, default: "INR" },
+    lastRechargeAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

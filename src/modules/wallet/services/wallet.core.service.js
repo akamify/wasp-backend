@@ -10,6 +10,7 @@ const {
   messageCostForTemplateCategory,
   isMerchantWorkspaceConfigured,
 } = require("@modules/wallet/utils/wallet.utils");
+const { logWorkspaceActivity } = require("@modules/workspaces/services/workspaceActivity.service");
 
 async function getOrCreateWallet(workspaceId) {
   return walletRepository.getOrCreateWallet(workspaceId, SEED_BALANCE);
@@ -42,6 +43,14 @@ async function debit(workspaceId, amount, reason, meta = {}) {
     provider: "internal",
     meta,
   });
+  if (provider === "razorpay") {
+    await logWorkspaceActivity({
+      workspaceId,
+      action: "billing.wallet_recharged",
+      entityType: "wallet",
+      metadata: { amount: normalizedAmount, provider, providerRef },
+    });
+  }
 
   return wallet;
 }
@@ -51,7 +60,7 @@ async function credit(workspaceId, amount, reason, provider = "internal", provid
   if (normalizedAmount <= 0) throw new HttpError(400, "Invalid amount");
   await getOrCreateWallet(workspaceId);
 
-  const wallet = await walletRepository.creditWallet(workspaceId, normalizedAmount);
+  const wallet = await walletRepository.creditWallet(workspaceId, normalizedAmount, { markRecharge: provider === "razorpay" });
 
   await walletRepository.createTransaction({
     workspaceId,

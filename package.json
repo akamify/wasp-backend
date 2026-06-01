@@ -11,6 +11,8 @@
     "verify:worker-env": "node scripts/verify-worker-env.cjs",
     "cleanup:stale-waba-templates": "node scripts/cleanup-stale-waba-templates.cjs",
     "verify:template-waba-scoping": "node scripts/verify-template-waba-scoping.cjs",
+    "migrate:workspace-foundation": "node scripts/migrate-workspace-foundation.cjs",
+    "verify:workspace-foundation": "node scripts/verify-workspace-foundation.cjs",
     "seed:billing:plans": "node scripts/seed-billing-plans.cjs"
   },
   "keywords": [],

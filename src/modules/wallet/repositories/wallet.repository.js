@@ -17,8 +17,12 @@ async function debitWallet(workspaceId, normalizedAmount) {
   );
 }
 
-async function creditWallet(workspaceId, normalizedAmount) {
-  return Wallet.findOneAndUpdate({ workspaceId }, { $inc: { balance: normalizedAmount } }, { returnDocument: "after" });
+async function creditWallet(workspaceId, normalizedAmount, { markRecharge = false } = {}) {
+  return Wallet.findOneAndUpdate(
+    { workspaceId },
+    { $inc: { balance: normalizedAmount }, ...(markRecharge ? { $set: { lastRechargeAt: new Date() } } : {}) },
+    { returnDocument: "after" }
+  );
 }
 
 async function createTransaction(data) {

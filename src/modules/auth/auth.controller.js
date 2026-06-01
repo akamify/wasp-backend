@@ -97,7 +97,7 @@ async function adminResetPassword(req, res) {
 }
 
 async function me(req, res) {
-  res.json(await userMeService.me({ authUser: req.user }));
+  res.json(await userMeService.me({ authUser: req.user, selectedWorkspaceId: req.headers["x-workspace-id"] || null }));
 }
 
 async function apiKeyStatus(req, res) {

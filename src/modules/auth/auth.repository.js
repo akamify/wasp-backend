@@ -1,5 +1,6 @@
 const { User } = require("@infra/database/User");
 const { Workspace } = require("@infra/database/Workspace");
+const { WorkspaceMember } = require("@infra/database/WorkspaceMember");
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { AdminAccount } = require("@infra/database/AdminAccount");
 const { AdminLoginEvent } = require("@infra/database/AdminLoginEvent");
@@ -13,24 +14,42 @@ async function createUser({ email, passwordHash, name, phone }) {
 }
 
 async function createWorkspaceForOwner({ ownerId, name }) {
-  const existing = await Workspace.findOne({ ownerId }).sort({ createdAt: 1 }).select("_id name plan");
+  const existing = await Workspace.findOne({ ownerId }).sort({ createdAt: 1 }).select("_id ownerId ownerUserId name plan createdAt");
   if (existing) return existing;
-  return Workspace.create({
+  const workspace = await Workspace.create({
     ownerId,
+    ownerUserId: ownerId,
     name,
     allowedApiPermissions: {
       campaignSend: true,
       chatAccess: false,
     },
   });
+  await WorkspaceMember.create({
+    workspaceId: workspace._id,
+    userId: ownerId,
+    role: "owner",
+    status: "active",
+    joinedAt: new Date(),
+  });
+  return workspace;
 }
 
 async function findDefaultWorkspaceForOwner(ownerId) {
-  return Workspace.findOne({ ownerId, isActive: true }).sort({ createdAt: 1 }).select("_id name plan");
+  return Workspace.findOne({ ownerId, isActive: true }).sort({ createdAt: 1 }).select("_id ownerId ownerUserId name plan createdAt");
 }
 
 async function findWorkspaceForUserAndId({ workspaceId, ownerId }) {
-  return Workspace.findOne({ _id: workspaceId, ownerId, isActive: true }).select("_id name plan");
+  const membership = await WorkspaceMember.findOne({ workspaceId, userId: ownerId, status: "active" }).select("workspaceId role");
+  if (membership) return Workspace.findOne({ _id: workspaceId, isActive: true, status: { $ne: "deleted" } }).select("_id name plan");
+  const owned = await Workspace.findOne({ _id: workspaceId, ownerId, isActive: true, status: { $ne: "deleted" } }).select("_id name plan");
+  if (!owned) return null;
+  await WorkspaceMember.updateOne(
+    { workspaceId: owned._id, userId: ownerId },
+    { $setOnInsert: { role: "owner", status: "active", joinedAt: owned.createdAt || new Date() } },
+    { upsert: true }
+  );
+  return owned;
 }
 
 async function hasValidMetaCredentials(workspaceId) {

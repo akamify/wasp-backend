@@ -11,6 +11,7 @@ const {
   serializeWhatsAppConnection,
 } = require("@shared/services/whatsappConnectionMetadataService");
 const templatesService = require("@modules/templates/services/templates.service");
+const { logWorkspaceActivity } = require("@modules/workspaces/services/workspaceActivity.service");
 
 function graphBaseUrl() {
   const version = process.env.META_GRAPH_VERSION || "v25.0";
@@ -303,6 +304,14 @@ async function exchangeEmbeddedSignupCode(req, res) {
       reason: sanitizeMetaError(err, "Metadata refresh failed"),
     });
   });
+  await logWorkspaceActivity({
+    workspaceId,
+    actorUserId: req.user?.id || null,
+    action: "whatsapp.connected",
+    entityType: "whatsapp_connection",
+    entityId: wabaId,
+    metadata: { maskedWabaId: maskId(wabaId), maskedPhoneNumberId: maskId(validatedPhoneNumber.id) },
+  });
   await templatesService.syncMetaTemplates({ workspace: req.workspace, body: {} }).catch((err) => {
     // eslint-disable-next-line no-console
     console.warn("[templates] refresh after reconnect failed", {
@@ -365,6 +374,12 @@ async function disconnectWhatsAppConnection(req, res) {
     { $set: { isActive: false, isValid: false, status: "disconnected", disconnectedAt: new Date() } }
   );
   await markTemplatesStaleForInactiveWabas({ workspaceId: req.workspace.id, activeWabaId: "" });
+  await logWorkspaceActivity({
+    workspaceId: req.workspace.id,
+    actorUserId: req.user?.id || null,
+    action: "whatsapp.disconnected",
+    entityType: "whatsapp_connection",
+  });
   return res.json({ success: true, status: "disconnected" });
 }
 

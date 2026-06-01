@@ -24,7 +24,15 @@ function buildReceipt(workspaceId) {
 
 async function getWallet(req) {
   const wallet = await walletCore.getOrCreateWallet(req.workspace.id);
-  return { success: true, wallet: { balance: wallet.balance, currency: wallet.currency } };
+  return {
+    success: true,
+    wallet: {
+      workspaceId: String(wallet.workspaceId),
+      balance: wallet.balance,
+      currency: wallet.currency,
+      lastRechargeAt: wallet.lastRechargeAt || null,
+    },
+  };
 }
 
 async function createRechargeOrder(req) {

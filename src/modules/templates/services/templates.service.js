@@ -11,6 +11,7 @@ const { normalizeTemplate } = require("@shared/utils/templateStructure");
 const { templatesRepository } = require("@modules/templates/repositories/index");
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
 const { assertTemplateBelongsToWaba } = require("@shared/services/templateOwnershipService");
+const { logWorkspaceActivity } = require("@modules/workspaces/services/workspaceActivity.service");
 
 const MISSING_BUSINESS_MANAGEMENT =
   "Meta token is missing business_management. Regenerate the System User token with business_management, whatsapp_business_management, whatsapp_business_messaging, and whatsapp_business_manage_events, then reconnect WhatsApp.";
@@ -140,6 +141,14 @@ async function createTemplate(req) {
     syncedAt: new Date(),
     lastSyncedAt: new Date(),
   });
+  await logWorkspaceActivity({
+    workspaceId: req.workspace.id,
+    actorUserId: req.user?.id || null,
+    action: "template.created",
+    entityType: "template",
+    entityId: String(tpl._id),
+    metadata: { name: tpl.name, languageCode: tpl.languageCode },
+  });
 
   return { success: true, template: tpl, meta: metaResponse };
 }
@@ -263,6 +272,14 @@ async function deleteTemplate(req) {
   }
 
   await templatesRepository.softDeleteTemplate({ id: template._id, workspaceId: req.workspace.id });
+  await logWorkspaceActivity({
+    workspaceId: req.workspace.id,
+    actorUserId: req.user?.id || null,
+    action: "template.deleted",
+    entityType: "template",
+    entityId: String(template._id),
+    metadata: { name: template.name },
+  });
   return { success: true, ...(warning ? { warning } : {}) };
 }
 

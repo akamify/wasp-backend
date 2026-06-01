@@ -1,5 +1,7 @@
 const { Workspace } = require("@infra/database/Workspace");
 const { HttpError } = require("@shared/utils/httpError");
+const { WorkspaceMember } = require("@infra/database/WorkspaceMember");
+const { resolveWorkspaceAccess } = require("@modules/workspaces/services/workspacePermission.service");
 
 function pickWorkspaceId(req) {
   return (
@@ -26,16 +28,18 @@ async function requireWorkspace(req, res, next) {
         .select("_id");
       if (defaultWorkspace) workspaceId = String(defaultWorkspace._id);
     }
+    if (!workspaceId && req.user?.id) {
+      const membership = await WorkspaceMember.findOne({ userId: req.user.id, status: "active" })
+        .sort({ joinedAt: 1, createdAt: 1 })
+        .select("workspaceId");
+      if (membership) workspaceId = String(membership.workspaceId);
+    }
 
     if (!workspaceId) return next(new HttpError(400, "Missing workspaceId"));
 
-    const workspace = await Workspace.findOne({
-      _id: workspaceId,
-      ownerId: req.user.id,
-      isActive: true,
-    }).select("_id ownerId name plan isActive createdAt crmEnabled crmSettings allowedApiPermissions features");
-
-    if (!workspace) return next(new HttpError(404, "Workspace not found"));
+    const access = await resolveWorkspaceAccess({ workspaceId, userId: req.user.id });
+    if (!access) return next(new HttpError(404, "Workspace not found"));
+    const workspace = access.workspace;
 
     req.workspace = {
       id: String(workspace._id),
@@ -50,7 +54,10 @@ async function requireWorkspace(req, res, next) {
       features: {
         externalChatApiAccess: Boolean(workspace?.features?.externalChatApiAccess),
       },
+      role: access.role,
+      permissions: access.permissions,
     };
+    req.workspaceAccess = access;
 
     // Effective API permissions are always a strict intersection of
     // user/key-level permissions and workspace-level permissions.

@@ -18,6 +18,7 @@ const {
 const { listWebhookDebugEvents } = require("@modules/webhooks/controllers/webhook.controller");
 const { uploadMessageMedia, downloadMessageMedia } = require("@modules/messages/controllers/messageMedia.controller");
 const { buildMemoryUpload } = require("@shared/utils/multerUpload");
+const { requireWorkspacePermission } = require("@modules/workspaces/middleware/requireWorkspacePermission");
 
 const router = express.Router();
 const requireActivityAccess = requireBillingFeature("activityPageAccess", {
@@ -45,14 +46,15 @@ const upload = buildMemoryUpload({
   ],
 });
 
-router.post("/media", auth, blockInternalChatForApiKey, requireWorkspace, requireInboxAccess, upload.single("file"), asyncHandler(uploadMessageMedia));
-router.get("/media/:id", auth, blockInternalChatForApiKey, requireWorkspace, requireInboxAccess, asyncHandler(downloadMessageMedia));
+router.post("/media", auth, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.reply"), requireInboxAccess, upload.single("file"), asyncHandler(uploadMessageMedia));
+router.get("/media/:id", auth, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.view"), requireInboxAccess, asyncHandler(downloadMessageMedia));
 
 router.post(
   "/send",
   auth,
   blockInternalChatForApiKey,
   requireWorkspace,
+  requireWorkspacePermission("inbox.reply"),
   requireInboxAccess,
   validate(
     Joi.object({
@@ -81,6 +83,7 @@ router.post(
   auth,
   blockInternalChatForApiKey,
   requireWorkspace,
+  requireWorkspacePermission("inbox.reply"),
   requireInboxAccess,
   validate(
     Joi.object({
@@ -96,6 +99,7 @@ router.post(
   auth,
   blockInternalChatForApiKey,
   requireWorkspace,
+  requireWorkspacePermission("inbox.reply"),
   requireInboxAccess,
   validate(
     Joi.object({
@@ -115,6 +119,7 @@ router.post(
   auth,
   blockInternalChatForApiKey,
   requireWorkspace,
+  requireWorkspacePermission("inbox.reply"),
   requireInboxAccess,
   validate(
     Joi.object({
@@ -141,14 +146,14 @@ router.post(
   asyncHandler(bulkSend)
 );
 
-router.get("/logs", auth, blockInternalChatForApiKey, requireWorkspace, requireActivityAccess, asyncHandler(listLogs));
-router.get("/status/:waId", auth, blockInternalChatForApiKey, requireWorkspace, requireInboxAccess, asyncHandler(messageStatusByWaId));
+router.get("/logs", auth, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.view"), requireActivityAccess, asyncHandler(listLogs));
+router.get("/status/:waId", auth, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.view"), requireInboxAccess, asyncHandler(messageStatusByWaId));
 const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 const debugFeedEnabled = String(process.env.META_WEBHOOK_DEBUG_FEED_ENABLED || "").toLowerCase() === "true";
 if (!isProd || debugFeedEnabled) {
   router.get("/webhook-debug", auth, blockInternalChatForApiKey, requireWorkspace, requireActivityAccess, asyncHandler(listWebhookDebugEvents));
 }
-router.get("/:phone", auth, blockInternalChatForApiKey, requireWorkspace, requireInboxAccess, asyncHandler(messagesByPhone));
+router.get("/:phone", auth, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.view"), requireInboxAccess, asyncHandler(messagesByPhone));
 
 module.exports = router;
 
