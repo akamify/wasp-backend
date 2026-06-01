@@ -4,6 +4,7 @@ const { Template } = require("@infra/database/Template");
 const { Contact } = require("@infra/database/Contact");
 const { Campaign } = require("@infra/database/Campaign");
 const { HttpError } = require("@shared/utils/httpError");
+const { resolveActiveConnection } = require("@shared/services/whatsappConnectionService");
 const mongoose = require("mongoose");
 
 function clampPct(value) {
@@ -305,10 +306,14 @@ async function overview(req, res) {
 
   const todayStart = startOfDay(now);
   const tomorrowStart = startOfDay(addDays(now, 1));
+  const activeConnection = await resolveActiveConnection(workspaceId);
+  const activeTemplateFilter = activeConnection
+    ? { workspaceId, wabaId: activeConnection.wabaId, isActive: { $ne: false }, deletedAt: null }
+    : { workspaceId, _id: null };
 
   const [campaignsCount, templatesCount, contactsTotal, todaySent] = await Promise.all([
     Campaign.countDocuments({ workspaceId }),
-    Template.countDocuments({ workspaceId }),
+    Template.countDocuments(activeTemplateFilter),
     Contact.countDocuments({ workspaceId }),
     Message.countDocuments({
       ...sentBase,
@@ -340,8 +345,16 @@ async function overview(req, res) {
 async function templatePerformance(req, res) {
   const workspaceId = req.workspace.id;
   const templateId = req.params.id;
+  const activeConnection = await resolveActiveConnection(workspaceId);
+  if (!activeConnection) throw new HttpError(404, "Template not found");
 
-  const template = await Template.findOne({ _id: templateId, workspaceId }).select(
+  const template = await Template.findOne({
+    _id: templateId,
+    workspaceId,
+    wabaId: activeConnection.wabaId,
+    isActive: { $ne: false },
+    deletedAt: null,
+  }).select(
     "_id name status"
   );
   if (!template) throw new HttpError(404, "Template not found");
