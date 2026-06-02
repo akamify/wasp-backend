@@ -22,6 +22,13 @@ function maskId(value) {
   return `${text.slice(0, 3)}***${text.slice(-3)}`;
 }
 
+function maskWamid(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  if (text.length <= 10) return `${text.slice(0, 3)}***${text.slice(-3)}`;
+  return `${text.slice(0, 6)}***${text.slice(-4)}`;
+}
+
 async function isCrmEnabled(workspaceId) {
   const key = String(workspaceId || "");
   if (!key) return false;
@@ -483,7 +490,7 @@ async function receive(req, res) {
           maskedPhoneNumberId: maskId(phoneNumberId),
           from,
           type,
-          wamid: waId,
+          wamidMasked: maskWamid(waId),
         });
         const isDeletedOrUnsupported =
           type === "unsupported" ||
@@ -528,7 +535,7 @@ async function receive(req, res) {
             console.info("[webhook] duplicate inbound ignored", {
               workspaceId: workspaceIdRaw,
               maskedPhoneNumberId: maskId(phoneNumberId),
-              wamid: waId,
+              wamidMasked: maskWamid(waId),
             });
             continue;
           }
@@ -619,7 +626,7 @@ async function receive(req, res) {
             console.info("[webhook] duplicate inbound ignored", {
               workspaceId: workspaceIdRaw,
               maskedPhoneNumberId: maskId(phoneNumberId),
-              wamid: waId,
+              wamidMasked: maskWamid(waId),
             });
             continue;
           }

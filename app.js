@@ -26,6 +26,8 @@ function isMetaWebhookPath(pathname) {
     "/api/webhooks/webhook",
     "/webhook",
     "/api/webhook",
+    "/internal/debug/webhook-signature-test",
+    "/api/internal/debug/webhook-signature-test",
   ].includes(normalized);
 }
 
@@ -60,10 +62,13 @@ console.info("[startup] env status", {
   metaAppId: startupMetaAppId,
   metaAppSecretSource,
   metaAppSecretLength: startupMetaAppSecret.length,
+  metaAppSecretPresent: !!startupMetaAppSecret,
   hasMetaWebhookVerifyToken: !!String(process.env.META_WEBHOOK_VERIFY_TOKEN || "").trim(),
   tokenEncryptionSecretLength: startupTokenEncSecret.length,
   metaGraphVersion: String(process.env.META_GRAPH_VERSION || "v22.0"),
 });
+// eslint-disable-next-line no-console
+console.info("[webhook] meta app secret present", !!startupMetaAppSecret);
 app.use(
   express.json({
     limit: "10mb",

@@ -1,7 +1,34 @@
-const { verifyWebhookSignature } = require("@core/middleware/webhookSignature");
+const { verifyWebhookSignature, verifyMetaSignature } = require("@core/middleware/webhookSignature");
+const { getMetaAppConfig } = require("@core/config/metaAppConfig");
 const { verify, receive } = require("@modules/webhooks/controllers/webhook.controller");
 
 function registerRoutes(app, basePath = "") {
+  app.post(`${basePath}/internal/debug/webhook-signature-test`, (req, res) => {
+    const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+    if (isProd) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
+
+    let secret = "";
+    try {
+      secret = getMetaAppConfig().metaAppSecret;
+    } catch {
+      secret = "";
+    }
+
+    const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
+    const signature = String(req.headers["x-hub-signature-256"] || "").trim();
+    const verified = !!secret && verifyMetaSignature({ rawBody, signature, secret });
+
+    return res.json({
+      success: true,
+      signatureVerified: verified,
+      hasSignature: !!signature,
+      rawBodyLength: rawBody.length,
+      usingMetaAppSecretPresent: !!secret,
+    });
+  });
+
   app.use(`${basePath}/public`, require("@core/routes/publicRoutes"));
   app.use(`${basePath}`, require("@core/routes/trackingRoutes"));
   app.use(`${basePath}/webhooks`, require("@core/routes/webhookRoutes"));
