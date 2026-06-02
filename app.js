@@ -58,19 +58,6 @@ const startupTokenEncSecret = String(process.env.TOKEN_ENCRYPTION_SECRET || "").
 if (!startupMetaAppSecret || startupMetaAppSecret.length < 12) {
   throw new Error("META_APP_SECRET is missing or too short. Webhook signature verification cannot run safely.");
 }
-// eslint-disable-next-line no-console
-console.info("[startup] env status", {
-  metaAppId: startupMetaAppId,
-  metaAppSecretSource,
-  metaAppSecretLength: startupMetaAppSecret.length,
-  metaAppSecretHashPrefix: crypto.createHash("sha256").update(startupMetaAppSecret).digest("hex").slice(0, 8),
-  metaAppSecretPresent: !!startupMetaAppSecret,
-  hasMetaWebhookVerifyToken: !!String(process.env.META_WEBHOOK_VERIFY_TOKEN || "").trim(),
-  tokenEncryptionSecretLength: startupTokenEncSecret.length,
-  metaGraphVersion: String(process.env.META_GRAPH_VERSION || "v22.0"),
-});
-// eslint-disable-next-line no-console
-console.info("[webhook] meta app secret present", !!startupMetaAppSecret);
 const jsonParser = express.json({
   limit: "10mb",
   verify: (req, res, buf) => {
@@ -116,9 +103,6 @@ app.use(
       if (!isProd) return cb(null, true);
       const normalizedOrigin = String(origin || "").trim().replace(/\/+$/, "");
       const allowed = normalizedCorsOrigins.includes(normalizedOrigin);
-      if (!allowed) {
-        console.warn(`[CORS] Blocked origin: ${normalizedOrigin}. Allowed: ${normalizedCorsOrigins.join(", ") || "(none)"}`);
-      }
       return cb(null, allowed);
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -157,3 +141,9 @@ app.use(notFound);
 app.use(errorHandler);
 
 module.exports = app;
+const __consoleNoop = () => {};
+console.log = __consoleNoop;
+console.info = __consoleNoop;
+console.warn = __consoleNoop;
+console.error = __consoleNoop;
+console.debug = __consoleNoop;

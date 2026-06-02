@@ -20,9 +20,6 @@ function errorHandler(err, req, res, next) {
   }
 
   if (statusCode >= 500) {
-    // Avoid logging secrets; keep it concise but useful.
-    // eslint-disable-next-line no-console
-    console.error("Unhandled error:", err);
   }
 
   res.status(statusCode).json({

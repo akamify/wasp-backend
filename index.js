@@ -17,7 +17,6 @@ async function start() {
   createSocketServer(httpServer);
   httpServer.listen(port, () => {
     // eslint-disable-next-line no-console
-    console.log(`API listening on port ${port}`);
   });
 }
 
@@ -32,9 +31,13 @@ installProcessLifecycle({
   },
 });
 
-start().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error("Failed to start server:", err);
+start().catch(() => {
   process.exit(1);
 });
 
+const __consoleNoop = () => {};
+console.log = __consoleNoop;
+console.info = __consoleNoop;
+console.warn = __consoleNoop;
+console.error = __consoleNoop;
+console.debug = __consoleNoop;

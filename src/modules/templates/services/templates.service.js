@@ -87,12 +87,6 @@ async function requireActiveConnection(workspaceId) {
   if (!isEmbeddedSignupConnection(connection.doc)) {
     throw new HttpError(409, "This workspace is using a manual/system-user token. Reconnect with Embedded Signup to use customer self-connect.");
   }
-  // eslint-disable-next-line no-console
-  console.info("[templates] using embedded signup token", {
-    workspaceId: String(workspaceId),
-    maskedWabaId: maskId(connection.wabaId),
-    tokenType: connection.tokenType || null,
-  });
   return connection;
 }
 
@@ -176,20 +170,7 @@ async function listTemplates(req) {
     }),
     templatesRepository.countHiddenStaleTemplates({ workspaceId: req.workspace.id, wabaId: connection.wabaId }),
   ]);
-  // eslint-disable-next-line no-console
-  console.info("[templates] active WABA template filter applied", {
-    workspaceId: String(req.workspace.id),
-    maskedWabaId: maskId(connection.wabaId),
-    templateCount: templates.length,
-  });
-
   if (staleTemplateCount > 0) {
-    // eslint-disable-next-line no-console
-    console.info("[templates] stale old-waba templates hidden", {
-      workspaceId: String(req.workspace.id),
-      maskedWabaId: maskId(connection.wabaId),
-      staleTemplateCount,
-    });
   }
   return {
     success: true,
@@ -249,12 +230,6 @@ async function deleteTemplate(req) {
       workspaceId: req.workspace.id,
       staleReason: "old_waba_connection",
     });
-    // eslint-disable-next-line no-console
-    console.info("[templates] stale template local delete", {
-      workspaceId: String(req.workspace.id),
-      maskedActiveWabaId: maskId(connection.wabaId),
-      maskedTemplateWabaId: maskId(template.wabaId),
-    });
     return { success: true, warning: "Removed stale local template from previous WhatsApp account." };
   }
 
@@ -271,11 +246,6 @@ async function deleteTemplate(req) {
       if (!isMetaTemplateNotFound(err)) {
         throw new HttpError(400, "Meta template delete failed", { message: err.message, metaDebug: err.metaDebug || null });
       }
-      // eslint-disable-next-line no-console
-      console.info("[templates] meta template not found -> local cleanup", {
-        workspaceId: String(req.workspace.id),
-        maskedWabaId: maskId(connection.wabaId),
-      });
       warning = "Template was not found on Meta, so it was removed locally.";
     }
   }
@@ -365,12 +335,6 @@ async function syncStatus(req) {
 async function syncMetaTemplates(req) {
   const connection = await requireActiveConnection(req.workspace.id);
   const exactName = req.body?.name ? String(req.body.name).trim() : undefined;
-  // eslint-disable-next-line no-console
-  console.info("[templates] refresh started", {
-    workspaceId: String(req.workspace.id),
-    maskedWabaId: maskId(connection.wabaId),
-  });
-
   let remoteTemplates;
   try {
     remoteTemplates = await fetchAllMessageTemplates({
@@ -382,12 +346,6 @@ async function syncMetaTemplates(req) {
   } catch (err) {
     throw new HttpError(400, "Failed to fetch Meta templates", { message: err.message, metaDebug: err.metaDebug || null });
   }
-  // eslint-disable-next-line no-console
-  console.info("[templates] meta list success", {
-    workspaceId: String(req.workspace.id),
-    maskedWabaId: maskId(connection.wabaId),
-    count: remoteTemplates.length,
-  });
   const wabaName = await fetchWabaName({
     accessToken: connection.accessToken,
     wabaId: connection.wabaId,

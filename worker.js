@@ -24,8 +24,12 @@ installProcessLifecycle({
     },
 });
 
-startWorker().catch((err) => {
-    // eslint-disable-next-line no-console
-    console.error("Failed to start worker:", err);
+startWorker().catch(() => {
     process.exit(1);
 });
+const __consoleNoop = () => {};
+console.log = __consoleNoop;
+console.info = __consoleNoop;
+console.warn = __consoleNoop;
+console.error = __consoleNoop;
+console.debug = __consoleNoop;

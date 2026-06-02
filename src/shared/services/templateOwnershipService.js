@@ -10,10 +10,6 @@ function assertTemplateBelongsToWaba(template, wabaId) {
   const currentWabaId = normalizeWabaId(wabaId);
   const templateWabaId = normalizeWabaId(template?.wabaId);
   if (!currentWabaId || !templateWabaId || templateWabaId !== currentWabaId) {
-    // eslint-disable-next-line no-console
-    console.warn("[templates] send rejected template not in active WABA", {
-      workspaceId: template?.workspaceId ? String(template.workspaceId) : null,
-    });
     throw new HttpError(
       400,
       "This template belongs to a previous WhatsApp account. Refresh templates for the current account."

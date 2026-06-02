@@ -57,11 +57,6 @@ async function sendTemplateMessageForUser({
   const resolvedLanguageCode = String(languageCode || template?.languageCode || template?.language || "").trim();
   const templateLanguageCode = String(template?.languageCode || template?.language || "").trim();
   if (!templateLanguageCode || resolvedLanguageCode !== templateLanguageCode) {
-    // eslint-disable-next-line no-console
-    console.warn("[templates] send rejected template not in active WABA", {
-      workspaceId: String(userId),
-      reason: "language_mismatch",
-    });
     throw new HttpError(
       409,
       "Template does not exist for the currently connected WhatsApp account. Refresh templates or create this template for the active WABA."

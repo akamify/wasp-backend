@@ -43,13 +43,6 @@ async function forceEmbeddedActiveConnection(req, res) {
     { $set: { isActive: true, status: "active", disconnectedAt: null, connectionMode: "customer_embedded_signup", tokenType: "embedded_signup_customer_token" } }
   );
 
-  // eslint-disable-next-line no-console
-  console.info("[whatsapp-connection] old manual connection deactivated", {
-    workspaceId: String(req.workspace.id),
-    maskedWabaId: maskId(embedded.wabaId),
-    deactivatedCount: Number(deactivated?.modifiedCount || 0),
-  });
-
   await markTemplatesStaleForInactiveWabas({ workspaceId: req.workspace.id, activeWabaId: embedded.wabaId });
   await refreshWhatsAppConnectionMetadata(req.workspace.id).catch(() => null);
   await templatesService.syncMetaTemplates({ workspace: req.workspace, body: {} }).catch(() => null);

@@ -26,11 +26,8 @@ async function sendEmail({ toEmail, toName, subject, htmlContent, textContent, s
 
   if (!liveApiKey || !liveSenderEmail) {
     if (!isProd) {
-      // eslint-disable-next-line no-console
-      console.warn("Email skipped (Brevo not configured).", {
-        toEmail: String(toEmail || "").trim(),
-        subject: String(subject || ""),
-      });
+      void toEmail;
+      void subject;
     }
     return {
       sent: false,
@@ -67,12 +64,7 @@ async function sendEmail({ toEmail, toName, subject, htmlContent, textContent, s
       "Brevo request failed";
 
     if (!isProd) {
-      // eslint-disable-next-line no-console
-      console.error("Email send failed (Brevo).", {
-        toEmail: String(toEmail || "").trim(),
-        subject: String(subject || ""),
-        providerMessage,
-      });
+      void providerMessage;
     }
 
     return {

@@ -61,9 +61,7 @@ async function safeLogFailedOutboundMessage({ userId, templateId, phone, err }) 
       statusTimestamps: { failedAt: new Date() },
       error: buildDetails(err),
     });
-  } catch (logErr) {
-    console.error("Failed to save failed outbound message log:", logErr);
-  }
+  } catch {}
 }
 
 async function sendTemplate(req, res) {

@@ -50,21 +50,7 @@ async function resolveActiveConnection(workspaceId, options = {}) {
   const accessToken = decryptString(doc.accessTokenEnc);
 
   const embedded = isEmbeddedSignupConnection(doc);
-  const logTag = embedded ? "[whatsapp-connection] active embedded connection resolved" : "[whatsapp-connection] active manual connection resolved";
-  // eslint-disable-next-line no-console
-  console.info(logTag, {
-    workspaceId: String(workspaceId),
-    maskedWabaId: maskId(wabaId),
-    maskedPhoneNumberId: maskId(phoneNumberId),
-  });
-  if (!embedded && String(doc?.tokenDebugSummary?.type || "").toUpperCase() === "SYSTEM_USER") {
-    // eslint-disable-next-line no-console
-    console.warn("[whatsapp-connection] active connection uses system-user token", {
-      workspaceId: String(workspaceId),
-      maskedWabaId: maskId(wabaId),
-      maskedPhoneNumberId: maskId(phoneNumberId),
-    });
-  }
+  void embedded;
 
   return {
     doc,
