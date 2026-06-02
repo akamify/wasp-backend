@@ -3,6 +3,7 @@ require("module-alias/register");
 // via `node app.js` or `require('./app')` still has JWT/config available.
 require("@core/config/loadEnv").loadEnv();
 
+const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -62,6 +63,7 @@ console.info("[startup] env status", {
   metaAppId: startupMetaAppId,
   metaAppSecretSource,
   metaAppSecretLength: startupMetaAppSecret.length,
+  metaAppSecretHashPrefix: crypto.createHash("sha256").update(startupMetaAppSecret).digest("hex").slice(0, 8),
   metaAppSecretPresent: !!startupMetaAppSecret,
   hasMetaWebhookVerifyToken: !!String(process.env.META_WEBHOOK_VERIFY_TOKEN || "").trim(),
   tokenEncryptionSecretLength: startupTokenEncSecret.length,
@@ -69,16 +71,19 @@ console.info("[startup] env status", {
 });
 // eslint-disable-next-line no-console
 console.info("[webhook] meta app secret present", !!startupMetaAppSecret);
-app.use(
-  express.json({
-    limit: "10mb",
-    verify: (req, res, buf) => {
-      if (!isMetaWebhookPath(req.originalUrl || req.url)) return;
-      if (!buf || !buf.length) return;
-      req.rawBody = Buffer.from(buf);
-    },
-  })
-);
+const jsonParser = express.json({
+  limit: "10mb",
+  verify: (req, res, buf) => {
+    if (!isMetaWebhookPath(req.originalUrl || req.url)) return;
+    if (!buf || !buf.length) return;
+    req.rawBody = Buffer.from(buf);
+  },
+});
+
+app.use((req, res, next) => {
+  if (isMetaWebhookPath(req.originalUrl || req.url)) return next();
+  return jsonParser(req, res, next);
+});
 app.use(express.urlencoded({ extended: false }));
 const normalizedCorsOrigins = Array.isArray(corsOrigins)
   ? corsOrigins.map((origin) => String(origin || "").trim().replace(/\/+$/, "")).filter(Boolean)

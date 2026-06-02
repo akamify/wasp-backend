@@ -168,9 +168,10 @@ async function verify(req, res) {
 
 async function receive(req, res) {
   let body = req.body;
-  if ((!body || Buffer.isBuffer(body)) && Buffer.isBuffer(req.rawBody)) {
+  const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.isBuffer(req.rawBody) ? req.rawBody : null;
+  if ((!body || Buffer.isBuffer(body)) && rawBody) {
     try {
-      body = JSON.parse(req.rawBody.toString("utf8"));
+      body = JSON.parse(rawBody.toString("utf8"));
     } catch {
       return res.sendStatus(400);
     }

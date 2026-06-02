@@ -36,6 +36,7 @@ function verifyWebhookSignature(req, res, next) {
     return next(new HttpError(500, "META_APP_SECRET is required to verify webhook signatures"));
   }
 
+  const signatureHeaderPresent = !!req.headers["x-hub-signature-256"];
   const signature = String(req.headers["x-hub-signature-256"] || "").trim();
   if (!signature || typeof signature !== "string") {
     if (String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true") {
@@ -65,7 +66,7 @@ function verifyWebhookSignature(req, res, next) {
     console.info("Webhook signature debug.", {
       route: req.originalUrl || req.url,
       metaAppId,
-      hasSignature: !!signature,
+      signatureHeaderPresent,
       rawBodyLength: rawBody ? rawBody.length : 0,
       expectedLength: expected.length,
       receivedLength: signature ? Buffer.byteLength(signature) : 0,
@@ -79,7 +80,7 @@ function verifyWebhookSignature(req, res, next) {
     console.warn("[webhook] signature mismatch", {
       route: req.originalUrl || req.url,
       metaAppId,
-      hasSignature: true,
+      signatureHeaderPresent,
       rawBodyLength: rawBody.length,
       expectedLength: expected.length,
       receivedLength: signature.length,
