@@ -160,7 +160,14 @@ async function verify(req, res) {
 }
 
 async function receive(req, res) {
-  const body = req.body;
+  let body = req.body;
+  if ((!body || Buffer.isBuffer(body)) && Buffer.isBuffer(req.rawBody)) {
+    try {
+      body = JSON.parse(req.rawBody.toString("utf8"));
+    } catch {
+      return res.sendStatus(400);
+    }
+  }
   if (!body) return res.sendStatus(400);
 
   const debug = String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true";

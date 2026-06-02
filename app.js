@@ -15,6 +15,20 @@ const { getMetaAppConfig } = require("@core/config/metaAppConfig");
 
 const app = express();
 
+function isMetaWebhookPath(pathname) {
+  const normalized = String(pathname || "").split("?")[0];
+  return [
+    "/webhooks/meta/whatsapp",
+    "/webhooks/whatsapp",
+    "/webhooks/webhook",
+    "/api/webhooks/meta/whatsapp",
+    "/api/webhooks/whatsapp",
+    "/api/webhooks/webhook",
+    "/webhook",
+    "/api/webhook",
+  ].includes(normalized);
+}
+
 // If you're behind a reverse proxy (Render, Heroku, Nginx), this helps IP-based rate limits/logging.
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
@@ -50,7 +64,16 @@ console.info("[startup] env status", {
   tokenEncryptionSecretLength: startupTokenEncSecret.length,
   metaGraphVersion: String(process.env.META_GRAPH_VERSION || "v22.0"),
 });
-app.use(express.json({ limit: "10mb" }));
+app.use(
+  express.json({
+    limit: "10mb",
+    verify: (req, res, buf) => {
+      if (!isMetaWebhookPath(req.originalUrl || req.url)) return;
+      if (!buf || !buf.length) return;
+      req.rawBody = Buffer.from(buf);
+    },
+  })
+);
 app.use(express.urlencoded({ extended: false }));
 const normalizedCorsOrigins = Array.isArray(corsOrigins)
   ? corsOrigins.map((origin) => String(origin || "").trim().replace(/\/+$/, "")).filter(Boolean)

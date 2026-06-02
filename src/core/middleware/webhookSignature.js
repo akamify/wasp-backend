@@ -5,10 +5,11 @@ const { HttpError } = require("@shared/utils/httpError");
 function verifyMetaSignature({ rawBody, signature, secret }) {
   if (!rawBody || !Buffer.isBuffer(rawBody)) return false;
   if (!signature || typeof signature !== "string") return false;
-  if (!signature.startsWith("sha256=")) return false;
+  const normalizedSignature = String(signature || "").trim();
+  if (!normalizedSignature.startsWith("sha256=")) return false;
   const expected = `sha256=${crypto.createHmac("sha256", secret).update(rawBody).digest("hex")}`;
-  if (Buffer.byteLength(signature) !== Buffer.byteLength(expected)) return false;
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  if (Buffer.byteLength(normalizedSignature) !== Buffer.byteLength(expected)) return false;
+  return crypto.timingSafeEqual(Buffer.from(normalizedSignature), Buffer.from(expected));
 }
 
 function verifyWebhookSignature(req, res, next) {
@@ -35,7 +36,7 @@ function verifyWebhookSignature(req, res, next) {
     return next(new HttpError(500, "META_APP_SECRET is required to verify webhook signatures"));
   }
 
-  const signature = req.headers["x-hub-signature-256"];
+  const signature = String(req.headers["x-hub-signature-256"] || "").trim();
   if (!signature || typeof signature !== "string") {
     if (String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true") {
       // eslint-disable-next-line no-console
@@ -45,7 +46,7 @@ function verifyWebhookSignature(req, res, next) {
     return next(new HttpError(401, "Missing X-Hub-Signature-256 header"));
   }
 
-  const rawBody = Buffer.isBuffer(req.body) ? req.body : req.rawBody;
+  const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.isBuffer(req.body) ? req.body : null;
   if (!rawBody) {
     if (String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true") {
       // eslint-disable-next-line no-console
