@@ -1,7 +1,6 @@
 const { metaWebhookVerifyToken } = require("@core/config/env");
 const { findTenantByPhoneNumberId, findTenantByWabaId } = require("@shared/services/credentialsService");
 const { Message } = require("@infra/database/Message");
-const { ProcessedWebhookEvent } = require("@infra/database/ProcessedWebhookEvent");
 const mongoose = require("mongoose");
 const { touchConversation } = require("@shared/services/conversationService");
 const { normalizePhone, touchContactFromMessage } = require("@shared/services/contactService");
@@ -15,6 +14,13 @@ const { Workspace } = require("@infra/database/Workspace");
 const WEBHOOK_DEBUG_LIMIT = 40;
 const webhookDebugEventsByWorkspace = new Map();
 const crmEnabledCache = new Map();
+
+function maskId(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  if (text.length <= 6) return `${text.slice(0, 2)}***${text.slice(-2)}`;
+  return `${text.slice(0, 3)}***${text.slice(-3)}`;
+}
 
 async function isCrmEnabled(workspaceId) {
   const key = String(workspaceId || "");
@@ -288,10 +294,10 @@ async function receive(req, res) {
       const workspaceIdRaw = mongoose.Types.ObjectId.isValid(resolvedWorkspaceId) ? resolvedWorkspaceId : "";
 
       if (!workspaceIdRaw) {
-        if (debug) {
-          // eslint-disable-next-line no-console
-          console.warn("Webhook: workspace not resolved for phone_number_id.", phoneNumberId);
-        }
+        console.warn("[webhook] workspace not resolved for phone_number_id", {
+          maskedPhoneNumberId: maskId(phoneNumberId),
+          wamid: null,
+        });
         pushWebhookDebugEvent("unresolved", {
           type: "tenant_workspace_missing",
           phoneNumberId: String(phoneNumberId),
@@ -300,6 +306,10 @@ async function receive(req, res) {
       }
 
       const hasValidWorkspaceId = mongoose.Types.ObjectId.isValid(workspaceIdRaw);
+      console.info("[webhook] workspace resolved", {
+        workspaceId: workspaceIdRaw,
+        maskedPhoneNumberId: maskId(phoneNumberId),
+      });
       pushWebhookDebugEvent(workspaceIdRaw, {
         type: "incoming",
         object: body?.object || null,
@@ -461,6 +471,13 @@ async function receive(req, res) {
         const ts = asDateFromSeconds(m.timestamp);
         const resolvedWabaId = wabaIdFromEntry || tenant?.wabaId || tenant?.businessAccountIdPlain || "";
         const type = String(m.type || "").trim().toLowerCase();
+        // eslint-disable-next-line no-console
+        console.info("[webhook] inbound message parsed", {
+          maskedPhoneNumberId: maskId(phoneNumberId),
+          from,
+          type,
+          wamid: waId,
+        });
         const isDeletedOrUnsupported =
           type === "unsupported" ||
           type === "deleted" ||
@@ -493,14 +510,21 @@ async function receive(req, res) {
           : m.text?.body || (type && !mediaTypes.has(type) ? `[${type}]` : "");
 
         try {
-          const eventKey = `inbound:${waId}`;
-          const dedupe = await ProcessedWebhookEvent.updateOne(
-            { provider: "meta", workspaceId: workspaceIdRaw, eventKey },
-            { $setOnInsert: { provider: "meta", workspaceId: workspaceIdRaw, eventKey, processedAt: new Date() } },
-            { upsert: true }
-          );
-          const isDuplicate = Number(dedupe?.upsertedCount || 0) === 0;
-          if (isDuplicate) continue;
+          const duplicateCheck = await Message.findOne({
+            workspaceId: workspaceIdRaw,
+            ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
+            whatsappMessageId: waId,
+          })
+            .select("_id")
+            .lean();
+          if (duplicateCheck) {
+            console.info("[webhook] duplicate inbound ignored", {
+              workspaceId: workspaceIdRaw,
+              maskedPhoneNumberId: maskId(phoneNumberId),
+              wamid: waId,
+            });
+            continue;
+          }
 
           const msgDoc = await Message.findOneAndUpdate(
             { workspaceId: workspaceIdRaw, ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}), whatsappMessageId: waId },
@@ -557,6 +581,11 @@ async function receive(req, res) {
             occurredAt: ts,
             name: nameByWaId.get(from) || undefined,
           });
+          console.info("[webhook] inbound message saved", {
+            workspaceId: workspaceIdRaw,
+            conversationId: convo?._id ? String(convo._id) : null,
+            messageId: msgDoc?._id ? String(msgDoc._id) : null,
+          });
           publishWorkspaceEvent(workspaceIdRaw, {
             type: "message_inbound",
             phone: from,
@@ -579,6 +608,14 @@ async function receive(req, res) {
             // Never break webhook delivery for CRM enqueue failures.
           }
         } catch (messageErr) {
+          if (Number(messageErr?.code) === 11000 || /duplicate key/i.test(String(messageErr?.message || ""))) {
+            console.info("[webhook] duplicate inbound ignored", {
+              workspaceId: workspaceIdRaw,
+              maskedPhoneNumberId: maskId(phoneNumberId),
+              wamid: waId,
+            });
+            continue;
+          }
           pushWebhookDebugEvent(workspaceIdRaw, {
             type: "inbound_update_error",
             waId,

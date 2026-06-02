@@ -11,8 +11,6 @@ const rateLimiters = require("@core/middleware/rateLimiters");
 const { notFound, errorHandler } = require("@core/middleware/errorHandler");
 const { appBrandName, corsOrigins } = require("@core/config/env");
 const { registerRoutes } = require("@core/routes/registerRoutes");
-const { verifyWebhookSignature } = require("@core/middleware/webhookSignature");
-const { receive } = require("@modules/webhooks/controllers/webhook.controller");
 const { getMetaAppConfig } = require("@core/config/metaAppConfig");
 
 const app = express();
@@ -23,14 +21,19 @@ app.disable("x-powered-by");
 // API is dynamic; avoid 304/ETag surprises that can lead to empty bodies in XHR clients.
 app.set("etag", false);
 
-const rawWebhook = express.raw({ type: "*/*" });
-const webhookPostHandler = [rawWebhook, verifyWebhookSignature, receive];
-app.post("/webhooks/meta/whatsapp", ...webhookPostHandler);
-app.post("/api/webhooks/meta/whatsapp", ...webhookPostHandler);
-app.post("/webhooks/whatsapp", ...webhookPostHandler);
-app.post("/api/webhooks/whatsapp", ...webhookPostHandler);
-app.post("/webhook", ...webhookPostHandler);
-app.post("/api/webhook", ...webhookPostHandler);
+app.use(
+  [
+    "/webhooks/meta/whatsapp",
+    "/webhooks/whatsapp",
+    "/webhooks/webhook",
+    "/api/webhooks/meta/whatsapp",
+    "/api/webhooks/whatsapp",
+    "/api/webhooks/webhook",
+    "/webhook",
+    "/api/webhook",
+  ],
+  express.raw({ type: "application/json", limit: "10mb" })
+);
 
 const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
 const { metaAppId: startupMetaAppId, metaAppSecret: startupMetaAppSecret, metaAppSecretSource } = getMetaAppConfig();

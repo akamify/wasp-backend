@@ -74,31 +74,37 @@ function verifyWebhookSignature(req, res, next) {
   }
 
   if (!verified) {
-    if (String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true") {
-      // eslint-disable-next-line no-console
-      console.warn("Webhook signature mismatch.", {
-        route: req.originalUrl || req.url,
-        metaAppId,
-        hasSignature: true,
-        rawBodyLength: rawBody.length,
-        expectedLength: expected.length,
-        receivedLength: signature.length,
-        expectedHashPrefix: expected.replace("sha256=", "").slice(0, 8),
-        receivedHashPrefix: signature.replace("sha256=", "").slice(0, 8),
-        signatureVerified: false,
-      });
-    }
+    // eslint-disable-next-line no-console
+    console.warn("[webhook] signature mismatch", {
+      route: req.originalUrl || req.url,
+      metaAppId,
+      hasSignature: true,
+      rawBodyLength: rawBody.length,
+      expectedLength: expected.length,
+      receivedLength: signature.length,
+      expectedHashPrefix: expected.replace("sha256=", "").slice(0, 8),
+      receivedHashPrefix: signature.replace("sha256=", "").slice(0, 8),
+      signatureVerified: false,
+    });
     if (!isProd) return next();
     return next(new HttpError(401, "Invalid webhook signature"));
   }
 
   if (Buffer.isBuffer(req.body)) {
+    req.rawBody = rawBody;
     try {
       req.body = JSON.parse(rawBody.toString("utf8"));
     } catch {
       return next(new HttpError(400, "Invalid webhook JSON payload"));
     }
   }
+
+  // eslint-disable-next-line no-console
+  console.info("[webhook] signature verified", {
+    route: req.originalUrl || req.url,
+    rawBodyLength: rawBody.length,
+    signatureVerified: true,
+  });
 
   return next();
 }
