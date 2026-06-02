@@ -9,6 +9,10 @@ function mapWorkspaceListItem(workspace) {
     defaultCurrency: workspace.defaultCurrency || "INR",
     timezone: workspace.timezone || "Asia/Calcutta",
     industry: workspace.industry || null,
+    allowedApiPermissions: {
+      campaignSend: Boolean(workspace?.allowedApiPermissions?.campaignSend),
+      chatAccess: Boolean(workspace?.allowedApiPermissions?.chatAccess),
+    },
     createdAt: workspace.createdAt,
   };
 }

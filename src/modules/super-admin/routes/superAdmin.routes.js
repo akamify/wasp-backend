@@ -59,6 +59,7 @@ router.post(
   validate(Joi.object({ userId: Joi.string().required() })),
   asyncHandler(c.resetUserPassword)
 );
+router.post("/workspaces/:workspaceId/whatsapp/connection/force-embedded-active", asyncHandler(c.forceEmbeddedActiveWhatsAppConnection));
 router.get("/security-logs", asyncHandler(c.securityLogs));
 
 module.exports = router;

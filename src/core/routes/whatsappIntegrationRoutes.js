@@ -9,7 +9,7 @@ const {
   getWhatsAppConnection,
   disconnectWhatsAppConnection,
 } = require("@modules/meta/controllers/metaEmbeddedSignup.controller");
-const { refreshConnectionMetadata } = require("@modules/meta/controllers/metaConnectionMetadata.controller");
+const { refreshConnectionMetadata, forceEmbeddedActiveConnection: forceEmbeddedActiveFromMeta } = require("@modules/meta/controllers/metaConnectionMetadata.controller");
 const { syncMetaTemplates } = require("@modules/templates/controllers/templates.controller");
 const { requireWorkspacePermission } = require("@modules/workspaces/middleware/requireWorkspacePermission");
 
@@ -32,6 +32,7 @@ router.post(
 );
 router.post("/disconnect", auth, requireWorkspace, requireWorkspacePermission("whatsapp.disconnect"), asyncHandler(disconnectWhatsAppConnection));
 router.post("/connection/refresh-metadata", auth, requireWorkspace, requireWorkspacePermission("whatsapp.view"), asyncHandler(refreshConnectionMetadata));
+router.post("/connection/force-embedded-active", auth, requireWorkspace, requireWorkspacePermission("whatsapp.disconnect"), asyncHandler(forceEmbeddedActiveFromMeta));
 router.post("/templates/refresh", auth, requireWorkspace, requireWorkspacePermission("templates.view"), asyncHandler(syncMetaTemplates));
 
 module.exports = router;

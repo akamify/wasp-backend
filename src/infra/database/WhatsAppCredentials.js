@@ -24,6 +24,9 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
     wabaId: { type: String, default: null, index: true },
 
     graphApiVersion: { type: String, default: "v22.0" },
+    connectionMode: { type: String, default: null, index: true },
+    tokenType: { type: String, default: null, index: true },
+    tokenDebugSummary: { type: mongoose.Schema.Types.Mixed, default: null },
     isValid: { type: Boolean, default: false },
     lastValidatedAt: { type: Date },
     displayPhoneNumber: { type: String, default: null },

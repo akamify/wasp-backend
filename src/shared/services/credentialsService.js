@@ -2,10 +2,10 @@ const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { decryptString } = require("@shared/utils/crypto");
 const { hashForLookup } = require("@shared/utils/hash");
 const { HttpError } = require("@shared/utils/httpError");
-const { resolveActiveConnection } = require("@shared/services/whatsappConnectionService");
+const { requireEmbeddedSignupConnection } = require("@shared/services/whatsappConnectionService");
 
 async function getCredentialsForUser(userId) {
-  const connection = await resolveActiveConnection(userId);
+  const connection = await requireEmbeddedSignupConnection(userId);
   if (!connection) throw new HttpError(400, "Active WhatsApp connection not configured");
 
   return {

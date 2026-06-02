@@ -10,8 +10,10 @@ const {
   refreshWhatsAppConnectionMetadata,
   serializeWhatsAppConnection,
 } = require("@shared/services/whatsappConnectionMetadataService");
+const { isEmbeddedSignupConnection } = require("@shared/services/whatsappConnectionService");
 const templatesService = require("@modules/templates/services/templates.service");
 const { logWorkspaceActivity } = require("@modules/workspaces/services/workspaceActivity.service");
+const { Workspace } = require("@infra/database/Workspace");
 
 function graphBaseUrl() {
   const version = process.env.META_GRAPH_VERSION || "v25.0";
@@ -50,6 +52,27 @@ function maskPhone(value) {
 
 function sanitizeScope(value) {
   return String(value || "").replace(/[^a-zA-Z0-9_.:-]/g, "").slice(0, 100);
+}
+
+function buildTokenDebugSummary(tokenDebugData) {
+  if (!tokenDebugData) return null;
+  const granularScopes = Array.isArray(tokenDebugData.granular_scopes)
+    ? tokenDebugData.granular_scopes.map((scope) => ({
+        scope: sanitizeScope(scope?.scope),
+        target_ids: Array.isArray(scope?.target_ids) ? scope.target_ids.map((targetId) => maskId(targetId)) : [],
+      }))
+    : [];
+  return {
+    appId: tokenDebugData.app_id ? maskId(tokenDebugData.app_id) : null,
+    type: tokenDebugData.type || null,
+    application: tokenDebugData.application || null,
+    userId: tokenDebugData.user_id || null,
+    isValid: Boolean(tokenDebugData.is_valid),
+    expiresAt: tokenDebugData.expires_at ? new Date(Number(tokenDebugData.expires_at) * 1000).toISOString() : null,
+    issuedAt: tokenDebugData.issued_at ? new Date(Number(tokenDebugData.issued_at) * 1000).toISOString() : null,
+    scopes: Array.isArray(tokenDebugData.scopes) ? tokenDebugData.scopes.map(sanitizeScope).filter(Boolean) : [],
+    granularScopes,
+  };
 }
 
 function logGraphCall({ operation, path, wabaId, phoneNumberId }) {
@@ -178,8 +201,24 @@ async function exchangeEmbeddedSignupCode(req, res) {
   if (debugTokenData?.is_valid !== true) {
     throw new HttpError(400, "Meta returned an invalid business token. Please reconnect WhatsApp.");
   }
-  if (!targetIncludesWaba) {
-    throw new HttpError(400, "Meta business token does not grant access to the WABA returned by the signup popup. Please reconnect WhatsApp.");
+  if (scopes.includes("public_profile") && scopes.length === 1) {
+    throw new HttpError(
+      400,
+      "Meta did not grant WhatsApp permissions. For testing, use an app-role user. For production, complete App Review/Advanced Access."
+    );
+  }
+  const hasWhatsAppScope = scopes.includes("whatsapp_business_management") || scopes.includes("whatsapp_business_messaging");
+  if (!hasWhatsAppScope) {
+    throw new HttpError(
+      400,
+      "Meta token is missing whatsapp_business_management. Reconnect with Embedded Signup or complete App Review/Advanced Access."
+    );
+  }
+  if (granularScopes.length > 0 && !targetIncludesWaba) {
+    throw new HttpError(
+      400,
+      "This token does not grant access to the currently connected WABA. Remove old Business Integration and reconnect."
+    );
   }
 
   let validatedPhoneNumber = null;
@@ -281,6 +320,9 @@ async function exchangeEmbeddedSignupCode(req, res) {
     businessAccountIdPlain: wabaId,
     phoneNumberId: String(validatedPhoneNumber.id),
     wabaId,
+    connectionMode: "customer_embedded_signup",
+    tokenType: "embedded_signup_customer_token",
+    tokenDebugSummary: buildTokenDebugSummary(debugTokenData),
     displayPhoneNumber: String(validatedPhoneNumber?.display_phone_number || "").trim() || null,
     graphApiVersion: process.env.META_GRAPH_VERSION || "v25.0",
     isValid: true,
@@ -342,7 +384,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
 
 async function getWhatsAppConnection(req, res) {
   const row = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select(
-    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain wabaName verifiedName nameStatus qualityRating codeVerificationStatus platformType accountMode throughput messagingLimitTier messagingLimitTierCached businessProfile lastMetadataSyncAt metadataFetchStatus metadataWarnings isValid isActive"
+    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain wabaName verifiedName nameStatus qualityRating codeVerificationStatus platformType accountMode throughput messagingLimitTier messagingLimitTierCached businessProfile lastMetadataSyncAt metadataFetchStatus metadataWarnings isValid isActive connectionMode tokenType tokenDebugSummary"
   );
   if (!row) {
     return res.json(serializeWhatsAppConnection(null));
@@ -383,8 +425,66 @@ async function disconnectWhatsAppConnection(req, res) {
   return res.json({ success: true, status: "disconnected" });
 }
 
+async function forceEmbeddedActiveConnection(req, res) {
+  const workspace = await Workspace.findById(req.workspace.id).select("ownerId ownerUserId");
+  const isOwner = String(workspace?.ownerUserId || workspace?.ownerId || "") === String(req.user?.id || "");
+  const isSuperAdmin = String(req.user?.role || "") === "super_admin";
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+  if (!isOwner && !isSuperAdmin) {
+    throw new HttpError(403, "Owner or super admin access required");
+  }
+
+  const rows = await WhatsAppCredentials.find({ workspaceId: req.workspace.id, isActive: { $ne: false } })
+    .sort({ connectedAt: -1, updatedAt: -1 })
+    .select(
+      "_id wabaId phoneNumberId displayPhoneNumber wabaName connectionMode tokenType tokenDebugSummary connectedAt updatedAt status isActive"
+    );
+  const embedded = rows.find(isEmbeddedSignupConnection) || null;
+  if (!embedded) {
+    throw new HttpError(404, "No Embedded Signup connection found for this workspace.");
+  }
+
+  const now = new Date();
+  const deactivated = await WhatsAppCredentials.updateMany(
+    { workspaceId: req.workspace.id, isActive: { $ne: false }, _id: { $ne: embedded._id } },
+    { $set: { isActive: false, status: "disconnected", disconnectedAt: now } }
+  );
+  await WhatsAppCredentials.updateOne(
+    { _id: embedded._id },
+    {
+      $set: {
+        isActive: true,
+        status: "active",
+        disconnectedAt: null,
+        connectionMode: "customer_embedded_signup",
+        tokenType: "embedded_signup_customer_token",
+      },
+    }
+  );
+
+  // eslint-disable-next-line no-console
+  console.info("[whatsapp-connection] old manual connection deactivated", {
+    workspaceId: String(req.workspace.id),
+    maskedWabaId: maskId(embedded.wabaId),
+    deactivatedCount: Number(deactivated?.modifiedCount || 0),
+  });
+
+  await markTemplatesStaleForInactiveWabas({ workspaceId: req.workspace.id, activeWabaId: embedded.wabaId });
+  await refreshWhatsAppConnectionMetadata(req.workspace.id).catch(() => null);
+  await templatesService.syncMetaTemplates({ workspace: req.workspace, body: {} }).catch(() => null);
+
+  const latest = await WhatsAppCredentials.findById(embedded._id).select(
+    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain wabaName verifiedName nameStatus qualityRating codeVerificationStatus platformType accountMode throughput messagingLimitTier messagingLimitTierCached businessProfile lastMetadataSyncAt metadataFetchStatus metadataWarnings isValid isActive connectionMode tokenType tokenDebugSummary"
+  );
+  return res.json({
+    success: true,
+    connection: serializeWhatsAppConnection(latest),
+  });
+}
+
 module.exports = {
   exchangeEmbeddedSignupCode,
   getWhatsAppConnection,
   disconnectWhatsAppConnection,
+  forceEmbeddedActiveConnection,
 };

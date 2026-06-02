@@ -1,4 +1,5 @@
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
+const { HttpError } = require("@shared/utils/httpError");
 const { decryptString } = require("@shared/utils/crypto");
 
 function maskId(value) {
@@ -16,16 +17,30 @@ function activeConnectionFilter(workspaceId, { requireValid = true } = {}) {
   };
 }
 
+function isEmbeddedSignupConnection(doc) {
+  const connectionMode = String(doc?.connectionMode || "").toLowerCase();
+  const tokenType = String(doc?.tokenType || "").toLowerCase();
+  const connectionMethod = String(doc?.connectionMethod || "").toLowerCase();
+  return (
+    connectionMode === "customer_embedded_signup" ||
+    tokenType === "embedded_signup_customer_token" ||
+    tokenType === "business_integration_token" ||
+    connectionMethod === "embedded_signup"
+  );
+}
+
 async function findActiveConnectionDocument(workspaceId, select = "", options = {}) {
-  return WhatsAppCredentials.findOne(activeConnectionFilter(workspaceId, options))
+  const docs = await WhatsAppCredentials.find(activeConnectionFilter(workspaceId, options))
     .sort({ connectedAt: -1, updatedAt: -1 })
     .select(select);
+  if (!docs.length) return null;
+  return docs.find(isEmbeddedSignupConnection) || docs[0] || null;
 }
 
 async function resolveActiveConnection(workspaceId, options = {}) {
   const doc = await findActiveConnectionDocument(
     workspaceId,
-    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain graphApiVersion displayPhoneNumber wabaName connectedAt",
+    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc +tokenDebugSummary phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain graphApiVersion displayPhoneNumber wabaName connectedAt connectionMode tokenType",
     options
   );
   if (!doc) return null;
@@ -34,24 +49,31 @@ async function resolveActiveConnection(workspaceId, options = {}) {
   const phoneNumberId = String(doc.phoneNumberId || doc.phoneNumberIdPlain || decryptString(doc.phoneNumberIdEnc) || "").trim();
   const accessToken = decryptString(doc.accessTokenEnc);
 
+  const embedded = isEmbeddedSignupConnection(doc);
+  const logTag = embedded ? "[whatsapp-connection] active embedded connection resolved" : "[whatsapp-connection] active manual connection resolved";
   // eslint-disable-next-line no-console
-  console.info("[whatsapp-metadata] active connection resolved", {
+  console.info(logTag, {
     workspaceId: String(workspaceId),
     maskedWabaId: maskId(wabaId),
     maskedPhoneNumberId: maskId(phoneNumberId),
   });
-  // eslint-disable-next-line no-console
-  console.info("[templates] active connection resolved", {
-    workspaceId: String(workspaceId),
-    maskedWabaId: maskId(wabaId),
-    maskedPhoneNumberId: maskId(phoneNumberId),
-  });
+  if (!embedded && String(doc?.tokenDebugSummary?.type || "").toUpperCase() === "SYSTEM_USER") {
+    // eslint-disable-next-line no-console
+    console.warn("[whatsapp-connection] active connection uses system-user token", {
+      workspaceId: String(workspaceId),
+      maskedWabaId: maskId(wabaId),
+      maskedPhoneNumberId: maskId(phoneNumberId),
+    });
+  }
 
   return {
     doc,
     accessToken,
     wabaId,
     phoneNumberId,
+    connectionMode: doc.connectionMode || null,
+    tokenType: doc.tokenType || null,
+    tokenDebug: doc.tokenDebugSummary || null,
     displayPhoneNumber: doc.displayPhoneNumber || null,
     wabaName: doc.wabaName || null,
     graphApiVersion: doc.graphApiVersion,
@@ -59,9 +81,21 @@ async function resolveActiveConnection(workspaceId, options = {}) {
   };
 }
 
+async function requireEmbeddedSignupConnection(workspaceId) {
+  const connection = await resolveActiveConnection(workspaceId);
+  if (!connection) throw new HttpError(400, "Active WhatsApp connection not configured");
+  if (!isEmbeddedSignupConnection(connection.doc)) {
+    throw new HttpError(409, "This workspace is using a manual/system-user token. Reconnect with Embedded Signup to use customer self-connect.");
+  }
+  return connection;
+}
+
 module.exports = {
   activeConnectionFilter,
   findActiveConnectionDocument,
-  maskId,
+  isEmbeddedSignupConnection,
+  requireEmbeddedSignupConnection,
   resolveActiveConnection,
+  maskId,
+  getActiveWhatsAppConnection: resolveActiveConnection,
 };

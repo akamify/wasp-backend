@@ -10,6 +10,8 @@ const { sha256Hex } = require("@shared/utils/hash");
 const { base64Url } = require("@modules/auth/auth.utils");
 const { superAdminEmail } = require("@core/config/env");
 const { normalizeStatus, validateAdminStatusTransition } = require("@shared/utils/userStatus");
+const { Workspace } = require("@infra/database/Workspace");
+const { forceEmbeddedActiveConnection: forceEmbeddedActiveWhatsApp } = require("@modules/meta/controllers/metaConnectionMetadata.controller");
 const STRONG_PASS_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s]).{8}$/;
 
 function generateStrongTempPassword(length = 8) {
@@ -649,6 +651,15 @@ async function decideAdminProfileRequest(req, res) {
   return res.json({ success: true, decision });
 }
 
+async function forceEmbeddedActiveWhatsAppConnection(req, res) {
+  const workspaceId = String(req.params.workspaceId || "").trim();
+  if (!workspaceId) throw new HttpError(400, "workspaceId is required");
+  const workspace = await Workspace.findById(workspaceId).select("_id");
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+  req.workspace = { id: String(workspace._id) };
+  return forceEmbeddedActiveWhatsApp(req, res);
+}
+
 module.exports = {
   assignAdmin,
   removeAdmin,
@@ -665,4 +676,5 @@ module.exports = {
   verifyProfileOtp,
   setProfile2fa,
   decideAdminProfileRequest,
+  forceEmbeddedActiveWhatsAppConnection,
 };

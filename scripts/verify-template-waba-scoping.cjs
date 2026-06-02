@@ -43,8 +43,8 @@ const embeddedSignup = fs.readFileSync(path.join(root, "src/modules/meta/control
 const outboundMessageService = fs.readFileSync(path.join(root, "src/shared/services/outboundMessageService.js"), "utf8");
 assert(routes.includes('"/templates/refresh"'));
 assert(routes.includes('"/connection/refresh-metadata"'));
-assert(sender.includes("Meta token is missing business_management."));
-assert(sender.includes("whatsapp_business_manage_events"));
+assert(sender.includes("Meta token is missing whatsapp_business_management."));
+assert(sender.includes("[templates] business_management not required for this operation"));
 assert(templatesService.includes('staleReason: "old_waba_connection"'));
 assert(templatesService.includes("Removed stale local template from previous WhatsApp account."));
 assert(templatesService.includes("meta template not found -> local cleanup"));

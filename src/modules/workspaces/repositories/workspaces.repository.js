@@ -74,6 +74,7 @@ async function setExternalChatFeature({ workspaceId, enabled }) {
     : {
       $set: {
         "features.externalChatApiAccess": false,
+        "allowedApiPermissions.chatAccess": false,
       },
     };
 

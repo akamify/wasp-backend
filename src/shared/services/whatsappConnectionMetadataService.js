@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { resolveActiveConnection, maskId } = require("@shared/services/whatsappConnectionService");
+const { resolveActiveConnection, maskId, isEmbeddedSignupConnection } = require("@shared/services/whatsappConnectionService");
 
 const WABA_FIELDS = "id,name,currency,timezone_id,message_template_namespace";
 const PHONE_FIELDS =
@@ -80,10 +80,31 @@ function serializeWhatsAppConnection(doc) {
   }
   const wabaId = String(doc.wabaId || doc.businessAccountIdPlain || "").trim();
   const phoneNumberId = String(doc.phoneNumberId || doc.phoneNumberIdPlain || "").trim();
+  const tokenDebug = doc.tokenDebugSummary || null;
+  const activeIsSystemUser = String(tokenDebug?.type || "").toUpperCase() === "SYSTEM_USER";
+  const manualOrLegacyConnection = !isEmbeddedSignupConnection(doc);
   return {
     connected: Boolean(doc.isActive && doc.isValid),
     status: doc.status || (doc.isValid ? "active" : "pending"),
     connectionStatus: computeConnectionStatus(doc),
+    connectionMode: doc.connectionMode || null,
+    tokenType: doc.tokenType || null,
+    tokenDebug: tokenDebug
+      ? {
+          appId: tokenDebug.appId || null,
+          type: tokenDebug.type || null,
+          application: tokenDebug.application || null,
+          userId: tokenDebug.userId || null,
+          isValid: Boolean(tokenDebug.isValid),
+          expiresAt: tokenDebug.expiresAt || null,
+          issuedAt: tokenDebug.issuedAt || null,
+          scopes: Array.isArray(tokenDebug.scopes) ? tokenDebug.scopes : [],
+          granularScopes: Array.isArray(tokenDebug.granularScopes) ? tokenDebug.granularScopes : [],
+        }
+      : null,
+    warning: activeIsSystemUser || manualOrLegacyConnection
+      ? "This workspace is using a manual/system-user token. Reconnect with Embedded Signup to use customer self-connect."
+      : null,
     wabaName: doc.wabaName || null,
     maskedWabaId: maskId(wabaId) || null,
     displayPhoneNumber: doc.displayPhoneNumber || null,

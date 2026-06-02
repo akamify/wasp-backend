@@ -12,9 +12,7 @@ const { templatesRepository } = require("@modules/templates/repositories/index")
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
 const { assertTemplateBelongsToWaba } = require("@shared/services/templateOwnershipService");
 const { logWorkspaceActivity } = require("@modules/workspaces/services/workspaceActivity.service");
-
-const MISSING_BUSINESS_MANAGEMENT =
-  "Meta token is missing business_management. Regenerate the System User token with business_management, whatsapp_business_management, whatsapp_business_messaging, and whatsapp_business_manage_events, then reconnect WhatsApp.";
+const { isEmbeddedSignupConnection } = require("@shared/services/whatsappConnectionService");
 
 function normalizeRemoteStatus(status) {
   const s = String(status || "").toLowerCase();
@@ -77,15 +75,24 @@ function isMetaTemplateNotFound(err) {
 
 function permissionSubmitMessage(err) {
   const providerError = String(err?.providerError || "");
-  if (providerError.startsWith("Meta token is missing business_management.")) {
-    return MISSING_BUSINESS_MANAGEMENT;
+  if (providerError) {
+    return providerError;
   }
-  return providerError || err?.message || "Template submission failed";
+  return err?.message || "Template submission failed";
 }
 
 async function requireActiveConnection(workspaceId) {
   const connection = await resolveActiveConnection(workspaceId);
   if (!connection) throw new HttpError(400, "Active WhatsApp connection not configured");
+  if (!isEmbeddedSignupConnection(connection.doc)) {
+    throw new HttpError(409, "This workspace is using a manual/system-user token. Reconnect with Embedded Signup to use customer self-connect.");
+  }
+  // eslint-disable-next-line no-console
+  console.info("[templates] using embedded signup token", {
+    workspaceId: String(workspaceId),
+    maskedWabaId: maskId(connection.wabaId),
+    tokenType: connection.tokenType || null,
+  });
   return connection;
 }
 
@@ -110,14 +117,6 @@ async function createTemplate(req) {
     });
   } catch (err) {
     const message = permissionSubmitMessage(err);
-    if (message === MISSING_BUSINESS_MANAGEMENT) {
-      // eslint-disable-next-line no-console
-      console.warn("[templates] submit failed permission", {
-        workspaceId: String(req.workspace.id),
-        maskedWabaId: maskId(connection.wabaId),
-        missingScope: "business_management",
-      });
-    }
     throw new HttpError(400, message, {
       message,
       metaDebug: err.metaDebug || null,
@@ -157,6 +156,16 @@ async function listTemplates(req) {
   const connection = await resolveActiveConnection(req.workspace.id);
   if (!connection) {
     return { success: true, templates: [], metadata: connectionMetadata(null) };
+  }
+  if (!isEmbeddedSignupConnection(connection.doc)) {
+    return {
+      success: true,
+      templates: [],
+      metadata: {
+        ...connectionMetadata(connection, 0, 0),
+        warning: "This workspace is using a manual/system-user token. Reconnect with Embedded Signup to use customer self-connect.",
+      },
+    };
   }
 
   const [templates, staleTemplateCount] = await Promise.all([
@@ -309,14 +318,6 @@ async function submitForApproval(req) {
     });
   } catch (err) {
     const message = permissionSubmitMessage(err);
-    if (message === MISSING_BUSINESS_MANAGEMENT) {
-      // eslint-disable-next-line no-console
-      console.warn("[templates] submit failed permission", {
-        workspaceId: String(req.workspace.id),
-        maskedWabaId: maskId(connection.wabaId),
-        missingScope: "business_management",
-      });
-    }
     throw new HttpError(400, message, { message, metaDebug: err.metaDebug || null, tokenDebug: err.tokenDebug || null });
   }
 

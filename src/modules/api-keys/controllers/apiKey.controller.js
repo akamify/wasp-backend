@@ -56,6 +56,14 @@ async function disableCampaignSend(req, res) {
   res.json(await permissionService.disableCampaignSend({ userId: req.params.id }));
 }
 
+async function enableWorkspaceCampaignSend(req, res) {
+  res.json(await permissionService.enableWorkspaceCampaignSend({ req, workspaceId: req.params.workspaceId }));
+}
+
+async function disableWorkspaceCampaignSend(req, res) {
+  res.json(await permissionService.disableWorkspaceCampaignSend({ req, workspaceId: req.params.workspaceId }));
+}
+
 async function enableKey(req, res) {
   res.json(await permissionService.setUserApiKeyState({ userId: req.params.id, keyId: req.params.keyId, revoked: false }));
 }
@@ -85,6 +93,14 @@ async function syncUserApiKeysChatAccess(req, res) {
   );
 }
 
+async function enableWorkspaceChatAccess(req, res) {
+  res.json(await permissionService.enableWorkspaceChatAccess({ req, workspaceId: req.params.workspaceId }));
+}
+
+async function disableWorkspaceChatAccess(req, res) {
+  res.json(await permissionService.disableWorkspaceChatAccess({ req, workspaceId: req.params.workspaceId }));
+}
+
 async function blockUser(req, res) {
   res.json(await permissionService.blockUser({ userId: req.params.id }));
 }
@@ -105,10 +121,14 @@ module.exports = {
   enableChatAccess,
   enableCampaignSend,
   disableCampaignSend,
+  enableWorkspaceCampaignSend,
+  disableWorkspaceCampaignSend,
   enableKey,
   disableKey,
   setApiKeyChatAccess,
   syncUserApiKeysChatAccess,
+  enableWorkspaceChatAccess,
+  disableWorkspaceChatAccess,
   blockUser,
   unblockUser,
 };

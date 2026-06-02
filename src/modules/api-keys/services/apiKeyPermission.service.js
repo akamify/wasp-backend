@@ -1,6 +1,7 @@
 const { HttpError } = require("@shared/utils/httpError");
 const repo = require("@modules/api-keys/repositories/apiKey.repository");
 const { writeAuditLog } = require("@shared/services/auditLog.service");
+const { workspacesRepository } = require("@modules/workspaces/repositories");
 
 async function enableChatAccess({ req, adminUserId, userId }) {
   const updated = await repo.updateUserSecurityFlags({
@@ -58,6 +59,52 @@ async function enableCampaignSend({ userId }) {
   });
   if (!updated) throw new HttpError(404, "User not found");
   return { success: true };
+}
+
+async function enableWorkspaceCampaignSend({ req, workspaceId }) {
+  const current = await workspacesRepository.findActiveWorkspaceById(workspaceId);
+  if (!current) throw new HttpError(404, "Workspace not found");
+  const workspace = await workspacesRepository.updateWorkspace({
+    workspaceId,
+    patch: {
+      allowedApiPermissions: {
+        campaignSend: true,
+        chatAccess: Boolean(current?.allowedApiPermissions?.chatAccess),
+      },
+    },
+    actorUserId: req?.user?.id || null,
+  });
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+  await writeAuditLog(req, {
+    action: "workspace.campaign_send_enabled",
+    resourceType: "workspace",
+    resourceId: String(workspaceId),
+    metadata: { workspaceId: String(workspaceId), enabled: true, actorId: req?.user?.id || null, actorRole: req?.user?.role || null },
+  });
+  return { success: true, workspace };
+}
+
+async function disableWorkspaceCampaignSend({ req, workspaceId }) {
+  const current = await workspacesRepository.findActiveWorkspaceById(workspaceId);
+  if (!current) throw new HttpError(404, "Workspace not found");
+  const workspace = await workspacesRepository.updateWorkspace({
+    workspaceId,
+    patch: {
+      allowedApiPermissions: {
+        campaignSend: false,
+        chatAccess: Boolean(current?.allowedApiPermissions?.chatAccess),
+      },
+    },
+    actorUserId: req?.user?.id || null,
+  });
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+  await writeAuditLog(req, {
+    action: "workspace.campaign_send_disabled",
+    resourceType: "workspace",
+    resourceId: String(workspaceId),
+    metadata: { workspaceId: String(workspaceId), enabled: false, actorId: req?.user?.id || null, actorRole: req?.user?.role || null },
+  });
+  return { success: true, workspace };
 }
 
 async function disableCampaignSend({ userId }) {
@@ -159,11 +206,63 @@ async function bulkSyncApiKeysChatAccess({ req, userId, enabled }) {
   return { success: true, message: "API key chat access bulk sync completed successfully." };
 }
 
+async function enableWorkspaceChatAccess({ req, workspaceId }) {
+  const current = await workspacesRepository.findActiveWorkspaceById(workspaceId);
+  if (!current) throw new HttpError(404, "Workspace not found");
+  const workspace = await workspacesRepository.setExternalChatFeature({ workspaceId, enabled: true });
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+  await workspacesRepository.updateWorkspace({
+    workspaceId,
+    patch: {
+      allowedApiPermissions: {
+        campaignSend: Boolean(current?.allowedApiPermissions?.campaignSend),
+        chatAccess: true,
+      },
+    },
+    actorUserId: req?.user?.id || null,
+  });
+  await writeAuditLog(req, {
+    action: "workspace.chat_access_enabled",
+    resourceType: "workspace",
+    resourceId: String(workspaceId),
+    metadata: { workspaceId: String(workspaceId), enabled: true, actorId: req?.user?.id || null, actorRole: req?.user?.role || null },
+  });
+  return { success: true, workspace };
+}
+
+async function disableWorkspaceChatAccess({ req, workspaceId }) {
+  const current = await workspacesRepository.findActiveWorkspaceById(workspaceId);
+  if (!current) throw new HttpError(404, "Workspace not found");
+  const workspace = await workspacesRepository.setExternalChatFeature({ workspaceId, enabled: false });
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+  await workspacesRepository.updateWorkspace({
+    workspaceId,
+    patch: {
+      allowedApiPermissions: {
+        campaignSend: Boolean(current?.allowedApiPermissions?.campaignSend),
+        chatAccess: false,
+      },
+    },
+    actorUserId: req?.user?.id || null,
+  });
+  await writeAuditLog(req, {
+    action: "workspace.chat_access_disabled",
+    resourceType: "workspace",
+    resourceId: String(workspaceId),
+    metadata: { workspaceId: String(workspaceId), enabled: false, actorId: req?.user?.id || null, actorRole: req?.user?.role || null },
+  });
+  return { success: true, workspace };
+}
+
 module.exports = {
   enableChatAccess,
   disableChatAccess,
   enableCampaignSend,
   disableCampaignSend,
+  enableWorkspaceChatAccess,
+  disableWorkspaceChatAccess,
+  enableWorkspaceCampaignSend,
+  disableWorkspaceCampaignSend,
   blockUser,
   unblockUser,
   setUserApiKeyState,

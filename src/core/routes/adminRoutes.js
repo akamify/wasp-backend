@@ -120,6 +120,10 @@ router.post(
 );
 router.patch("/users/:id/block", a("users.manage"), asyncHandler(apiKeyAdminController.blockUser));
 router.patch("/users/:id/unblock", a("users.manage"), asyncHandler(apiKeyAdminController.unblockUser));
+router.patch("/workspaces/:workspaceId/api-permissions/campaign-send/enable", a("users.manage"), asyncHandler(apiKeyAdminController.enableWorkspaceCampaignSend));
+router.patch("/workspaces/:workspaceId/api-permissions/campaign-send/disable", a("users.manage"), asyncHandler(apiKeyAdminController.disableWorkspaceCampaignSend));
+router.patch("/workspaces/:workspaceId/chat-access/enable", a("users.manage"), asyncHandler(apiKeyAdminController.enableWorkspaceChatAccess));
+router.patch("/workspaces/:workspaceId/chat-access/disable", a("users.manage"), asyncHandler(apiKeyAdminController.disableWorkspaceChatAccess));
 router.get("/channels", p("/admin/workspaces"), asyncHandler(adminListChannels));
 router.get("/workspaces", p("/admin/workspaces"), asyncHandler(adminListChannels));
 router.get("/master-campaigns", p("/admin/master-campaigns"), asyncHandler(adminListMasterCampaigns));

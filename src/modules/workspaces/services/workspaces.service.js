@@ -71,9 +71,26 @@ async function getWorkspaceOverview({ workspaceId, userId }) {
 
 async function updateWorkspace({ workspaceId, userId, payload }) {
   await requireWorkspacePermission(workspaceId, "workspace.update", userId);
+  const currentWorkspace = await workspacesRepository.findActiveWorkspaceById(workspaceId);
+  if (!currentWorkspace) throw new HttpError(404, "Workspace not found");
   const patch = {};
   for (const key of ["name", "businessName", "defaultCurrency", "timezone", "industry", "logoUrl", "avatarUrl"]) {
     if (payload?.[key] !== undefined) patch[key] = payload[key] || null;
+  }
+  if (payload?.allowedApiPermissions && typeof payload.allowedApiPermissions === "object") {
+    const currentPermissions = currentWorkspace?.allowedApiPermissions || {};
+    const allowedApiPermissions = {};
+    if (payload.allowedApiPermissions.campaignSend !== undefined) {
+      allowedApiPermissions.campaignSend = Boolean(payload.allowedApiPermissions.campaignSend);
+    } else if (currentPermissions.campaignSend !== undefined) {
+      allowedApiPermissions.campaignSend = Boolean(currentPermissions.campaignSend);
+    }
+    if (payload.allowedApiPermissions.chatAccess !== undefined) {
+      allowedApiPermissions.chatAccess = Boolean(payload.allowedApiPermissions.chatAccess);
+    } else if (currentPermissions.chatAccess !== undefined) {
+      allowedApiPermissions.chatAccess = Boolean(currentPermissions.chatAccess);
+    }
+    if (Object.keys(allowedApiPermissions).length) patch.allowedApiPermissions = allowedApiPermissions;
   }
   const workspace = await workspacesRepository.updateWorkspace({ workspaceId, patch, actorUserId: userId });
   if (!workspace) throw new HttpError(404, "Workspace not found");

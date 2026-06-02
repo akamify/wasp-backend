@@ -335,11 +335,50 @@ async function submitTemplate({
   const client = axios.create({ baseURL, timeout: 20000 });
   const tokenDebug = await debugToken({ inputToken: accessToken, graphApiVersion });
   const tokenScopes = new Set((tokenDebug?.scopes || []).map((scope) => String(scope)));
-  if (tokenDebug?.isValid && !tokenScopes.has("business_management")) {
+  // eslint-disable-next-line no-console
+  console.info("[templates] business_management not required for this operation");
+  const granularTargets = [
+    ...new Set(
+      (tokenDebug?.granularScopes || []).flatMap((scope) =>
+        Array.isArray(scope?.target_ids) ? scope.target_ids.map((targetId) => String(targetId).trim()).filter(Boolean) : []
+      )
+    ),
+  ];
+  const isPublicProfileOnly = tokenScopes.size === 1 && tokenScopes.has("public_profile");
+  if (tokenDebug?.isValid && isPublicProfileOnly) {
+    // eslint-disable-next-line no-console
+    console.warn("[templates] whatsapp_business_management missing", {
+      tokenType: tokenDebug?.type || null,
+      scopes: Array.from(tokenScopes),
+    });
     throw Object.assign(new Error("Meta template submit permission missing"), {
       tokenDebug,
       providerError:
-        "Meta token is missing business_management. Regenerate the System User token with business_management, whatsapp_business_management, whatsapp_business_messaging, and whatsapp_business_manage_events, then reconnect WhatsApp.",
+        "Meta did not grant WhatsApp permissions. Use an app-role user for testing or complete App Review/Advanced Access.",
+    });
+  }
+  if (tokenDebug?.isValid && !tokenScopes.has("whatsapp_business_management")) {
+    // eslint-disable-next-line no-console
+    console.warn("[templates] whatsapp_business_management missing", {
+      tokenType: tokenDebug?.type || null,
+      scopes: Array.from(tokenScopes),
+    });
+    throw Object.assign(new Error("Meta template submit permission missing"), {
+      tokenDebug,
+      providerError:
+        "Meta token is missing whatsapp_business_management. Reconnect with Embedded Signup or complete App Review/Advanced Access.",
+    });
+  }
+  if (tokenDebug?.isValid && granularTargets.length && !granularTargets.includes(String(wabaId))) {
+    // eslint-disable-next-line no-console
+    console.warn("[templates] whatsapp_business_management missing", {
+      tokenType: tokenDebug?.type || null,
+      scopes: Array.from(tokenScopes),
+    });
+    throw Object.assign(new Error("Meta template submit permission missing"), {
+      tokenDebug,
+      providerError:
+        "This token does not grant access to the currently connected WABA. Remove old Business Integration and reconnect.",
     });
   }
 
@@ -436,12 +475,17 @@ async function submitTemplate({
       let providerError = null;
       if (Number(metaCode) === 200) {
         const scopes = new Set((tokenDebug?.scopes || []).map((s) => String(s)));
-        if (tokenDebug?.isValid && !scopes.has("business_management")) {
+        if (tokenDebug?.isValid && !scopes.has("whatsapp_business_management")) {
           providerError =
-            "Meta token is missing business_management. Regenerate the System User token with business_management, whatsapp_business_management, whatsapp_business_messaging, and whatsapp_business_manage_events, then reconnect WhatsApp.";
-        } else if (tokenDebug?.isValid && !scopes.has("whatsapp_business_management")) {
+            "Meta token is missing whatsapp_business_management. Reconnect with Embedded Signup or complete App Review/Advanced Access.";
+        } else if (tokenDebug?.isValid && scopes.size === 1 && scopes.has("public_profile")) {
           providerError =
-            "Meta token is missing `whatsapp_business_management` permission. Regenerate the System User access token with the required WhatsApp permissions, then save credentials again.";
+            "Meta did not grant WhatsApp permissions. Use an app-role user for testing or complete App Review/Advanced Access.";
+        } else if (tokenDebug?.isValid && granularTargets.length && !granularTargets.includes(String(wabaId))) {
+          providerError =
+            "This token does not grant access to the currently connected WABA. Remove old Business Integration and reconnect.";
+        } else {
+          providerError = err?.response?.data?.error?.message || err?.response?.data?.error?.error_user_msg || err.message;
         }
       }
 

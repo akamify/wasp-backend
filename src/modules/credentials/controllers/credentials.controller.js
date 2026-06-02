@@ -55,6 +55,7 @@ async function upsertCredentials(req, res) {
       wabaId: businessId,
       graphApiVersion: graphApiVersion || metaGraphVersion,
     });
+    const tokenDebugSummary = validationResult.steps.find((step) => String(step?.step || "") === "debug_token")?.response || null;
     await stampUntaggedTemplatesForWaba({ workspaceId: req.workspace.id, wabaId: currentWabaId });
     const now = new Date();
     await WhatsAppCredentials.updateMany(
@@ -74,6 +75,9 @@ async function upsertCredentials(req, res) {
       businessAccountIdPlain: String(businessId),
       phoneNumberId: String(phoneNumberId),
       wabaId: String(businessId),
+      connectionMode: "manual_system_user",
+      tokenType: "system_user_token",
+      tokenDebugSummary,
       graphApiVersion: graphApiVersion || metaGraphVersion,
       isValid: true,
       isActive: true,
