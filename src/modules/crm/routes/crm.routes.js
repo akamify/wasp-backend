@@ -16,7 +16,7 @@ const { bindPhoneParamFromBody } = require("@modules/crm/middleware/bindPhonePar
 const { validate } = require("@core/middleware/validate");
 const { buildMemoryUpload } = require("@shared/utils/multerUpload");
 const { uploadMessageMedia, downloadMessageMedia } = require("@modules/messages/controllers/messageMedia.controller");
-const { messagesByPhone } = require("@modules/messages/controllers/message.controller");
+const { messagesByPhone, messageStatusByWaId } = require("@modules/messages/controllers/message.controller");
 const { streamEmployeeRealtime } = require("@modules/crm/controllers/employeeRealtime.controller");
 const {
   listOwnerConversationEvents,
@@ -253,6 +253,13 @@ router.get(
   requireCrmFeature("crm"),
   requireConversationAccess("view"),
   asyncHandler(messagesByPhone)
+);
+router.get(
+  "/employee/messages/status/:waId",
+  employeeAuth,
+  requireEmployeeWorkspace,
+  requireCrmFeature("crm"),
+  asyncHandler(messageStatusByWaId)
 );
 router.post(
   "/employee/messages/send-text",
