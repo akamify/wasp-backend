@@ -395,8 +395,6 @@ async function receive(req, res) {
               $set: set,
               $setOnInsert: {
                 workspaceId: workspaceIdRaw,
-                ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
-                ...(phoneNumberId ? { phoneNumberId } : {}),
                 // Keep phone only in $set to avoid Mongo conflicting update operators.
                 // When recipient_id is missing in status webhook, fallback to placeholder.
                 ...(phone ? {} : { phone: "unknown" }),
