@@ -422,6 +422,8 @@ async function receive(req, res) {
               phone: updated.phone || phone || null,
               whatsappMessageId: waId,
               status: newStatus,
+              messageId: updated._id ? String(updated._id) : null,
+              statusTimestamps: updated.statusTimestamps || {},
             });
           }
 
