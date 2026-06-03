@@ -28,6 +28,8 @@ function walletChargesEnabled() {
 }
 
 async function walletChargesEnabledLive() {
+  const explicit = envFlag("WALLET_CHARGES_ENABLED");
+  if (explicit !== null) return explicit;
   try {
     const { getSettingBoolean } = require("@modules/platform-settings/services/platformSettingsResolver.service");
     return getSettingBoolean("WALLET_CHARGES_ENABLED", walletChargesEnabled());
