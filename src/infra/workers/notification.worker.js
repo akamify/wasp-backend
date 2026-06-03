@@ -1,7 +1,7 @@
 const { notificationQueue } = require("@infra/queues/index");
 const { createWorker } = require("@infra/queues/queueFactory");
 const { attachQueueObserver } = require("@infra/queues/queueObserver");
-const { logger } = require("@core/logger/logger");
+const logger = require("@core/logger/logger");
 
 async function handleNotificationJob(job) {
     logger.info("Notification job received", { jobId: job?.id, data: job?.data || {} });

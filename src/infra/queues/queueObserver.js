@@ -1,4 +1,4 @@
-const { logger } = require("@core/logger/logger");
+const logger = require("@core/logger/logger");
 
 function attachQueueObserver(queueName, queueEvents) {
     const log = logger.child({ scope: "queue", queue: queueName });

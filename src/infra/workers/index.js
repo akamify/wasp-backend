@@ -3,7 +3,7 @@ const { startRetryWorker } = require("@infra/workers/retry.worker");
 const { startNotificationWorker } = require("@infra/workers/notification.worker");
 const { startCleanupWorker } = require("@infra/workers/cleanup.worker");
 const { startCrmLeadAssignmentWorker } = require("@infra/workers/crmLeadAssignment.worker");
-const { logger } = require("@core/logger/logger");
+const logger = require("@core/logger/logger");
 const { closeAllQueueResources } = require("@infra/queues/index");
 
 let _started = [];

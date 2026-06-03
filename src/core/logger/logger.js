@@ -11,4 +11,7 @@ function createLogger() {
   return logger;
 }
 
-module.exports = createLogger();
+const logger = createLogger();
+
+module.exports = logger;
+module.exports.logger = logger;

@@ -1,5 +1,5 @@
 const { campaignQueue, retryQueue, notificationQueue, webhookQueue } = require("@infra/queues/index");
-const { logger } = require("@core/logger/logger");
+const logger = require("@core/logger/logger");
 
 function startCleanupWorker() {
     const intervalMs = Math.max(Number(process.env.QUEUE_CLEANUP_INTERVAL_MS || 60_000), 10_000);

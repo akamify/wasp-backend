@@ -1,6 +1,6 @@
 const { Server } = require("socket.io");
 const { corsOrigins } = require("@core/config/env");
-const { logger } = require("@core/logger/logger");
+const logger = require("@core/logger/logger");
 
 function createSocketServer(httpServer) {
     const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";

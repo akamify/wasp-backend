@@ -1,6 +1,6 @@
 const IORedis = require("ioredis");
 const { getRedisUrl } = require("@core/config/redis");
-const { logger } = require("@core/logger/logger");
+const logger = require("@core/logger/logger");
 
 let _connection;
 let _lastLoggedRedisErrorKey = null;

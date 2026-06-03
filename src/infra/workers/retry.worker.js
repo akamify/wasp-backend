@@ -1,7 +1,7 @@
 const { retryQueue, campaignQueue } = require("@infra/queues/index");
 const { createWorker } = require("@infra/queues/queueFactory");
 const { attachQueueObserver } = require("@infra/queues/queueObserver");
-const { logger } = require("@core/logger/logger");
+const logger = require("@core/logger/logger");
 
 async function handleRetryJob(job) {
     const payload = job?.data?.payload || {};

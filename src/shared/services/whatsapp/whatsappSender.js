@@ -20,6 +20,12 @@ function authHeaders(accessToken) {
   };
 }
 
+function safeConsole(level, ...args) {
+  const target = typeof console !== "undefined" ? console : null;
+  const fn = target && typeof target[level] === "function" ? target[level] : null;
+  if (fn) fn.apply(target, args);
+}
+
 function toMetaErrorInfo(err, step, requestInfo = {}) {
   const data = err?.response?.data || null;
   const metaError = data?.error || null;
@@ -335,8 +341,7 @@ async function submitTemplate({
   const client = axios.create({ baseURL, timeout: 20000 });
   const tokenDebug = await debugToken({ inputToken: accessToken, graphApiVersion });
   const tokenScopes = new Set((tokenDebug?.scopes || []).map((scope) => String(scope)));
-  // eslint-disable-next-line no-console
-  console.info("[templates] business_management not required for this operation");
+  safeConsole("info", "[templates] business_management not required for this operation");
   const granularTargets = [
     ...new Set(
       (tokenDebug?.granularScopes || []).flatMap((scope) =>
@@ -346,8 +351,7 @@ async function submitTemplate({
   ];
   const isPublicProfileOnly = tokenScopes.size === 1 && tokenScopes.has("public_profile");
   if (tokenDebug?.isValid && isPublicProfileOnly) {
-    // eslint-disable-next-line no-console
-    console.warn("[templates] whatsapp_business_management missing", {
+    safeConsole("warn", "[templates] whatsapp_business_management missing", {
       tokenType: tokenDebug?.type || null,
       scopes: Array.from(tokenScopes),
     });
@@ -358,8 +362,7 @@ async function submitTemplate({
     });
   }
   if (tokenDebug?.isValid && !tokenScopes.has("whatsapp_business_management")) {
-    // eslint-disable-next-line no-console
-    console.warn("[templates] whatsapp_business_management missing", {
+    safeConsole("warn", "[templates] whatsapp_business_management missing", {
       tokenType: tokenDebug?.type || null,
       scopes: Array.from(tokenScopes),
     });
@@ -370,8 +373,7 @@ async function submitTemplate({
     });
   }
   if (tokenDebug?.isValid && granularTargets.length && !granularTargets.includes(String(wabaId))) {
-    // eslint-disable-next-line no-console
-    console.warn("[templates] whatsapp_business_management missing", {
+    safeConsole("warn", "[templates] whatsapp_business_management missing", {
       tokenType: tokenDebug?.type || null,
       scopes: Array.from(tokenScopes),
     });

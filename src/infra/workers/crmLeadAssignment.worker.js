@@ -1,6 +1,6 @@
 const { createWorker } = require("@infra/queues/queueFactory");
 const { QUEUE_NAMES } = require("@infra/queues/queueNames");
-const { logger } = require("@core/logger/logger");
+const logger = require("@core/logger/logger");
 const { detectAndAssignLead } = require("@modules/crm/services/leadDetection.service");
 
 function startCrmLeadAssignmentWorker() {
@@ -20,4 +20,3 @@ function startCrmLeadAssignmentWorker() {
 }
 
 module.exports = { startCrmLeadAssignmentWorker };
-

@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { logger } = require("@core/logger/logger");
+const logger = require("@core/logger/logger");
 
 function installProcessLifecycle({
   name,

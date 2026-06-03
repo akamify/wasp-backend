@@ -2,7 +2,7 @@ const { campaignQueue, retryQueue, notificationQueue } = require("@infra/queues/
 const { createWorker } = require("@infra/queues/queueFactory");
 const { attachQueueObserver } = require("@infra/queues/queueObserver");
 const { sendCampaignMessageJob } = require("@modules/campaigns/jobs/sendCampaignMessage.job");
-const { logger } = require("@core/logger/logger");
+const logger = require("@core/logger/logger");
 
 function startCampaignWorker() {
     const concurrency = Math.max(Number(process.env.CAMPAIGN_WORKER_CONCURRENCY || 5), 1);
