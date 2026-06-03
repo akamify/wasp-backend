@@ -460,6 +460,10 @@ function validateBeforeSend(template, data = {}) {
           ? "1 header variable is required"
           : `${requiredVariables} header variables are required`
       );
+      invariant(
+        headerVariables.length <= requiredVariables,
+        `Header expects ${requiredVariables} variable${requiredVariables === 1 ? "" : "s"}, received ${headerVariables.length}`
+      );
     }
 
     if (compType === "HEADER" && (headerFormat === "IMAGE" || headerFormat === "VIDEO" || headerFormat === "DOCUMENT")) {
@@ -476,6 +480,10 @@ function validateBeforeSend(template, data = {}) {
         requiredVariables === 1
           ? "1 body variable is required"
           : `${requiredVariables} body variables are required`
+      );
+      invariant(
+        variables.length <= requiredVariables,
+        `Body expects ${requiredVariables} variable${requiredVariables === 1 ? "" : "s"}, received ${variables.length}. Send button URL/code values in buttonValues, not variables.`
       );
     }
 

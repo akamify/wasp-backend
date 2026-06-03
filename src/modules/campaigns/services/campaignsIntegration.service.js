@@ -17,6 +17,7 @@ const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/camp
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { validateBeforeSend } = require("@shared/utils/templateStructure");
 
 function isUpstashRequestLimitError(err) {
     const msg = String(err?.message || "").toLowerCase();
@@ -94,6 +95,7 @@ async function sendApiCampaignByName(req) {
     if (!template) throw new HttpError(404, "Template not found");
     if (template.status !== "approved") throw new HttpError(400, "Template must be approved");
     await assertTemplateBelongsToCurrentWaba({ template, workspaceId });
+    recipients.forEach((recipient) => validateBeforeSend(template, recipient));
 
     const estimate = await computeCampaignEstimate({ workspaceId, template, recipients });
     if (walletChargesEnabled() && estimate.estimatedCredits > 0) {

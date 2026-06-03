@@ -33,6 +33,11 @@ function isFinalAttempt(job) {
     return currentAttemptNumber >= attempts;
 }
 
+function isNonRetryableSendError(err) {
+    const statusCode = Number(err?.statusCode || err?.status || 0);
+    return statusCode >= 400 && statusCode < 500;
+}
+
 async function finalizeCampaignIfDone({ workspaceId, campaignId }) {
     try {
         const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals type").lean();
@@ -121,7 +126,7 @@ async function sendCampaignMessageJob(job) {
         return { ok: true };
     } catch (err) {
         const storedError = buildStoredSendError(err);
-        if (!isFinalAttempt(job)) {
+        if (!isFinalAttempt(job) && !isNonRetryableSendError(err)) {
             throw err;
         }
         try {

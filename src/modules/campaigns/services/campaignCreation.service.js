@@ -14,6 +14,7 @@ const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.se
 const { subscriptionRepository } = require("@modules/billing/repositories");
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
+const { validateBeforeSend } = require("@shared/utils/templateStructure");
 
 function buildStoredSendError(err) {
     const metaError = err?.metaDebug?.meta || err?.metaDebug?.raw?.error || err?.response?.data?.error || {};
@@ -66,6 +67,7 @@ async function createCampaign(req) {
         return { success: true, campaign, message: "API campaign created. Contacts will be provided by integrations at send time." };
     }
     if (normalizedRecipients.length === 0) throw new HttpError(400, "At least one recipient required");
+    normalizedRecipients.forEach((recipient) => validateBeforeSend(template, recipient));
     const estimate = await computeCampaignEstimate({ workspaceId: req.workspace.id, template, recipients: normalizedRecipients });
     const { openWindowSet: _openWindowSet, ...publicEstimate } = estimate;
     const { billableRecipients: billableCount, freeRecipients: freeCount, estimatedCredits } = estimate;
