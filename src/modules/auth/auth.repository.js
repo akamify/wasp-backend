@@ -96,18 +96,18 @@ function includeSchemaHiddenFields(query) {
 }
 
 async function findUserForApiKeyStatus(userId) {
-  return includeSchemaHiddenFields(User.findById(userId).select("+apiKeyEnc apiKeys"));
+  return includeSchemaHiddenFields(User.findById(userId).select("apiKeyEnc apiKeys"));
 }
 
 async function findUserForApiKeyOtp(userId) {
   return includeSchemaHiddenFields(
-    User.findById(userId).select("email name +apiKeyEnc apiKeys +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose")
+    User.findById(userId).select("email name apiKeyEnc apiKeys apiKeyOtpCodeHash apiKeyOtpCodeExpiresAt apiKeyOtpPurpose")
   );
 }
 
 async function findUserForVerifyApiKeyOtp(userId) {
   return includeSchemaHiddenFields(
-    User.findById(userId).select("email name +apiKeyHash +apiKeyEnc apiKeys +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose")
+    User.findById(userId).select("email name apiKeyHash apiKeyEnc apiKeys apiKeyOtpCodeHash apiKeyOtpCodeExpiresAt apiKeyOtpPurpose")
   );
 }
 
