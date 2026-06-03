@@ -17,6 +17,8 @@ const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/camp
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { resolveActiveConnection } = require("@shared/services/whatsappConnectionService");
+const { fetchTemplateStatus } = require("@shared/utils/whatsappSender");
 const { validateBeforeSend } = require("@shared/utils/templateStructure");
 
 function isUpstashRequestLimitError(err) {
@@ -47,6 +49,75 @@ function buildStoredSendError(err) {
         metaDebug: err?.metaDebug || null,
         raw: err?.response?.data || null,
     };
+}
+
+function normalizeRemoteStatus(status) {
+    const s = String(status || "").toLowerCase();
+    if (s.includes("approve")) return "approved";
+    if (s.includes("reject")) return "rejected";
+    if (s.includes("pause")) return "paused";
+    if (s.includes("disable")) return "disabled";
+    if (s.includes("pending")) return "pending";
+    return s || "pending";
+}
+
+async function syncTemplateFromMetaBeforeSend({ workspaceId, template }) {
+    const connection = await resolveActiveConnection(workspaceId);
+    if (!connection) throw new HttpError(400, "Active WhatsApp connection not configured");
+
+    let remote;
+    try {
+        remote = await fetchTemplateStatus({
+            accessToken: connection.accessToken,
+            wabaId: connection.wabaId,
+            templateName: template.name,
+            metaTemplateId: template.metaTemplateId,
+            graphApiVersion: connection.graphApiVersion,
+        });
+    } catch (err) {
+        throw new HttpError(400, "Failed to verify template with Meta before sending", {
+            message: err.message,
+            metaDebug: err.metaDebug || null,
+        });
+    }
+
+    if (!remote) {
+        throw new HttpError(
+            409,
+            "Template does not exist in active Meta WABA. Refresh templates or create this template again."
+        );
+    }
+
+    const remoteStatus = normalizeRemoteStatus(remote.status);
+    if (remoteStatus !== "approved") {
+        throw new HttpError(400, `Template is ${remoteStatus || "not approved"} on Meta`);
+    }
+
+    const remoteLanguage = String(remote.language || "").trim();
+    const localLanguage = String(template.languageCode || template.language || "").trim();
+    if (remoteLanguage && localLanguage && remoteLanguage !== localLanguage) {
+        throw new HttpError(
+            409,
+            `Template language mismatch. Local template is ${localLanguage}, Meta template is ${remoteLanguage}. Refresh templates.`
+        );
+    }
+
+    if (Array.isArray(remote.components) && remote.components.length) {
+        template.components = remote.components;
+    }
+    if (remote.category) template.category = String(remote.category).trim().toLowerCase();
+    if (remote.language) {
+        template.language = remote.language;
+        template.languageCode = remote.language;
+    }
+    template.status = remoteStatus;
+    template.metaTemplateId = remote.id || template.metaTemplateId;
+    template.syncedAt = new Date();
+    template.lastSyncedAt = new Date();
+    if (typeof template.save === "function") {
+        await template.save();
+    }
+    return template;
 }
 
 async function resolveWorkspaceIdFromApiKeyUser(req) {
@@ -90,14 +161,15 @@ async function sendApiCampaignByName(req) {
     const template = await templatesRepository.getTemplateById({
         id: apiCampaign.templateId,
         workspaceId,
-        select: "_id status category name language components wabaId",
+        select: "_id status category name language languageCode components wabaId metaTemplateId syncedAt lastSyncedAt",
     });
     if (!template) throw new HttpError(404, "Template not found");
     if (template.status !== "approved") throw new HttpError(400, "Template must be approved");
     await assertTemplateBelongsToCurrentWaba({ template, workspaceId });
-    recipients.forEach((recipient) => validateBeforeSend(template, recipient));
+    const sendTemplate = await syncTemplateFromMetaBeforeSend({ workspaceId, template });
+    recipients.forEach((recipient) => validateBeforeSend(sendTemplate, recipient));
 
-    const estimate = await computeCampaignEstimate({ workspaceId, template, recipients });
+    const estimate = await computeCampaignEstimate({ workspaceId, template: sendTemplate, recipients });
     if (walletChargesEnabled() && estimate.estimatedCredits > 0) {
         try {
             await ensureBalance(workspaceId, estimate.estimatedCredits);
@@ -134,6 +206,7 @@ async function sendApiCampaignByName(req) {
     let processedInline = false;
     let inlineSentCount = 0;
     let inlineFailedCount = 0;
+    let inlineLastFailure = null;
     try {
         await enqueueCampaignRecipients({
             workspaceId,
@@ -173,7 +246,7 @@ async function sendApiCampaignByName(req) {
             );
 
             for (const recipient of recipients) {
-                const chargeAmount = estimate.openWindowSet.has(String(recipient.to)) ? 0 : messageCostForTemplateCategory(template.category, 1);
+                const chargeAmount = estimate.openWindowSet.has(String(recipient.to)) ? 0 : messageCostForTemplateCategory(sendTemplate.category, 1);
                 try {
                     if (chargeAmount > 0) {
                         await debit(workspaceId, chargeAmount, "Message send (campaign)", {
@@ -185,7 +258,7 @@ async function sendApiCampaignByName(req) {
                     await sendTemplateMessageForUser({
                         userId: workspaceId,
                         campaignId: String(apiCampaign._id),
-                        template,
+                        template: sendTemplate,
                         to: recipient.to,
                         variables: recipient.variables,
                         headerVariables: recipient.headerVariables,
@@ -204,6 +277,7 @@ async function sendApiCampaignByName(req) {
                     failedCount += 1;
                     const storedError = buildStoredSendError(err);
                     lastFailure = storedError;
+                    inlineLastFailure = storedError;
                     try {
                         await Message.create({
                             workspaceId,
@@ -272,6 +346,29 @@ async function sendApiCampaignByName(req) {
         freeRecipients: Number(estimate.freeRecipients || 0),
         estimatedCredits: Number(estimate.estimatedCredits || 0),
     };
+
+    if (processedInline && inlineFailedCount > 0) {
+        const failureMessage =
+            inlineLastFailure?.providerMessage ||
+            inlineLastFailure?.message ||
+            "Campaign send failed";
+        throw new HttpError(
+            inlineSentCount > 0 ? 409 : 400,
+            failureMessage,
+            {
+                requestId,
+                campaign: {
+                    id: String(refreshed?._id || apiCampaign._id),
+                    name: String(refreshed?.name || apiCampaign.name || ""),
+                    type: String(refreshed?.type || apiCampaign.type || "api"),
+                    status: String(refreshed?.status || "running"),
+                },
+                request: requestTotals,
+                billing,
+                error: inlineLastFailure || null,
+            }
+        );
+    }
 
     return {
         success: true,
