@@ -32,6 +32,12 @@ function invariant(condition, message) {
   }
 }
 
+function assertMetaTextParameter(value, label) {
+  const text = String(value ?? "");
+  invariant(!/[\r\n\t]/.test(text), `${label} cannot contain new-line or tab characters`);
+  invariant(!/ {5,}/.test(text), `${label} cannot contain more than 4 consecutive spaces`);
+}
+
 function maxPlaceholderIndex(text) {
   const source = String(text || "");
   const matches = source.matchAll(/\{\{(\d+)\}\}/g);
@@ -464,6 +470,9 @@ function validateBeforeSend(template, data = {}) {
         headerVariables.length <= requiredVariables,
         `Header expects ${requiredVariables} variable${requiredVariables === 1 ? "" : "s"}, received ${headerVariables.length}`
       );
+      headerVariables.slice(0, requiredVariables).forEach((value, index) => {
+        assertMetaTextParameter(value, `Header variable {{${index + 1}}}`);
+      });
     }
 
     if (compType === "HEADER" && (headerFormat === "IMAGE" || headerFormat === "VIDEO" || headerFormat === "DOCUMENT")) {
@@ -485,6 +494,9 @@ function validateBeforeSend(template, data = {}) {
         variables.length <= requiredVariables,
         `Body expects ${requiredVariables} variable${requiredVariables === 1 ? "" : "s"}, received ${variables.length}. Send button URL/code values in buttonValues, not variables.`
       );
+      variables.slice(0, requiredVariables).forEach((value, index) => {
+        assertMetaTextParameter(value, `Body variable {{${index + 1}}}`);
+      });
     }
 
     if (toUpper(component?.type) === "BUTTONS") {
@@ -503,6 +515,7 @@ function validateBeforeSend(template, data = {}) {
         if (buttonType === "URL" && hasDynamicUrl(button?.url)) {
           const normalizedRuntimeValue = normalizeDynamicUrlRuntimeValue(button?.url, runtimeValue);
           invariant(normalizedRuntimeValue, `Dynamic URL value required for button ${index + 1}`);
+          assertMetaTextParameter(normalizedRuntimeValue, `Dynamic URL value for button ${index + 1}`);
           const prefix = dynamicUrlPrefix(button?.url);
           if (/^https?:\/\//i.test(normalizedRuntimeValue) && prefix) {
             invariant(
@@ -535,6 +548,7 @@ function validateBeforeSend(template, data = {}) {
 
         if (buttonType === "COPY_CODE") {
           invariant(runtimeValue, `Offer code required for button ${index + 1}`);
+          assertMetaTextParameter(runtimeValue, `Offer code for button ${index + 1}`);
         }
       });
     }
