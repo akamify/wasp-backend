@@ -88,17 +88,22 @@ async function findUserForMe(userId) {
   return User.findById(userId).select("email name phone role createdAt twoFactorEnabled adminPermissions");
 }
 
+const API_KEY_SELECT =
+  "apiKeys._id apiKeys.workspaceId apiKeys.wabaId apiKeys.name apiKeys.keyHash apiKeys.permissions apiKeys.enabled apiKeys.revoked apiKeys.createdAt apiKeys.lastUsedAt apiKeys.revokedAt +apiKeys.keyEnc";
+
 async function findUserForApiKeyStatus(userId) {
-  return User.findById(userId).select("+apiKeyEnc apiKeys +apiKeys.keyEnc");
+  return User.findById(userId).select(`+apiKeyEnc ${API_KEY_SELECT}`);
 }
 
 async function findUserForApiKeyOtp(userId) {
-  return User.findById(userId).select("email name apiKeys +apiKeyEnc +apiKeys.keyEnc +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose");
+  return User.findById(userId).select(
+    `email name +apiKeyEnc ${API_KEY_SELECT} +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose`
+  );
 }
 
 async function findUserForVerifyApiKeyOtp(userId) {
   return User.findById(userId).select(
-    "email name apiKeys +apiKeyHash +apiKeyEnc +apiKeys.keyEnc +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose"
+    `email name +apiKeyHash +apiKeyEnc ${API_KEY_SELECT} +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose`
   );
 }
 
