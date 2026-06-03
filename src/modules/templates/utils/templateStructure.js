@@ -47,6 +47,28 @@ function maxPlaceholderIndex(text) {
   return max;
 }
 
+function placeholderIndexes(text) {
+  const indexes = new Set();
+  for (const match of String(text || "").matchAll(/\{\{(\d+)\}\}/g)) {
+    const index = Number(match[1]);
+    if (Number.isFinite(index) && index > 0) indexes.add(index);
+  }
+  return Array.from(indexes).sort((a, b) => a - b);
+}
+
+function assertSequentialPlaceholders(text, label) {
+  const indexes = placeholderIndexes(text);
+  for (let i = 0; i < indexes.length; i += 1) {
+    const expected = i + 1;
+    if (indexes[i] !== expected) {
+      throw new HttpError(
+        400,
+        `${label} variables must be sequential and start from {{1}}. Use {{1}}, {{2}}, {{3}} inside ${label}; header/body/button numbering is separate.`
+      );
+    }
+  }
+}
+
 function hasDynamicUrl(url) {
   return /\{\{\d+\}\}/.test(String(url || ""));
 }
@@ -246,6 +268,7 @@ function normalizeStandardComponents(category, components) {
     if (type === "BODY") {
       const text = String(component?.text ?? "");
       invariant(text.trim(), "BODY text is required");
+      assertSequentialPlaceholders(text, "BODY");
       hasBody = true;
       normalized.push({
         type: "BODY",
@@ -263,6 +286,7 @@ function normalizeStandardComponents(category, components) {
         invariant(text.trim(), "HEADER text is required");
         // Meta restriction: header supports at most 1 variable placeholder.
         invariant(maxPlaceholderIndex(text) <= 1, "HEADER supports at most 1 variable placeholder");
+        assertSequentialPlaceholders(text, "HEADER");
         normalized.push({
           type: "HEADER",
           format: "TEXT",
