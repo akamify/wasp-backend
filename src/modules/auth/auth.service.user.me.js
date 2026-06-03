@@ -1,9 +1,26 @@
 const { HttpError } = require("@shared/utils/httpError");
+const { AdminAccount } = require("@infra/database/AdminAccount");
 const repo = require("@modules/auth/auth.repository");
 const { ensureDefaultWorkspace } = require("@modules/auth/auth.service.user.workspace");
 const { normalizeAdminPermissions } = require("@shared/utils/adminPermissions");
 
 async function me({ authUser, selectedWorkspaceId }) {
+  if (String(authUser?.role || "") === "admin") {
+    const admin = await AdminAccount.findById(authUser.id).select("_id username displayName");
+    if (!admin) throw new HttpError(401, "Invalid or expired token");
+    return {
+      success: true,
+      user: {
+        id: String(admin._id),
+        email: admin.username,
+        name: admin.displayName || "Admin",
+        role: "admin",
+        permissions: normalizeAdminPermissions("admin", { pages: [], components: [], actions: [] }),
+      },
+      workspace: null,
+    };
+  }
+
   const user = await repo.findUserForMe(authUser.id);
   if (!user) throw new HttpError(404, "User not found");
 
