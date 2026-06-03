@@ -15,6 +15,25 @@ const { subscriptionRepository } = require("@modules/billing/repositories");
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 
+function buildStoredSendError(err) {
+    const metaError = err?.metaDebug?.meta || err?.metaDebug?.raw?.error || err?.response?.data?.error || {};
+    const providerMessage =
+        metaError?.error_data?.details ||
+        metaError?.error_user_msg ||
+        metaError?.message ||
+        err?.providerError ||
+        null;
+    return {
+        message: err?.message || "Meta send message failed",
+        providerMessage,
+        providerCode: metaError?.code || null,
+        providerSubcode: metaError?.error_subcode || null,
+        traceId: metaError?.fbtrace_id || null,
+        metaDebug: err?.metaDebug || null,
+        raw: err?.response?.data || null,
+    };
+}
+
 async function createCampaign(req) {
     await enforceMonthlyLimit({
         workspaceId: req.workspace.id,
@@ -96,10 +115,11 @@ async function createCampaign(req) {
                     sentCount += 1;
                 } catch (err) {
                     failedCount += 1;
-                    lastFailure = err?.response?.data?.error?.error_data?.details || err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || "Campaign send failed";
+                    const storedError = buildStoredSendError(err);
+                    lastFailure = storedError.providerMessage || storedError.message || "Campaign send failed";
                     try {
                         const now = new Date();
-                        await Message.create({ workspaceId: req.workspace.id, wabaId: template.wabaId, campaignId: campaign._id, templateId: template._id, phone: recipient.to, direction: "outbound", status: "failed", statusTimestamps: { failedAt: now }, text: "", payload: { to: recipient.to, template: { id: String(template._id), name: template.name, language: template.language }, runtime: { variables: recipient.variables || [], headerVariables: recipient.headerVariables || [], otpCode: recipient.otpCode || "", buttonValues: recipient.buttonValues || [], buttonTtlMinutes: recipient.buttonTtlMinutes || [], flowTokens: recipient.flowTokens || [], flowActionData: recipient.flowActionData || [] } }, error: err?.response?.data || err?.message || err || { message: String(lastFailure) } });
+                        await Message.create({ workspaceId: req.workspace.id, wabaId: template.wabaId, campaignId: campaign._id, templateId: template._id, phone: recipient.to, direction: "outbound", status: "failed", statusTimestamps: { failedAt: now }, text: "", payload: { to: recipient.to, template: { id: String(template._id), name: template.name, language: template.language }, runtime: { variables: recipient.variables || [], headerVariables: recipient.headerVariables || [], otpCode: recipient.otpCode || "", buttonValues: recipient.buttonValues || [], buttonTtlMinutes: recipient.buttonTtlMinutes || [], flowTokens: recipient.flowTokens || [], flowActionData: recipient.flowActionData || [] } }, error: storedError });
                     } catch {}
                     try {
                         const chargeAmount = openNowSet.has(String(recipient.to)) ? 0 : messageCostForTemplateCategory(template.category, 1);

@@ -29,6 +29,25 @@ function buildPublicRequestId() {
     return `api_${stamp}_${rand}`;
 }
 
+function buildStoredSendError(err) {
+    const metaError = err?.metaDebug?.meta || err?.metaDebug?.raw?.error || err?.response?.data?.error || {};
+    const providerMessage =
+        metaError?.error_data?.details ||
+        metaError?.error_user_msg ||
+        metaError?.message ||
+        err?.providerError ||
+        null;
+    return {
+        message: err?.message || "Meta send message failed",
+        providerMessage,
+        providerCode: metaError?.code || null,
+        providerSubcode: metaError?.error_subcode || null,
+        traceId: metaError?.fbtrace_id || null,
+        metaDebug: err?.metaDebug || null,
+        raw: err?.response?.data || null,
+    };
+}
+
 async function resolveWorkspaceIdFromApiKeyUser(req) {
     const workspaceIdHeader = req.headers["x-workspace-id"];
     if (workspaceIdHeader) {
@@ -181,7 +200,8 @@ async function sendApiCampaignByName(req) {
                     );
                 } catch (err) {
                     failedCount += 1;
-                    lastFailure = err;
+                    const storedError = buildStoredSendError(err);
+                    lastFailure = storedError;
                     try {
                         await Message.create({
                             workspaceId,
@@ -194,7 +214,7 @@ async function sendApiCampaignByName(req) {
                             statusTimestamps: { failedAt: new Date() },
                             text: "",
                             payload: { to: recipient.to, template: { id: String(template._id) }, runtime: { variables: recipient.variables || [] } },
-                            error: err?.response?.data || err?.message || err,
+                            error: storedError,
                         });
                     } catch { }
                     if (err?.response && chargeAmount > 0) {
@@ -221,7 +241,7 @@ async function sendApiCampaignByName(req) {
                     $set: {
                         // API campaign must stay running until user explicitly completes/cancels.
                         status: "running",
-                        ...(lastFailure ? { lastError: { message: lastFailure?.message || "Failed" } } : {}),
+                        ...(lastFailure ? { lastError: { message: lastFailure?.providerMessage || lastFailure?.message || "Failed" } } : {}),
                     },
                 }
             );

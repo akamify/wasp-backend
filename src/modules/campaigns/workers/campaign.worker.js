@@ -1,4 +1,4 @@
-const { campaignQueue, retryQueue, notificationQueue } = require("@infra/queues/index");
+const { campaignQueue, notificationQueue } = require("@infra/queues/index");
 const { createWorker } = require("@infra/queues/queueFactory");
 const { attachQueueObserver } = require("@infra/queues/queueObserver");
 const { sendCampaignMessageJob } = require("@modules/campaigns/jobs/sendCampaignMessage.job");
@@ -29,21 +29,6 @@ function startCampaignWorker() {
         const attempts = Number(job?.opts?.attempts || 0);
         const attemptsMade = Number(job?.attemptsMade || 0);
         if (attempts > 0 && attemptsMade >= attempts) {
-            try {
-                const retry = retryQueue.getRetryQueue();
-                await retry.add("campaign-retry", {
-                    payload: {
-                        queue: "campaigns",
-                        name: job?.name || "send-message",
-                        data: job?.data || {},
-                        delayMs: 0,
-                    },
-                    reason: message,
-                });
-            } catch (retryErr) {
-                logger.warn("Failed to enqueue retry job", { jobId: job?.id, message: retryErr?.message || String(retryErr) });
-            }
-
             try {
                 const notification = notificationQueue.getNotificationQueue();
                 await notification.add("campaign-dead-letter", {

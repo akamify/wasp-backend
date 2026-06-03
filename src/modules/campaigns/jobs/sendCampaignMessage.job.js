@@ -8,6 +8,31 @@ const { CAMPAIGN_STATUSES } = require("@modules/campaigns/constants/campaign.con
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 
+function buildStoredSendError(err) {
+    const metaError = err?.metaDebug?.meta || err?.metaDebug?.raw?.error || err?.response?.data?.error || {};
+    const providerMessage =
+        metaError?.error_data?.details ||
+        metaError?.error_user_msg ||
+        metaError?.message ||
+        err?.providerError ||
+        null;
+    return {
+        message: err?.message || "Meta send message failed",
+        providerMessage,
+        providerCode: metaError?.code || null,
+        providerSubcode: metaError?.error_subcode || null,
+        traceId: metaError?.fbtrace_id || null,
+        metaDebug: err?.metaDebug || null,
+        raw: err?.response?.data || null,
+    };
+}
+
+function isFinalAttempt(job) {
+    const attempts = Math.max(Number(job?.opts?.attempts || 1), 1);
+    const currentAttemptNumber = Number(job?.attemptsMade || 0) + 1;
+    return currentAttemptNumber >= attempts;
+}
+
 async function finalizeCampaignIfDone({ workspaceId, campaignId }) {
     try {
         const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals type").lean();
@@ -41,7 +66,7 @@ async function sendCampaignMessageJob(job) {
     }
 
     const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals wabaId");
-    if (!campaign) throw new Error("Campaign not found");
+    if (!campaign) return { ok: true, skipped: true, reason: "campaign_not_found" };
     const status = String(campaign.status || "");
     if (
         status === CAMPAIGN_STATUSES.PAUSED ||
@@ -95,6 +120,10 @@ async function sendCampaignMessageJob(job) {
         await finalizeCampaignIfDone({ workspaceId, campaignId });
         return { ok: true };
     } catch (err) {
+        const storedError = buildStoredSendError(err);
+        if (!isFinalAttempt(job)) {
+            throw err;
+        }
         try {
             const now = new Date();
             await Message.create({
@@ -120,7 +149,7 @@ async function sendCampaignMessageJob(job) {
                         flowActionData: flowActionData || [],
                     },
                 },
-                error: err?.response?.data || err?.message || err,
+                error: storedError,
             });
         } catch { }
         if (err?.response) {
@@ -138,12 +167,12 @@ async function sendCampaignMessageJob(job) {
             { _id: campaignId, workspaceId },
             {
                 $inc: { "totals.queued": -1, "totals.failed": 1 },
-                $set: { lastError: { message: err.message } },
+                $set: { lastError: { message: storedError.providerMessage || storedError.message } },
             }
         );
         await finalizeCampaignIfDone({ workspaceId, campaignId });
-        emitCampaignEvent(CAMPAIGN_EVENTS.FAILED, { campaignId: String(campaignId), workspaceId, reason: err.message });
-        throw err;
+        emitCampaignEvent(CAMPAIGN_EVENTS.FAILED, { campaignId: String(campaignId), workspaceId, reason: storedError.providerMessage || storedError.message });
+        return { ok: false, failed: true, error: storedError.providerMessage || storedError.message };
     }
 }
 

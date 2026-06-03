@@ -18,8 +18,15 @@ function safeString(value) {
 function messageErrorSummary(errorObj) {
   if (!errorObj) return "";
   if (typeof errorObj === "string") return errorObj;
-  if (typeof errorObj?.message === "string") return errorObj.message;
   if (typeof errorObj?.providerError === "string") return errorObj.providerError;
+  if (typeof errorObj?.providerMessage === "string") return errorObj.providerMessage;
+  if (typeof errorObj?.error?.error_data?.details === "string") return errorObj.error.error_data.details;
+  if (typeof errorObj?.error?.message === "string") return errorObj.error.message;
+  if (typeof errorObj?.metaDebug?.meta?.error_user_msg === "string") return errorObj.metaDebug.meta.error_user_msg;
+  if (typeof errorObj?.metaDebug?.meta?.message === "string") return errorObj.metaDebug.meta.message;
+  if (typeof errorObj?.metaDebug?.raw?.error?.error_data?.details === "string") return errorObj.metaDebug.raw.error.error_data.details;
+  if (typeof errorObj?.metaDebug?.raw?.error?.message === "string") return errorObj.metaDebug.raw.error.message;
+  if (typeof errorObj?.message === "string") return errorObj.message;
   try {
     return JSON.stringify(errorObj).slice(0, 600);
   } catch {
