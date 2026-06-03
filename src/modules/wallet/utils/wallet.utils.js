@@ -27,6 +27,15 @@ function walletChargesEnabled() {
   return String(process.env.NODE_ENV || "").toLowerCase() === "production";
 }
 
+async function walletChargesEnabledLive() {
+  try {
+    const { getSettingBoolean } = require("@modules/platform-settings/services/platformSettingsResolver.service");
+    return getSettingBoolean("WALLET_CHARGES_ENABLED", walletChargesEnabled());
+  } catch {
+    return walletChargesEnabled();
+  }
+}
+
 function perCategoryCost(category) {
   const c = String(category || "").trim().toLowerCase();
   const fallback = COST_PER_MESSAGE;
@@ -57,6 +66,35 @@ function messageCostForTemplateCategory(category, count = 1) {
   return roundCurrency(perCategoryCost(category) * n);
 }
 
+async function messageCostForTemplateCategoryLive(category, count = 1) {
+  const c = String(category || "").trim().toLowerCase();
+  const n = Math.max(Number(count || 0), 0);
+  const fallback = perCategoryCost(c);
+  const keyByCategory = {
+    marketing: "COST_PER_MESSAGE_MARKETING",
+    utility: "COST_PER_MESSAGE_UTILITY",
+    authentication: "COST_PER_MESSAGE_AUTHENTICATION",
+  };
+
+  try {
+    const {
+      getSettingNumber,
+      getSettingWithMeta,
+    } = require("@modules/platform-settings/services/platformSettingsResolver.service");
+    const genericCost = await getSettingNumber("COST_PER_MESSAGE", COST_PER_MESSAGE);
+    let cost = genericCost;
+    if (keyByCategory[c]) {
+      const specific = await getSettingWithMeta(keyByCategory[c]);
+      const specificCost = Number(specific.value);
+      cost = Number.isFinite(specificCost) ? specificCost : genericCost;
+    }
+    if (!Number.isFinite(cost)) cost = fallback;
+    return roundCurrency(cost * n);
+  } catch {
+    return roundCurrency(fallback * n);
+  }
+}
+
 function isMerchantWorkspaceConfigured() {
   return MERCHANT_WORKSPACE_ID && mongoose.Types.ObjectId.isValid(MERCHANT_WORKSPACE_ID);
 }
@@ -67,9 +105,11 @@ module.exports = {
   MERCHANT_WORKSPACE_ID,
   roundCurrency,
   walletChargesEnabled,
+  walletChargesEnabledLive,
   perCategoryCost,
   messageCost,
   messageCostForTemplateCategory,
+  messageCostForTemplateCategoryLive,
   isMerchantWorkspaceConfigured,
 };
 

@@ -3,7 +3,8 @@ const { Event } = require("@infra/database/Event");
 const { HttpError } = require("@shared/utils/httpError");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
 const { assertNormalizedPhone } = require("@shared/services/contactService");
-const { debit, credit, messageCostForTemplateCategory } = require("@modules/wallet/services/wallet.core.service");
+const { debit, credit } = require("@modules/wallet/services/wallet.core.service");
+const { templateMessageChargeAmount } = require("@shared/services/pricingService");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 
 async function triggerEvent(req, res) {
@@ -36,12 +37,14 @@ async function triggerEvent(req, res) {
     status: "triggered",
   });
 
-  const chargeAmount = messageCostForTemplateCategory(template.category, 1);
+  const pricing = await templateMessageChargeAmount({ workspaceId: req.workspace.id, phone: normalizedPhone, category: template.category });
+  const chargeAmount = pricing.amount;
   try {
     await debit(req.workspace.id, chargeAmount, "Message send (automation)", {
       templateId: String(template._id),
       to: normalizedPhone,
       eventName,
+      pricing,
     });
     const { message, apiResponse } = await sendTemplateMessageForUser({
       userId: req.workspace.id,

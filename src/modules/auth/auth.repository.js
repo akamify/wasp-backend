@@ -111,7 +111,7 @@ async function findUserForVerifyApiKeyOtp(userId) {
   );
 }
 
-async function updateUserById(userId, update, options = {}) {
+function updateUserById(userId, update, options = {}) {
   return User.findByIdAndUpdate(userId, update, options);
 }
 

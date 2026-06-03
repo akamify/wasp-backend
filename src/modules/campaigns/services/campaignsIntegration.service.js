@@ -7,8 +7,6 @@ const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate")
 const {
     ensureBalance,
     getOrCreateWallet,
-    messageCostForTemplateCategory,
-    walletChargesEnabled,
     debit,
     credit,
 } = require("@modules/wallet/services/wallet.core.service");
@@ -170,7 +168,7 @@ async function sendApiCampaignByName(req) {
     recipients.forEach((recipient) => validateBeforeSend(sendTemplate, recipient));
 
     const estimate = await computeCampaignEstimate({ workspaceId, template: sendTemplate, recipients });
-    if (walletChargesEnabled() && estimate.estimatedCredits > 0) {
+    if (estimate.estimatedCredits > 0) {
         try {
             await ensureBalance(workspaceId, estimate.estimatedCredits);
         } catch (err) {
@@ -246,13 +244,17 @@ async function sendApiCampaignByName(req) {
             );
 
             for (const recipient of recipients) {
-                const chargeAmount = estimate.openWindowSet.has(String(recipient.to)) ? 0 : messageCostForTemplateCategory(sendTemplate.category, 1);
+                const chargeAmount = estimate.openWindowSet.has(String(recipient.to)) ? 0 : estimate.categoryCost;
                 try {
                     if (chargeAmount > 0) {
                         await debit(workspaceId, chargeAmount, "Message send (campaign)", {
                             campaignId: String(apiCampaign._id),
                             templateId: String(template._id),
                             to: recipient.to,
+                            pricing: {
+                                customerServiceWindowOpen: estimate.openWindowSet.has(String(recipient.to)),
+                                walletChargesEnabled: estimate.walletChargesEnabled,
+                            },
                         });
                     }
                     await sendTemplateMessageForUser({

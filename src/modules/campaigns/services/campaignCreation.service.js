@@ -1,13 +1,11 @@
 const { HttpError } = require("@shared/utils/httpError");
 const { Message } = require("@infra/database/Message");
-const { Conversation } = require("@infra/database/Conversation");
 const { CAMPAIGN_STATUSES, CAMPAIGN_TYPES } = require("@modules/campaigns/constants/campaign.constants");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { normalizeRecipients } = require("@modules/campaigns/utils/normalizeRecipients");
 const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate");
 const { campaignsRepository, templatesRepository } = require("@modules/campaigns/repositories/index");
-const { debit, credit, ensureBalance, getOrCreateWallet, messageCostForTemplateCategory, walletChargesEnabled } = require("@modules/wallet/services/wallet.core.service");
-const { CUSTOMER_SERVICE_WINDOW_MS } = require("@shared/services/pricingService");
+const { debit, credit, ensureBalance, getOrCreateWallet } = require("@modules/wallet/services/wallet.core.service");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
@@ -71,7 +69,7 @@ async function createCampaign(req) {
     const estimate = await computeCampaignEstimate({ workspaceId: req.workspace.id, template, recipients: normalizedRecipients });
     const { openWindowSet: _openWindowSet, ...publicEstimate } = estimate;
     const { billableRecipients: billableCount, freeRecipients: freeCount, estimatedCredits } = estimate;
-    if (walletChargesEnabled() && estimatedCredits > 0) {
+    if (estimatedCredits > 0) {
         try { await ensureBalance(req.workspace.id, estimatedCredits); } catch (err) {
             if (err instanceof HttpError && err.statusCode === 402) {
                 const wallet = await getOrCreateWallet(req.workspace.id);
@@ -102,17 +100,14 @@ async function createCampaign(req) {
         try { hasWorkers = await hasCampaignWorkers(); } catch { hasWorkers = false; }
         if (!queuedToRedis || !hasWorkers) {
             let sentCount = 0, failedCount = 0, lastFailure = null;
-            const since = new Date(Date.now() - CUSTOMER_SERVICE_WINDOW_MS);
-            const recipientPhones = normalizedRecipients.map((r) => r.to);
-            const openNowRows = await Conversation.find({ workspaceId: req.workspace.id, wabaId: template.wabaId, phone: { $in: recipientPhones }, lastInboundAt: { $gte: since } }).select("phone").lean();
-            const openNowSet = new Set(openNowRows.map((row) => String(row.phone || "")));
+            const openNowSet = estimate.openWindowSet || new Set();
             campaign.status = CAMPAIGN_STATUSES.RUNNING;
             await campaign.save();
             emitCampaignEvent(CAMPAIGN_EVENTS.PROCESSING, { campaignId: String(campaign._id) });
             for (const recipient of normalizedRecipients) {
                 try {
-                    const chargeAmount = openNowSet.has(String(recipient.to)) ? 0 : messageCostForTemplateCategory(template.category, 1);
-                    if (chargeAmount > 0) await debit(req.workspace.id, chargeAmount, "Message send (campaign)", { campaignId: String(campaign._id), templateId: String(template._id), to: recipient.to });
+                    const chargeAmount = openNowSet.has(String(recipient.to)) ? 0 : estimate.categoryCost;
+                    if (chargeAmount > 0) await debit(req.workspace.id, chargeAmount, "Message send (campaign)", { campaignId: String(campaign._id), templateId: String(template._id), to: recipient.to, pricing: { customerServiceWindowOpen: openNowSet.has(String(recipient.to)), walletChargesEnabled: estimate.walletChargesEnabled } });
                     await sendTemplateMessageForUser({ userId: req.workspace.id, campaignId: String(campaign._id), template, to: recipient.to, variables: recipient.variables, headerVariables: recipient.headerVariables, otpCode: recipient.otpCode, buttonValues: recipient.buttonValues, buttonTtlMinutes: recipient.buttonTtlMinutes, flowTokens: recipient.flowTokens, flowActionData: recipient.flowActionData });
                     sentCount += 1;
                 } catch (err) {
@@ -124,7 +119,7 @@ async function createCampaign(req) {
                         await Message.create({ workspaceId: req.workspace.id, wabaId: template.wabaId, campaignId: campaign._id, templateId: template._id, phone: recipient.to, direction: "outbound", status: "failed", statusTimestamps: { failedAt: now }, text: "", payload: { to: recipient.to, template: { id: String(template._id), name: template.name, language: template.language }, runtime: { variables: recipient.variables || [], headerVariables: recipient.headerVariables || [], otpCode: recipient.otpCode || "", buttonValues: recipient.buttonValues || [], buttonTtlMinutes: recipient.buttonTtlMinutes || [], flowTokens: recipient.flowTokens || [], flowActionData: recipient.flowActionData || [] } }, error: storedError });
                     } catch {}
                     try {
-                        const chargeAmount = openNowSet.has(String(recipient.to)) ? 0 : messageCostForTemplateCategory(template.category, 1);
+                        const chargeAmount = openNowSet.has(String(recipient.to)) ? 0 : estimate.categoryCost;
                         if (err?.response && chargeAmount > 0) await credit(req.workspace.id, chargeAmount, "Message refund (campaign failed)", "internal", "", { campaignId: String(campaign._id), templateId: String(template._id), to: recipient.to });
                     } catch {}
                 }

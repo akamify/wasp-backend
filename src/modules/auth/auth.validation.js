@@ -41,7 +41,7 @@ const apiKeyVerifyOtpSchema = Joi.object({
 
 const updateProfileSchema = Joi.object({
   name: Joi.string().max(120).allow("", null).optional(),
-  phone: Joi.string().max(40).allow("", null).optional(),
+  phone: Joi.string().pattern(/^\d{0,15}$/).allow("", null).optional(),
 });
 
 const changePasswordSchema = Joi.object({
@@ -54,9 +54,8 @@ const verifyEnable2faSchema = Joi.object({
 });
 
 const requestProfileOtpSchema = Joi.object({
-  purpose: Joi.string().valid("change_email", "change_name").required(),
+  purpose: Joi.string().valid("change_email").required(),
   email: Joi.string().email().optional(),
-  name: Joi.string().max(120).optional(),
 });
 
 const verifyProfileOtpSchema = Joi.object({

@@ -3,7 +3,7 @@ const { HttpError } = require("@shared/utils/httpError");
 const { normalizeRecipients } = require("@modules/campaigns/utils/normalizeRecipients");
 const { campaignsRepository, messagesRepository, templatesRepository } = require("@modules/campaigns/repositories/index");
 const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate");
-const { ensureBalance, getOrCreateWallet, walletChargesEnabled } = require("@modules/wallet/services/wallet.core.service");
+const { ensureBalance, getOrCreateWallet } = require("@modules/wallet/services/wallet.core.service");
 const { CAMPAIGN_STATUSES, CAMPAIGN_TYPES } = require("@modules/campaigns/constants/campaign.constants");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { enqueueCampaignRecipients } = require("@modules/campaigns/services/campaignsQueue.service");
@@ -41,7 +41,7 @@ async function retryFailedCampaign(req) {
     const estimate = await computeCampaignEstimate({ workspaceId: req.workspace.id, template, recipients: normalizedRecipients });
     const { openWindowSet: _openWindowSet, ...publicEstimate } = estimate;
     const { billableRecipients: billableCount, freeRecipients: freeCount, estimatedCredits } = estimate;
-    if (walletChargesEnabled() && estimatedCredits > 0) {
+    if (estimatedCredits > 0) {
         try { await ensureBalance(req.workspace.id, estimatedCredits); } catch (err) {
             if (err instanceof HttpError && err.statusCode === 402) {
                 const wallet = await getOrCreateWallet(req.workspace.id);

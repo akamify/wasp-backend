@@ -4,8 +4,8 @@ const { HttpError } = require("@shared/utils/httpError");
 const { sendTemplateMessageForUser, sendTextMessageForUser, sendMediaMessageForUser } = require("@shared/services/outboundMessageService");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { assertNormalizedPhone, normalizePhone } = require("@shared/services/contactService");
-const { chargeForMessaging, refundMessagingCharge, messageCostForTemplateCategory } = require("@modules/wallet/services/wallet.core.service");
-const { isCustomerServiceWindowOpen } = require("@shared/services/pricingService");
+const { chargeForMessaging, refundMessagingCharge } = require("@modules/wallet/services/wallet.core.service");
+const { isCustomerServiceWindowOpen, templateMessageChargeAmount } = require("@shared/services/pricingService");
 const { renderTemplatePreviewParts } = require("@shared/utils/templateStructure");
 const { publishWorkspaceEvent } = require("@shared/services/realtimeService");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
@@ -86,14 +86,14 @@ async function sendTemplate(req, res) {
   }
   await assertTemplateBelongsToCurrentWaba({ template, workspaceId: req.workspace.id });
 
-  const windowOpen = await isCustomerServiceWindowOpen({ workspaceId: req.workspace.id, phone: normalizedPhone });
-  const chargeAmount = windowOpen ? 0 : messageCostForTemplateCategory(template.category, 1);
+  const pricing = await templateMessageChargeAmount({ workspaceId: req.workspace.id, phone: normalizedPhone, category: template.category });
+  const chargeAmount = pricing.amount;
   try {
     await chargeForMessaging(req.workspace.id, chargeAmount, "Message send", {
       kind: "single",
       templateId: String(template._id),
       to: normalizedPhone,
-      pricing: { customerServiceWindowOpen: windowOpen },
+      pricing,
     });
     await getCredentialsForUser(req.workspace.id);
 
@@ -168,15 +168,15 @@ async function bulkSend(req, res) {
       const r = queue.shift();
       if (!r) continue;
       const to = assertNormalizedPhone(r.to);
-      const windowOpen = await isCustomerServiceWindowOpen({ workspaceId: req.workspace.id, phone: to });
-      const chargeAmount = windowOpen ? 0 : messageCostForTemplateCategory(template.category, 1);
+      const pricing = await templateMessageChargeAmount({ workspaceId: req.workspace.id, phone: to, category: template.category });
+      const chargeAmount = pricing.amount;
 
       try {
         await chargeForMessaging(req.workspace.id, chargeAmount, "Message send", {
           kind: "bulk",
           templateId: String(template._id),
           to,
-          pricing: { customerServiceWindowOpen: windowOpen },
+          pricing,
         });
         const { message } = await sendTemplateMessageForUser({
           userId: req.workspace.id,

@@ -7,8 +7,8 @@ const { generateOtpCode, buildOtpEmailHtml, isProdEnv, shouldReturnAuthDebugToke
 
 async function updateProfile({ userId, name, phone }) {
   const update = {};
-  if (name !== undefined) update.name = name;
-  if (phone !== undefined) update.phone = phone;
+  if (name !== undefined) update.name = String(name || "").trim();
+  if (phone !== undefined) update.phone = String(phone || "").replace(/\D/g, "").slice(0, 15);
 
   const user = await repo
     .updateUserById(userId, { $set: update }, { new: true })
@@ -107,7 +107,7 @@ async function disable2fa({ userId }) {
 
 async function requestProfileOtp({ userId, purpose, email, name }) {
   const p = String(purpose || "").trim();
-  if (!["change_email", "change_name"].includes(p)) throw new HttpError(400, "Invalid purpose");
+  if (p !== "change_email") throw new HttpError(400, "Invalid purpose");
 
   const user = await repo.findUserForProfileOtp(userId);
   if (!user) throw new HttpError(404, "User not found");
@@ -115,13 +115,10 @@ async function requestProfileOtp({ userId, purpose, email, name }) {
   if (p === "change_email") {
     const nextEmail = String(email || "").trim().toLowerCase();
     if (!nextEmail) throw new HttpError(400, "New email is required");
+    if (nextEmail === String(user.email || "").trim().toLowerCase()) {
+      throw new HttpError(400, "New email must be different from current email");
+    }
     user.pendingEmail = nextEmail;
-  }
-
-  if (p === "change_name") {
-    const nextName = String(name || "").trim();
-    if (!nextName) throw new HttpError(400, "New name is required");
-    user.pendingName = nextName;
   }
 
   const otp = generateOtpCode();

@@ -2,7 +2,7 @@ const { HttpError } = require("@shared/utils/httpError");
 const { normalizeRecipients } = require("@modules/campaigns/utils/normalizeRecipients");
 const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate");
 const { templatesRepository } = require("@modules/campaigns/repositories/index");
-const { getOrCreateWallet, roundCurrency, walletChargesEnabled } = require("@modules/wallet/services/wallet.core.service");
+const { getOrCreateWallet, roundCurrency } = require("@modules/wallet/services/wallet.core.service");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 
 async function estimateCampaign(req) {
@@ -18,7 +18,7 @@ async function estimateCampaign(req) {
     const wallet = await getOrCreateWallet(req.workspace.id);
     const walletBalance = roundCurrency(wallet.balance || 0);
     const estimatedCredits = roundCurrency(estimate.estimatedCredits || 0);
-    const insufficient = walletChargesEnabled() && estimatedCredits > walletBalance;
+    const insufficient = estimatedCredits > walletBalance;
     return { success: true, estimate: { ...publicEstimate, estimatedCredits, walletBalance, currency: wallet.currency || "INR", insufficientBalance: insufficient } };
 }
 

@@ -2,8 +2,8 @@ const { Campaign } = require("@infra/database/Campaign");
 const { Template } = require("@infra/database/Template");
 const { Message } = require("@infra/database/Message");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
-const { debit, credit, messageCostForTemplateCategory } = require("@modules/wallet/services/wallet.core.service");
-const { isCustomerServiceWindowOpen } = require("@shared/services/pricingService");
+const { debit, credit } = require("@modules/wallet/services/wallet.core.service");
+const { templateMessageChargeAmount } = require("@shared/services/pricingService");
 const { CAMPAIGN_STATUSES } = require("@modules/campaigns/constants/campaign.constants");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
@@ -101,11 +101,11 @@ async function sendCampaignMessageJob(job) {
     if (!template) throw new Error("Template not found");
     await assertTemplateBelongsToCurrentWaba({ template, workspaceId });
 
-    const windowOpen = await isCustomerServiceWindowOpen({ workspaceId, phone: to });
-    const chargeAmount = windowOpen ? 0 : messageCostForTemplateCategory(template.category, 1);
+    const pricing = await templateMessageChargeAmount({ workspaceId, phone: to, category: template.category });
+    const chargeAmount = pricing.amount;
     try {
         if (chargeAmount > 0) {
-            await debit(workspaceId, chargeAmount, "Message send (campaign)", { campaignId, templateId, to });
+            await debit(workspaceId, chargeAmount, "Message send (campaign)", { campaignId, templateId, to, pricing });
         }
         await sendTemplateMessageForUser({
             userId: workspaceId,

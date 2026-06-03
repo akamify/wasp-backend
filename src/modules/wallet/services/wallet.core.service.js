@@ -6,11 +6,12 @@ const {
   MERCHANT_WORKSPACE_ID,
   roundCurrency,
   walletChargesEnabled,
+  walletChargesEnabledLive,
   messageCost,
   messageCostForTemplateCategory,
+  messageCostForTemplateCategoryLive,
   isMerchantWorkspaceConfigured,
 } = require("@modules/wallet/utils/wallet.utils");
-const { logWorkspaceActivity } = require("@modules/workspaces/services/workspaceActivity.service");
 
 async function getOrCreateWallet(workspaceId) {
   return walletRepository.getOrCreateWallet(workspaceId, SEED_BALANCE);
@@ -43,15 +44,6 @@ async function debit(workspaceId, amount, reason, meta = {}) {
     provider: "internal",
     meta,
   });
-  if (provider === "razorpay") {
-    await logWorkspaceActivity({
-      workspaceId,
-      action: "billing.wallet_recharged",
-      entityType: "wallet",
-      metadata: { amount: normalizedAmount, provider, providerRef },
-    });
-  }
-
   return wallet;
 }
 
@@ -77,9 +69,6 @@ async function credit(workspaceId, amount, reason, provider = "internal", provid
 }
 
 async function chargeForMessaging(payerWorkspaceId, amount, reason, meta = {}) {
-  if (!walletChargesEnabled()) {
-    return { charged: false, amount: 0, merchantCredited: false, wallet: await getOrCreateWallet(payerWorkspaceId) };
-  }
   if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
     return { charged: false, amount: 0, merchantCredited: false, wallet: await getOrCreateWallet(payerWorkspaceId) };
   }
@@ -105,7 +94,6 @@ async function chargeForMessaging(payerWorkspaceId, amount, reason, meta = {}) {
 }
 
 async function refundMessagingCharge(payerWorkspaceId, amount, meta = {}) {
-  if (!walletChargesEnabled()) return { refunded: false };
   if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) return { refunded: false };
 
   await credit(payerWorkspaceId, Number(amount), "Message refund (send failed)", "internal", "", meta);
@@ -128,7 +116,9 @@ module.exports = {
   refundMessagingCharge,
   messageCost,
   messageCostForTemplateCategory,
+  messageCostForTemplateCategoryLive,
   walletChargesEnabled,
+  walletChargesEnabledLive,
   roundCurrency,
 };
 
