@@ -88,22 +88,26 @@ async function findUserForMe(userId) {
   return User.findById(userId).select("email name phone role createdAt twoFactorEnabled adminPermissions");
 }
 
-const API_KEY_SELECT =
-  "apiKeys._id apiKeys.workspaceId apiKeys.wabaId apiKeys.name apiKeys.keyHash apiKeys.permissions apiKeys.enabled apiKeys.revoked apiKeys.createdAt apiKeys.lastUsedAt apiKeys.revokedAt +apiKeys.keyEnc";
+function includeSchemaHiddenFields(query) {
+  if (query && typeof query.schemaLevelProjections === "function") {
+    return query.schemaLevelProjections(false);
+  }
+  return query;
+}
 
 async function findUserForApiKeyStatus(userId) {
-  return User.findById(userId).select(`+apiKeyEnc ${API_KEY_SELECT}`);
+  return includeSchemaHiddenFields(User.findById(userId).select("+apiKeyEnc apiKeys"));
 }
 
 async function findUserForApiKeyOtp(userId) {
-  return User.findById(userId).select(
-    `email name +apiKeyEnc ${API_KEY_SELECT} +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose`
+  return includeSchemaHiddenFields(
+    User.findById(userId).select("email name +apiKeyEnc apiKeys +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose")
   );
 }
 
 async function findUserForVerifyApiKeyOtp(userId) {
-  return User.findById(userId).select(
-    `email name +apiKeyHash +apiKeyEnc ${API_KEY_SELECT} +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose`
+  return includeSchemaHiddenFields(
+    User.findById(userId).select("email name +apiKeyHash +apiKeyEnc apiKeys +apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose")
   );
 }
 
