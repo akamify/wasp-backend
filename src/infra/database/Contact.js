@@ -35,6 +35,7 @@ const ContactSchema = new mongoose.Schema(
 );
 
 ContactSchema.index({ workspaceId: 1, wabaId: 1, phone: 1 }, { unique: true });
+ContactSchema.index({ workspaceId: 1, wabaId: 1, tags: 1 });
 
 const Contact = mongoose.model("Contact", ContactSchema);
 

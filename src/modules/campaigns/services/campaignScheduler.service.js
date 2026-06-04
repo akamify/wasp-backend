@@ -1,6 +1,6 @@
-const { CAMPAIGN_EVENTS, CAMPAIGN_STATUSES, CAMPAIGN_SCHEDULE_FREQUENCIES } = require("@modules/campaigns/constants/campaign.constants");
+const { CAMPAIGN_AUDIENCE_MODES, CAMPAIGN_EVENTS, CAMPAIGN_STATUSES, CAMPAIGN_SCHEDULE_FREQUENCIES } = require("@modules/campaigns/constants/campaign.constants");
 const { emitCampaignEvent } = require("@modules/campaigns/events/campaign.events");
-const { campaignsRepository } = require("@modules/campaigns/repositories/index");
+const { campaignsRepository, contactsRepository } = require("@modules/campaigns/repositories/index");
 const { getNextRunAt } = require("@modules/campaigns/utils/schedule");
 const { enqueueCampaignRecipients, enqueueScheduledCampaignDispatch } = require("@modules/campaigns/services/campaignsQueue.service");
 
@@ -28,6 +28,35 @@ function normalizeRecipientSnapshot(recipients) {
             }))
             .filter((recipient) => recipient.to)
         : [];
+}
+
+function buildRecipientFromRuntime(to, runtime) {
+    return {
+        to,
+        variables: Array.isArray(runtime?.variables) ? runtime.variables : [],
+        headerVariables: Array.isArray(runtime?.headerVariables) ? runtime.headerVariables : [],
+        otpCode: runtime?.otpCode || undefined,
+        buttonValues: Array.isArray(runtime?.buttonValues) ? runtime.buttonValues : [],
+        buttonTtlMinutes: Array.isArray(runtime?.buttonTtlMinutes) ? runtime.buttonTtlMinutes : [],
+        flowTokens: Array.isArray(runtime?.flowTokens) ? runtime.flowTokens : [],
+        flowActionData: Array.isArray(runtime?.flowActionData) ? runtime.flowActionData : [],
+    };
+}
+
+async function resolveCampaignRecipients(campaign) {
+    const audience = campaign.audience || {};
+    if (audience.mode !== CAMPAIGN_AUDIENCE_MODES.TAGS) {
+        return normalizeRecipientSnapshot(campaign.recipientSnapshot);
+    }
+    const tags = Array.from(new Set((audience.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)));
+    if (!tags.length) return [];
+    const contacts = await contactsRepository.findContactsByTags({
+        workspaceId: campaign.workspaceId,
+        wabaId: campaign.wabaId,
+        tags,
+        tagMatch: audience.tagMatch,
+    });
+    return (contacts || []).map((contact) => buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime));
 }
 
 async function scheduleNextCampaignDispatch({ workspaceId, campaignId, runAt }) {
@@ -71,7 +100,7 @@ async function dispatchScheduledCampaign({ workspaceId, campaignId, runAt }) {
         return { ok: true, skipped: true, reason: "stale_dispatch" };
     }
 
-    const recipients = normalizeRecipientSnapshot(campaign.recipientSnapshot);
+    const recipients = await resolveCampaignRecipients(campaign);
     if (!recipients.length) {
         await campaignsRepository.updateCampaign(
             { _id: campaign._id, workspaceId },
@@ -79,7 +108,7 @@ async function dispatchScheduledCampaign({ workspaceId, campaignId, runAt }) {
                 $set: {
                     status: CAMPAIGN_STATUSES.FAILED,
                     "schedule.status": "completed",
-                    lastError: { message: "Recurring campaign has no recipient snapshot" },
+                    lastError: { message: "Recurring campaign has no matching recipients" },
                 },
             }
         );

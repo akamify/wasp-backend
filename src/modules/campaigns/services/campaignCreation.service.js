@@ -1,11 +1,11 @@
 const { HttpError } = require("@shared/utils/httpError");
 const { Message } = require("@infra/database/Message");
-const { CAMPAIGN_STATUSES, CAMPAIGN_TYPES } = require("@modules/campaigns/constants/campaign.constants");
+const { CAMPAIGN_AUDIENCE_MODES, CAMPAIGN_STATUSES, CAMPAIGN_TYPES } = require("@modules/campaigns/constants/campaign.constants");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { normalizeRecipients } = require("@modules/campaigns/utils/normalizeRecipients");
 const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate");
 const { buildRecurringSchedule, normalizeScheduleInput } = require("@modules/campaigns/utils/schedule");
-const { campaignsRepository, templatesRepository } = require("@modules/campaigns/repositories/index");
+const { campaignsRepository, contactsRepository, templatesRepository } = require("@modules/campaigns/repositories/index");
 const { debit, credit, ensureBalance, getOrCreateWallet } = require("@modules/wallet/services/wallet.core.service");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
@@ -35,6 +35,35 @@ function buildStoredSendError(err) {
     };
 }
 
+function normalizeAudience(input) {
+    const mode = String(input?.mode || CAMPAIGN_AUDIENCE_MODES.MANUAL).toLowerCase();
+    const tags = Array.from(new Set((input?.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)));
+    return {
+        mode: mode === CAMPAIGN_AUDIENCE_MODES.TAGS ? CAMPAIGN_AUDIENCE_MODES.TAGS : CAMPAIGN_AUDIENCE_MODES.MANUAL,
+        tags,
+        tagMatch: String(input?.tagMatch || "all").toLowerCase() === "any" ? "any" : "all",
+        runtime: input?.runtime && typeof input.runtime === "object" ? input.runtime : null,
+    };
+}
+
+function buildRecipientFromRuntime(to, runtime) {
+    return {
+        to,
+        variables: Array.isArray(runtime?.variables) ? runtime.variables : [],
+        headerVariables: Array.isArray(runtime?.headerVariables) ? runtime.headerVariables : [],
+        otpCode: runtime?.otpCode || undefined,
+        buttonValues: Array.isArray(runtime?.buttonValues) ? runtime.buttonValues : [],
+        buttonTtlMinutes: Array.isArray(runtime?.buttonTtlMinutes) ? runtime.buttonTtlMinutes : [],
+        flowTokens: Array.isArray(runtime?.flowTokens) ? runtime.flowTokens : [],
+        flowActionData: Array.isArray(runtime?.flowActionData) ? runtime.flowActionData : [],
+    };
+}
+
+async function resolveTagRecipients({ workspaceId, wabaId, audience }) {
+    const contacts = await contactsRepository.findContactsByTags({ workspaceId, wabaId, tags: audience.tags, tagMatch: audience.tagMatch });
+    return (contacts || []).map((contact) => buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime));
+}
+
 async function createCampaign(req) {
     await enforceMonthlyLimit({
         workspaceId: req.workspace.id,
@@ -50,8 +79,17 @@ async function createCampaign(req) {
     if (!template) throw new HttpError(404, "Template not found");
     if (template.status !== "approved") throw new HttpError(400, "Template must be approved");
     await assertTemplateBelongsToCurrentWaba({ template, workspaceId: req.workspace.id });
-    const normalizedRecipients = normalizeRecipients(recipients);
+    const audience = normalizeAudience(req.body?.audience);
+    if (audience.mode === CAMPAIGN_AUDIENCE_MODES.TAGS && !audience.tags.length) {
+        throw new HttpError(400, "Select at least one audience tag");
+    }
+    const normalizedRecipients = audience.mode === CAMPAIGN_AUDIENCE_MODES.TAGS
+        ? await resolveTagRecipients({ workspaceId: req.workspace.id, wabaId: template.wabaId, audience })
+        : normalizeRecipients(recipients);
     const normalizedType = String(type || CAMPAIGN_TYPES.BROADCAST).toLowerCase();
+    if (audience.mode === CAMPAIGN_AUDIENCE_MODES.TAGS && normalizedType !== CAMPAIGN_TYPES.BROADCAST) {
+        throw new HttpError(400, "Tag audience is only supported for broadcast campaigns");
+    }
     const normalizedSchedule = normalizeScheduleInput({ scheduledAt, schedule });
     if (normalizedSchedule.isRecurring && normalizedType === CAMPAIGN_TYPES.API) {
         throw new HttpError(400, "Recurring schedule is only supported for broadcast and CSV campaigns");
@@ -103,8 +141,14 @@ async function createCampaign(req) {
         workspaceId: req.workspace.id, wabaId: template.wabaId, name, templateId: template._id,
         status: normalizedType === CAMPAIGN_TYPES.API && !scheduledAt ? CAMPAIGN_STATUSES.RUNNING : CAMPAIGN_STATUSES.QUEUED,
         type: normalizedType || CAMPAIGN_TYPES.BROADCAST, scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
+        audience: {
+            mode: audience.mode,
+            tags: audience.tags,
+            tagMatch: audience.tagMatch,
+            runtime: audience.runtime || undefined,
+        },
         schedule: recurringSchedule || undefined,
-        recipientSnapshot: recurringSchedule ? normalizedRecipients : undefined,
+        recipientSnapshot: recurringSchedule && audience.mode === CAMPAIGN_AUDIENCE_MODES.MANUAL ? normalizedRecipients : undefined,
         totals: recurringSchedule
             ? { total: 0, queued: 0, sent: 0, failed: 0 }
             : { total: normalizedRecipients.length, queued: normalizedRecipients.length, sent: 0, failed: 0 },

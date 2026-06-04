@@ -59,6 +59,12 @@ async function getContact(req) {
   return { success: true, contact };
 }
 
+async function listContactTags(req) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const tags = await contactsRepository.listContactTags({ workspaceId: req.workspace.id, wabaId: scope.wabaId });
+  return { success: true, tags };
+}
+
 async function lookupContactByPhone(req) {
   const scope = await requireActiveWabaScope(req.workspace.id);
   const phone = normalizePhone(req.params.phone);
@@ -197,6 +203,7 @@ async function exportContactsCsv(req) {
 
 module.exports = {
   listContacts,
+  listContactTags,
   getContact,
   lookupContactByPhone,
   createContact,

@@ -16,13 +16,42 @@ const recipientSchema = Joi.alternatives().try(
 
 const estimateSchema = Joi.object({
     templateId: Joi.string().required(),
-    recipients: Joi.array().items(recipientSchema).min(1).max(50000).required(),
+    recipients: Joi.array().items(recipientSchema).min(1).max(50000).optional(),
+    audience: Joi.object({
+        mode: Joi.string().valid("manual", "tags").default("manual"),
+        tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
+        tagMatch: Joi.string().valid("all", "any").default("all"),
+        runtime: Joi.object({
+            variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
+            headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+            otpCode: Joi.string().allow("").max(20).optional(),
+            buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+            buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
+            flowTokens: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+            flowActionData: Joi.array().max(10).optional(),
+        }).optional(),
+    }).optional(),
 });
 
 const scheduleSchema = Joi.object({
     frequency: Joi.string().valid("once", "daily", "weekly").default("once"),
     endAt: Joi.date().iso().optional(),
     maxOccurrences: Joi.number().integer().min(1).max(365).optional(),
+}).optional();
+
+const audienceSchema = Joi.object({
+    mode: Joi.string().valid("manual", "tags").default("manual"),
+    tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
+    tagMatch: Joi.string().valid("all", "any").default("all"),
+    runtime: Joi.object({
+        variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
+        headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+        otpCode: Joi.string().allow("").max(20).optional(),
+        buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+        buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
+        flowTokens: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+        flowActionData: Joi.array().max(10).optional(),
+    }).optional(),
 }).optional();
 
 const createSchema = Joi.object({
@@ -32,10 +61,11 @@ const createSchema = Joi.object({
     recipients: Joi.array().items(recipientSchema).max(50000).optional(),
     scheduledAt: Joi.date().iso().optional(),
     schedule: scheduleSchema,
+    audience: audienceSchema,
 });
 
 const actionSchema = Joi.object({
     action: Joi.string().valid("pause", "resume", "stop", "complete").required(),
 });
 
-module.exports = { recipientSchema, estimateSchema, createSchema, actionSchema, scheduleSchema };
+module.exports = { recipientSchema, estimateSchema, createSchema, actionSchema, scheduleSchema, audienceSchema };

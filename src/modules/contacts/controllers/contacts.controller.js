@@ -8,6 +8,10 @@ async function getContact(req, res) {
   res.json(await contactsService.getContact(req));
 }
 
+async function listContactTags(req, res) {
+  res.json(await contactsService.listContactTags(req));
+}
+
 async function lookupContactByPhone(req, res) {
   res.json(await contactsService.lookupContactByPhone(req));
 }
@@ -34,6 +38,7 @@ async function exportContactsCsv(req, res) {
 
 module.exports = {
   listContacts,
+  listContactTags,
   getContact,
   lookupContactByPhone,
   createContact,

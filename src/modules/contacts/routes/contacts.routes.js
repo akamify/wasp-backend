@@ -14,6 +14,7 @@ const requireContactsAccess = requireBillingFeature("contactsPageAccess", {
 });
 
 router.get("/", auth, requireWorkspace, requireWorkspacePermission("contacts.view"), requireContactsAccess, asyncHandler(contactsController.listContacts));
+router.get("/tags", auth, requireWorkspace, requireWorkspacePermission("contacts.view"), requireContactsAccess, asyncHandler(contactsController.listContactTags));
 router.get("/lookup/:phone", auth, requireWorkspace, requireWorkspacePermission("contacts.view"), requireContactsAccess, asyncHandler(contactsController.lookupContactByPhone));
 router.get("/:id", auth, requireWorkspace, requireWorkspacePermission("contacts.view"), requireContactsAccess, asyncHandler(contactsController.getContact));
 router.post("/", auth, requireWorkspace, requireWorkspacePermission("contacts.create"), requireContactsAccess, validate(contactsValidation.contactSchema), asyncHandler(contactsController.createContact));

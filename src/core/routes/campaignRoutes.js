@@ -74,7 +74,21 @@ router.post(
         )
         .min(1)
         .max(50000)
-        .required(),
+        .optional(),
+      audience: Joi.object({
+        mode: Joi.string().valid("manual", "tags").default("manual"),
+        tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
+        tagMatch: Joi.string().valid("all", "any").default("all"),
+        runtime: Joi.object({
+          variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
+          headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+          otpCode: Joi.string().allow("").max(20).optional(),
+          buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+          buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
+          flowTokens: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+          flowActionData: Joi.array().max(10).optional(),
+        }).optional(),
+      }).optional(),
     })
   ),
   asyncHandler(estimateCampaign)
@@ -116,6 +130,20 @@ router.post(
         frequency: Joi.string().valid("once", "daily", "weekly").default("once"),
         endAt: Joi.date().iso().optional(),
         maxOccurrences: Joi.number().integer().min(1).max(365).optional(),
+      }).optional(),
+      audience: Joi.object({
+        mode: Joi.string().valid("manual", "tags").default("manual"),
+        tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
+        tagMatch: Joi.string().valid("all", "any").default("all"),
+        runtime: Joi.object({
+          variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
+          headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+          otpCode: Joi.string().allow("").max(20).optional(),
+          buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+          buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
+          flowTokens: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+          flowActionData: Joi.array().max(10).optional(),
+        }).optional(),
       }).optional(),
     })
   ),

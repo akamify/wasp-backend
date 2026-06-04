@@ -1,9 +1,32 @@
 const { HttpError } = require("@shared/utils/httpError");
 const { normalizeRecipients } = require("@modules/campaigns/utils/normalizeRecipients");
 const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate");
-const { templatesRepository } = require("@modules/campaigns/repositories/index");
+const { contactsRepository, templatesRepository } = require("@modules/campaigns/repositories/index");
 const { getOrCreateWallet, roundCurrency } = require("@modules/wallet/services/wallet.core.service");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
+
+function normalizeAudience(input) {
+    const tags = Array.from(new Set((input?.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)));
+    return {
+        mode: String(input?.mode || "manual").toLowerCase() === "tags" ? "tags" : "manual",
+        tags,
+        tagMatch: String(input?.tagMatch || "all").toLowerCase() === "any" ? "any" : "all",
+        runtime: input?.runtime && typeof input.runtime === "object" ? input.runtime : {},
+    };
+}
+
+function buildRecipientFromRuntime(to, runtime) {
+    return {
+        to,
+        variables: Array.isArray(runtime?.variables) ? runtime.variables : [],
+        headerVariables: Array.isArray(runtime?.headerVariables) ? runtime.headerVariables : [],
+        otpCode: runtime?.otpCode || undefined,
+        buttonValues: Array.isArray(runtime?.buttonValues) ? runtime.buttonValues : [],
+        buttonTtlMinutes: Array.isArray(runtime?.buttonTtlMinutes) ? runtime.buttonTtlMinutes : [],
+        flowTokens: Array.isArray(runtime?.flowTokens) ? runtime.flowTokens : [],
+        flowActionData: Array.isArray(runtime?.flowActionData) ? runtime.flowActionData : [],
+    };
+}
 
 async function estimateCampaign(req) {
     const { templateId, recipients } = req.body;
@@ -11,7 +34,15 @@ async function estimateCampaign(req) {
     if (!template) throw new HttpError(404, "Template not found");
     if (template.status !== "approved") throw new HttpError(400, "Template must be approved");
     await assertTemplateBelongsToCurrentWaba({ template, workspaceId: req.workspace.id });
-    const normalizedRecipients = normalizeRecipients(recipients);
+    const audience = normalizeAudience(req.body?.audience);
+    const normalizedRecipients = audience.mode === "tags"
+        ? (await contactsRepository.findContactsByTags({
+            workspaceId: req.workspace.id,
+            wabaId: template.wabaId,
+            tags: audience.tags,
+            tagMatch: audience.tagMatch,
+        })).map((contact) => buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime))
+        : normalizeRecipients(recipients);
     if (normalizedRecipients.length === 0) throw new HttpError(400, "At least one recipient required");
     const estimate = await computeCampaignEstimate({ workspaceId: req.workspace.id, template, recipients: normalizedRecipients });
     const { openWindowSet: _openWindowSet, ...publicEstimate } = estimate;

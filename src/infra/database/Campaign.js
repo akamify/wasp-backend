@@ -14,6 +14,19 @@ const CampaignRecipientSnapshotSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const CampaignRuntimeSnapshotSchema = new mongoose.Schema(
+  {
+    variables: [{ type: String, default: "" }],
+    headerVariables: [{ type: String, default: "" }],
+    otpCode: { type: String, default: "" },
+    buttonValues: [{ type: String, default: "" }],
+    buttonTtlMinutes: [{ type: Number }],
+    flowTokens: [{ type: String, default: "" }],
+    flowActionData: [{ type: mongoose.Schema.Types.Mixed }],
+  },
+  { _id: false }
+);
+
 const CampaignSchema = new mongoose.Schema(
   {
     workspaceId: {
@@ -39,6 +52,21 @@ const CampaignSchema = new mongoose.Schema(
       index: true,
     },
     scheduledAt: { type: Date },
+    audience: {
+      mode: {
+        type: String,
+        enum: ["manual", "tags"],
+        default: "manual",
+        index: true,
+      },
+      tags: [{ type: String, trim: true }],
+      tagMatch: {
+        type: String,
+        enum: ["all", "any"],
+        default: "all",
+      },
+      runtime: CampaignRuntimeSnapshotSchema,
+    },
     schedule: {
       frequency: {
         type: String,

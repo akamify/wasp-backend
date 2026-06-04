@@ -74,6 +74,18 @@ async function findContactsForExport({ workspaceId, wabaId, ids }) {
     .lean();
 }
 
+async function listContactTags({ workspaceId, wabaId }) {
+  return Contact.aggregate([
+    { $match: { workspaceId, wabaId, tags: { $exists: true, $ne: [] } } },
+    { $unwind: "$tags" },
+    { $project: { tag: { $trim: { input: "$tags" } } } },
+    { $match: { tag: { $ne: "" } } },
+    { $group: { _id: "$tag", count: { $sum: 1 } } },
+    { $sort: { _id: 1 } },
+    { $project: { _id: 0, tag: "$_id", count: 1 } },
+  ]);
+}
+
 async function countContactsCreatedBetween({ workspaceId, start, end }) {
   return Contact.countDocuments({
     workspaceId,
@@ -111,6 +123,7 @@ module.exports = {
   updateContact,
   deleteContact,
   findContactsForExport,
+  listContactTags,
   countContactsCreatedBetween,
   countContactExportsBetween,
   writeContactExportAudit,
