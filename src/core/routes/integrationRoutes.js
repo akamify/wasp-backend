@@ -30,6 +30,11 @@ router.post(
               buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
               flowTokens: Joi.array().items(Joi.string().allow("")).max(10).optional(),
               flowActionData: Joi.array().max(10).optional(),
+              tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
+              attributes: Joi.object().max(50).optional(),
+              name: Joi.string().trim().max(120).optional(),
+              email: Joi.string().trim().email().max(160).optional(),
+              company: Joi.string().trim().max(120).optional(),
             })
           )
         )

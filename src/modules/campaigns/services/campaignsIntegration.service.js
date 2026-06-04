@@ -15,6 +15,7 @@ const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/camp
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { upsertContactMetadataForUser } = require("@shared/services/contactService");
 const { resolveActiveConnection } = require("@shared/services/whatsappConnectionService");
 const { fetchTemplateStatus } = require("@shared/utils/whatsappSender");
 const { validateBeforeSend } = require("@shared/utils/templateStructure");
@@ -57,6 +58,35 @@ function normalizeRemoteStatus(status) {
     if (s.includes("disable")) return "disabled";
     if (s.includes("pending")) return "pending";
     return s || "pending";
+}
+
+function buildRecipientContactPatch(recipient) {
+    const patch = { source: "outbound" };
+    if (recipient.name) patch.name = recipient.name;
+    if (recipient.email) patch.email = recipient.email;
+    if (recipient.company) patch.company = recipient.company;
+    if (Array.isArray(recipient.tags)) patch.tags = recipient.tags;
+    if (recipient.attributes && typeof recipient.attributes === "object" && !Array.isArray(recipient.attributes)) {
+        patch.attributes = recipient.attributes;
+    }
+    return patch;
+}
+
+async function upsertApiCampaignContacts({ workspaceId, scope, recipients }) {
+    const batchSize = Math.min(Math.max(Number(process.env.API_CAMPAIGN_CONTACT_UPSERT_BATCH_SIZE || 100), 10), 500);
+    for (let index = 0; index < recipients.length; index += batchSize) {
+        const batch = recipients.slice(index, index + batchSize);
+        await Promise.all(batch.map((recipient) =>
+            upsertContactMetadataForUser({
+                userId: workspaceId,
+                wabaId: scope.wabaId,
+                phoneNumberId: scope.phoneNumberId || null,
+                phone: recipient.to,
+                patch: buildRecipientContactPatch(recipient),
+                createIfMissing: true,
+            })
+        ));
+    }
 }
 
 async function syncTemplateFromMetaBeforeSend({ workspaceId, template }) {
@@ -166,6 +196,7 @@ async function sendApiCampaignByName(req) {
     await assertTemplateBelongsToCurrentWaba({ template, workspaceId });
     const sendTemplate = await syncTemplateFromMetaBeforeSend({ workspaceId, template });
     recipients.forEach((recipient) => validateBeforeSend(sendTemplate, recipient));
+    await upsertApiCampaignContacts({ workspaceId, scope, recipients });
 
     const estimate = await computeCampaignEstimate({ workspaceId, template: sendTemplate, recipients });
     if (estimate.estimatedCredits > 0) {

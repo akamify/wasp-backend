@@ -130,6 +130,37 @@ async function upsertContactForUser({ userId, wabaId, phoneNumberId, phone, patc
   });
 }
 
+async function upsertContactMetadataForUser({ userId, wabaId, phoneNumberId, phone, patch = {}, createIfMissing = true }) {
+  const normalizedPhone = assertNormalizedPhone(phone);
+  const [existing, nextTags, nextAttributes] = await Promise.all([
+    Contact.findOne({ workspaceId: userId, wabaId, phone: normalizedPhone }).select("tags attributes").lean(),
+    Promise.resolve(normalizeTags(patch.tags)),
+    Promise.resolve(normalizeAttributes(patch.attributes)),
+  ]);
+
+  const mergedPatch = { ...patch };
+  if (nextTags !== undefined) {
+    const existingTags = Array.isArray(existing?.tags) ? existing.tags : [];
+    mergedPatch.tags = Array.from(new Set([...existingTags, ...nextTags].map((tag) => String(tag || "").trim()).filter(Boolean)));
+  }
+  if (nextAttributes !== undefined) {
+    const existingAttributes =
+      existing?.attributes && typeof existing.attributes === "object"
+        ? Object.fromEntries(existing.attributes instanceof Map ? existing.attributes : Object.entries(existing.attributes))
+        : {};
+    mergedPatch.attributes = { ...existingAttributes, ...nextAttributes };
+  }
+
+  return upsertContactForUser({
+    userId,
+    wabaId,
+    phoneNumberId,
+    phone: normalizedPhone,
+    patch: mergedPatch,
+    createIfMissing,
+  });
+}
+
 async function touchContactFromMessage({ userId, wabaId, phoneNumberId, phone, direction, preview, occurredAt, name }) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return null;
@@ -157,5 +188,6 @@ module.exports = {
   normalizePhone,
   assertNormalizedPhone,
   upsertContactForUser,
+  upsertContactMetadataForUser,
   touchContactFromMessage,
 };

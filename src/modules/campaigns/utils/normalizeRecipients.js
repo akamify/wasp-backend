@@ -19,6 +19,11 @@ function normalizeRecipients(recipients) {
             buttonTtlMinutes: Array.isArray(raw.buttonTtlMinutes) ? raw.buttonTtlMinutes : undefined,
             flowTokens: Array.isArray(raw.flowTokens) ? raw.flowTokens : undefined,
             flowActionData: Array.isArray(raw.flowActionData) ? raw.flowActionData : undefined,
+            tags: Array.isArray(raw.tags) ? raw.tags : undefined,
+            attributes: raw.attributes && typeof raw.attributes === "object" && !Array.isArray(raw.attributes) ? raw.attributes : undefined,
+            name: raw.name ? String(raw.name) : undefined,
+            email: raw.email ? String(raw.email) : undefined,
+            company: raw.company ? String(raw.company) : undefined,
         });
     }
 
