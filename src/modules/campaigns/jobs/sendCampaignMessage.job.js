@@ -40,15 +40,22 @@ function isNonRetryableSendError(err) {
 
 async function finalizeCampaignIfDone({ workspaceId, campaignId }) {
     try {
-        const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals type").lean();
+        const campaign = await Campaign.findOne({ _id: campaignId, workspaceId }).select("status totals type schedule").lean();
         if (!campaign) return;
         if (String(campaign.type || "") === "api") return;
         const queued = Number(campaign?.totals?.queued || 0);
         if (queued > 0) return;
         const status = String(campaign.status || "");
         if (![CAMPAIGN_STATUSES.DRAFT, CAMPAIGN_STATUSES.QUEUED, CAMPAIGN_STATUSES.RUNNING].includes(status)) return;
-        await Campaign.updateOne({ _id: campaignId, workspaceId }, { $set: { status: CAMPAIGN_STATUSES.COMPLETED } });
-        emitCampaignEvent(CAMPAIGN_EVENTS.COMPLETED, { campaignId: String(campaignId), workspaceId });
+        const hasNextRecurringRun =
+            campaign?.schedule?.status === "active" &&
+            campaign?.schedule?.nextRunAt &&
+            String(campaign?.schedule?.frequency || "") !== "once";
+        await Campaign.updateOne(
+            { _id: campaignId, workspaceId },
+            { $set: { status: hasNextRecurringRun ? CAMPAIGN_STATUSES.QUEUED : CAMPAIGN_STATUSES.COMPLETED } }
+        );
+        emitCampaignEvent(hasNextRecurringRun ? CAMPAIGN_EVENTS.SCHEDULED : CAMPAIGN_EVENTS.COMPLETED, { campaignId: String(campaignId), workspaceId });
     } catch { }
 }
 

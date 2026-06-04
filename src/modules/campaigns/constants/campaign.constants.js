@@ -23,4 +23,15 @@ const CAMPAIGN_EVENTS = {
     FAILED: "campaign-failed",
 };
 
-module.exports = { CAMPAIGN_STATUSES, CAMPAIGN_TYPES, CAMPAIGN_EVENTS };
+const CAMPAIGN_SCHEDULE_FREQUENCIES = {
+    ONCE: "once",
+    DAILY: "daily",
+    WEEKLY: "weekly",
+};
+
+const CAMPAIGN_QUEUE_JOBS = {
+    SEND_MESSAGE: "send-message",
+    DISPATCH_SCHEDULED: "dispatch-scheduled-campaign",
+};
+
+module.exports = { CAMPAIGN_STATUSES, CAMPAIGN_TYPES, CAMPAIGN_EVENTS, CAMPAIGN_SCHEDULE_FREQUENCIES, CAMPAIGN_QUEUE_JOBS };

@@ -112,6 +112,11 @@ router.post(
         .max(50000)
         .optional(),
       scheduledAt: Joi.date().iso().optional(),
+      schedule: Joi.object({
+        frequency: Joi.string().valid("once", "daily", "weekly").default("once"),
+        endAt: Joi.date().iso().optional(),
+        maxOccurrences: Joi.number().integer().min(1).max(365).optional(),
+      }).optional(),
     })
   ),
   asyncHandler(createCampaign)

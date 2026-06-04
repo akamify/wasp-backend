@@ -45,6 +45,11 @@ async function updateCampaignStatus(req) {
     }
 
     campaign.status = nextStatus;
+    if (campaign.schedule && String(campaign.schedule.frequency || "") !== "once") {
+        if (action === "stop") campaign.schedule.status = "canceled";
+        if (action === "complete") campaign.schedule.status = "completed";
+        if (action === "resume" && campaign.schedule.nextRunAt) campaign.schedule.status = "active";
+    }
     await campaign.save();
     emitCampaignEvent(CAMPAIGN_EVENTS.PROCESSING, { campaignId: String(campaign._id), status: nextStatus });
     return { success: true, campaign };

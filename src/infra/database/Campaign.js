@@ -1,5 +1,19 @@
 const mongoose = require("mongoose");
 
+const CampaignRecipientSnapshotSchema = new mongoose.Schema(
+  {
+    to: { type: String, required: true, trim: true },
+    variables: [{ type: String, default: "" }],
+    headerVariables: [{ type: String, default: "" }],
+    otpCode: { type: String, default: "" },
+    buttonValues: [{ type: String, default: "" }],
+    buttonTtlMinutes: [{ type: Number }],
+    flowTokens: [{ type: String, default: "" }],
+    flowActionData: [{ type: mongoose.Schema.Types.Mixed }],
+  },
+  { _id: false }
+);
+
 const CampaignSchema = new mongoose.Schema(
   {
     workspaceId: {
@@ -25,6 +39,27 @@ const CampaignSchema = new mongoose.Schema(
       index: true,
     },
     scheduledAt: { type: Date },
+    schedule: {
+      frequency: {
+        type: String,
+        enum: ["once", "daily", "weekly"],
+        default: "once",
+        index: true,
+      },
+      status: {
+        type: String,
+        enum: ["inactive", "active", "completed", "canceled"],
+        default: "inactive",
+        index: true,
+      },
+      startAt: { type: Date },
+      endAt: { type: Date },
+      nextRunAt: { type: Date, index: true },
+      lastRunAt: { type: Date },
+      maxOccurrences: { type: Number, min: 1 },
+      occurrencesRun: { type: Number, default: 0, min: 0 },
+    },
+    recipientSnapshot: [CampaignRecipientSnapshotSchema],
     totals: {
       total: { type: Number, default: 0 },
       queued: { type: Number, default: 0 },
@@ -38,6 +73,7 @@ const CampaignSchema = new mongoose.Schema(
 
 CampaignSchema.index({ workspaceId: 1, createdAt: -1 });
 CampaignSchema.index({ workspaceId: 1, wabaId: 1, createdAt: -1 });
+CampaignSchema.index({ "schedule.status": 1, "schedule.nextRunAt": 1 });
 
 const Campaign = mongoose.model("Campaign", CampaignSchema);
 

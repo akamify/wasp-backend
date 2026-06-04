@@ -24,6 +24,23 @@ function updateCampaign(query, update) {
     return Campaign.updateOne(query, update);
 }
 
+function findCampaignForScheduledDispatch({ campaignId, workspaceId }) {
+    return Campaign.findOne({ _id: campaignId, workspaceId }).select(
+        "_id workspaceId wabaId templateId type status schedule recipientSnapshot totals"
+    );
+}
+
+function listActiveScheduledCampaigns({ limit }) {
+    return Campaign.find({
+        "schedule.status": "active",
+        "schedule.nextRunAt": { $ne: null },
+        status: { $nin: ["completed", "failed", "canceled", "cancelled"] },
+    })
+        .select("_id workspaceId schedule.nextRunAt")
+        .sort({ "schedule.nextRunAt": 1 })
+        .limit(limit);
+}
+
 function deleteCampaign(query) {
     return Campaign.deleteOne(query);
 }
@@ -47,6 +64,8 @@ module.exports = {
     getCampaignByIdLean,
     createCampaign,
     updateCampaign,
+    findCampaignForScheduledDispatch,
+    listActiveScheduledCampaigns,
     deleteCampaign,
     incrementCampaignTotals,
     countCampaignsCreatedBetween,

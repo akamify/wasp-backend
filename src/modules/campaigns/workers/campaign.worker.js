@@ -1,7 +1,9 @@
 const { campaignQueue, notificationQueue } = require("@infra/queues/index");
 const { createWorker } = require("@infra/queues/queueFactory");
 const { attachQueueObserver } = require("@infra/queues/queueObserver");
+const { CAMPAIGN_QUEUE_JOBS } = require("@modules/campaigns/constants/campaign.constants");
 const { sendCampaignMessageJob } = require("@modules/campaigns/jobs/sendCampaignMessage.job");
+const { dispatchScheduledCampaign, recoverScheduledCampaignDispatches } = require("@modules/campaigns/services/campaignScheduler.service");
 const logger = require("@core/logger/logger");
 
 function startCampaignWorker() {
@@ -14,7 +16,12 @@ function startCampaignWorker() {
 
     const worker = createWorker(
         "campaigns",
-        async (job) => sendCampaignMessageJob(job),
+        async (job) => {
+            if (job.name === CAMPAIGN_QUEUE_JOBS.DISPATCH_SCHEDULED) {
+                return dispatchScheduledCampaign(job.data || {});
+            }
+            return sendCampaignMessageJob(job);
+        },
         {
             concurrency,
             limiter: { max: ratePerSec, duration: 1000 },
@@ -45,6 +52,10 @@ function startCampaignWorker() {
             }
         }
     });
+
+    recoverScheduledCampaignDispatches()
+        .then((result) => logger.info("Campaign schedule recovery completed", result))
+        .catch((err) => logger.warn("Campaign schedule recovery failed", { message: err?.message || String(err) }));
 
     logger.info("Campaign worker running", { concurrency, ratePerSec });
     return worker;

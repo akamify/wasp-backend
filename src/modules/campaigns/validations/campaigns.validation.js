@@ -19,16 +19,23 @@ const estimateSchema = Joi.object({
     recipients: Joi.array().items(recipientSchema).min(1).max(50000).required(),
 });
 
+const scheduleSchema = Joi.object({
+    frequency: Joi.string().valid("once", "daily", "weekly").default("once"),
+    endAt: Joi.date().iso().optional(),
+    maxOccurrences: Joi.number().integer().min(1).max(365).optional(),
+}).optional();
+
 const createSchema = Joi.object({
     name: Joi.string().trim().min(2).max(140).required(),
     type: Joi.string().valid("broadcast", "csv", "api").optional(),
     templateId: Joi.string().required(),
     recipients: Joi.array().items(recipientSchema).max(50000).optional(),
     scheduledAt: Joi.date().iso().optional(),
+    schedule: scheduleSchema,
 });
 
 const actionSchema = Joi.object({
     action: Joi.string().valid("pause", "resume", "stop", "complete").required(),
 });
 
-module.exports = { recipientSchema, estimateSchema, createSchema, actionSchema };
+module.exports = { recipientSchema, estimateSchema, createSchema, actionSchema, scheduleSchema };

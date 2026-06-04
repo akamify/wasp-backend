@@ -4,10 +4,12 @@ const { CAMPAIGN_STATUSES, CAMPAIGN_TYPES } = require("@modules/campaigns/consta
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { normalizeRecipients } = require("@modules/campaigns/utils/normalizeRecipients");
 const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate");
+const { buildRecurringSchedule, normalizeScheduleInput } = require("@modules/campaigns/utils/schedule");
 const { campaignsRepository, templatesRepository } = require("@modules/campaigns/repositories/index");
 const { debit, credit, ensureBalance, getOrCreateWallet } = require("@modules/wallet/services/wallet.core.service");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
+const { scheduleNextCampaignDispatch } = require("@modules/campaigns/services/campaignScheduler.service");
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
 const { subscriptionRepository } = require("@modules/billing/repositories");
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
@@ -42,7 +44,7 @@ async function createCampaign(req) {
             campaignsRepository.countCampaignsCreatedBetween({ workspaceId: req.workspace.id, start, end }),
     });
 
-    const { name, templateId, recipients, scheduledAt, type } = req.body;
+    const { name, templateId, recipients, scheduledAt, type, schedule } = req.body;
     const activeSubscription = await subscriptionRepository.findActiveByWorkspace(req.workspace.id);
     const template = await templatesRepository.getTemplateById({ id: templateId, workspaceId: req.workspace.id });
     if (!template) throw new HttpError(404, "Template not found");
@@ -50,6 +52,21 @@ async function createCampaign(req) {
     await assertTemplateBelongsToCurrentWaba({ template, workspaceId: req.workspace.id });
     const normalizedRecipients = normalizeRecipients(recipients);
     const normalizedType = String(type || CAMPAIGN_TYPES.BROADCAST).toLowerCase();
+    const normalizedSchedule = normalizeScheduleInput({ scheduledAt, schedule });
+    if (normalizedSchedule.isRecurring && normalizedType === CAMPAIGN_TYPES.API) {
+        throw new HttpError(400, "Recurring schedule is only supported for broadcast and CSV campaigns");
+    }
+    if (normalizedSchedule.isRecurring && !normalizedSchedule.startAt) {
+        throw new HttpError(400, "scheduledAt is required for recurring campaigns");
+    }
+    if (
+        normalizedSchedule.isRecurring &&
+        normalizedSchedule.endAt &&
+        normalizedSchedule.startAt &&
+        normalizedSchedule.endAt.getTime() < normalizedSchedule.startAt.getTime()
+    ) {
+        throw new HttpError(400, "schedule.endAt must be after scheduledAt");
+    }
     const hasCampaignApiAccess = !isPlanRestrictionsEnabled()
         ? true
         : activeSubscription
@@ -78,13 +95,29 @@ async function createCampaign(req) {
             throw err;
         }
     }
+    const recurringSchedule = buildRecurringSchedule({ scheduledAt, schedule });
+    if (normalizedSchedule.isRecurring && !recurringSchedule?.nextRunAt) {
+        throw new HttpError(400, "Recurring campaign needs a valid future run time");
+    }
     const campaign = await campaignsRepository.createCampaign({
         workspaceId: req.workspace.id, wabaId: template.wabaId, name, templateId: template._id,
         status: normalizedType === CAMPAIGN_TYPES.API && !scheduledAt ? CAMPAIGN_STATUSES.RUNNING : CAMPAIGN_STATUSES.QUEUED,
         type: normalizedType || CAMPAIGN_TYPES.BROADCAST, scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
-        totals: { total: normalizedRecipients.length, queued: normalizedRecipients.length, sent: 0, failed: 0 },
+        schedule: recurringSchedule || undefined,
+        recipientSnapshot: recurringSchedule ? normalizedRecipients : undefined,
+        totals: recurringSchedule
+            ? { total: 0, queued: 0, sent: 0, failed: 0 }
+            : { total: normalizedRecipients.length, queued: normalizedRecipients.length, sent: 0, failed: 0 },
     });
     emitCampaignEvent(CAMPAIGN_EVENTS.CREATED, { campaignId: String(campaign._id), workspaceId: req.workspace.id });
+    if (recurringSchedule) {
+        await scheduleNextCampaignDispatch({
+            workspaceId: req.workspace.id,
+            campaignId: campaign._id,
+            runAt: recurringSchedule.nextRunAt,
+        });
+        return { success: true, campaign, creditEstimate: publicEstimate };
+    }
     const delayMs = campaign.scheduledAt ? Math.max(campaign.scheduledAt.getTime() - Date.now(), 0) : 0;
     if (delayMs > 0) emitCampaignEvent(CAMPAIGN_EVENTS.SCHEDULED, { campaignId: String(campaign._id), delayMs });
 
