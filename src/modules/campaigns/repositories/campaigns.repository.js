@@ -26,7 +26,7 @@ function updateCampaign(query, update) {
 
 function findCampaignForScheduledDispatch({ campaignId, workspaceId }) {
     return Campaign.findOne({ _id: campaignId, workspaceId }).select(
-        "_id workspaceId wabaId templateId type status audience schedule recipientSnapshot totals"
+        "_id workspaceId wabaId templateId type status audience schedule recipientSnapshot totals templateVariableMappings headerVariableMappings buttonVariableMappings"
     );
 }
 

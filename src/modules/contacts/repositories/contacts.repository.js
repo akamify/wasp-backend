@@ -59,7 +59,12 @@ async function updateContact(existingDoc, updates) {
   if (updates.language !== undefined) existingDoc.language = updates.language ? String(updates.language).trim() : undefined;
   if (updates.notes !== undefined) existingDoc.notes = updates.notes || undefined;
   if (updates.tags !== undefined) existingDoc.tags = nextTags;
-  if (updates.attributes !== undefined) existingDoc.attributes = nextAttributes || {};
+  if (updates.attributes !== undefined) {
+    const existingAttributes = existingDoc.attributes instanceof Map
+      ? Object.fromEntries(existingDoc.attributes.entries())
+      : { ...(existingDoc.attributes || {}) };
+    existingDoc.attributes = { ...existingAttributes, ...(nextAttributes || {}) };
+  }
   return existingDoc.save();
 }
 

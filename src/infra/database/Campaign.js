@@ -27,6 +27,26 @@ const CampaignRuntimeSnapshotSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const VariableMappingSchema = new mongoose.Schema(
+  {
+    position: { type: Number, required: true, min: 1, max: 20 },
+    sourceType: { type: String, enum: ["static", "contact_field", "contact_attribute"], required: true },
+    sourceKey: { type: String, trim: true },
+    value: { type: String, default: "" },
+    fallback: { type: String, default: "" },
+  },
+  { _id: false }
+);
+
+const AttributeFilterSchema = new mongoose.Schema(
+  {
+    key: { type: String, required: true, trim: true },
+    operator: { type: String, enum: ["equals", "not_equals", "exists", "not_exists", "contains"], required: true },
+    value: { type: mongoose.Schema.Types.Mixed },
+  },
+  { _id: false }
+);
+
 const CampaignSchema = new mongoose.Schema(
   {
     workspaceId: {
@@ -55,7 +75,7 @@ const CampaignSchema = new mongoose.Schema(
     audience: {
       mode: {
         type: String,
-        enum: ["manual", "tags"],
+        enum: ["manual", "tags", "attributes"],
         default: "manual",
         index: true,
       },
@@ -65,8 +85,12 @@ const CampaignSchema = new mongoose.Schema(
         enum: ["all", "any"],
         default: "all",
       },
+      attributeFilters: [AttributeFilterSchema],
       runtime: CampaignRuntimeSnapshotSchema,
     },
+    templateVariableMappings: [VariableMappingSchema],
+    headerVariableMappings: [VariableMappingSchema],
+    buttonVariableMappings: [VariableMappingSchema],
     schedule: {
       frequency: {
         type: String,

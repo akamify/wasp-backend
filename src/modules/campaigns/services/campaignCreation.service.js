@@ -15,6 +15,8 @@ const { subscriptionRepository } = require("@modules/billing/repositories");
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 const { validateBeforeSend } = require("@shared/utils/templateStructure");
+const { buildAttributeAudienceClauses } = require("@modules/campaigns/utils/attributeAudience");
+const { resolveRecipientRuntime } = require("@modules/campaigns/utils/templateVariableResolver");
 
 function buildStoredSendError(err) {
     const metaError = err?.metaDebug?.meta || err?.metaDebug?.raw?.error || err?.response?.data?.error || {};
@@ -39,9 +41,10 @@ function normalizeAudience(input) {
     const mode = String(input?.mode || CAMPAIGN_AUDIENCE_MODES.MANUAL).toLowerCase();
     const tags = Array.from(new Set((input?.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)));
     return {
-        mode: mode === CAMPAIGN_AUDIENCE_MODES.TAGS ? CAMPAIGN_AUDIENCE_MODES.TAGS : CAMPAIGN_AUDIENCE_MODES.MANUAL,
+        mode: [CAMPAIGN_AUDIENCE_MODES.TAGS, CAMPAIGN_AUDIENCE_MODES.ATTRIBUTES].includes(mode) ? mode : CAMPAIGN_AUDIENCE_MODES.MANUAL,
         tags,
         tagMatch: String(input?.tagMatch || "all").toLowerCase() === "any" ? "any" : "all",
+        attributeFilters: Array.isArray(input?.attributeFilters) ? input.attributeFilters : [],
         runtime: input?.runtime && typeof input.runtime === "object" ? input.runtime : null,
     };
 }
@@ -64,6 +67,31 @@ async function resolveTagRecipients({ workspaceId, wabaId, audience }) {
     return (contacts || []).map((contact) => buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime));
 }
 
+async function resolveAttributeRecipients({ workspaceId, wabaId, audience }) {
+    const filters = await buildAttributeAudienceClauses({ workspaceId, filters: audience.attributeFilters });
+    const contacts = await contactsRepository.findContactsByAttributeFilters({ workspaceId, wabaId, filters });
+    return (contacts || []).map((contact) => ({ contact, recipient: buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime) }));
+}
+
+async function resolveMappingsForRecipients({ workspaceId, wabaId, recipients, mappings }) {
+    const hasMappings = mappings.body.length || mappings.header.length || mappings.button.length;
+    if (!hasMappings) return { recipients, skipped: [] };
+    const phones = recipients.map((recipient) => recipient.to);
+    const contacts = await contactsRepository.findContactsByPhones({ workspaceId, wabaId, phones });
+    const byPhone = new Map((contacts || []).map((contact) => [String(contact.phone), contact]));
+    const resolved = [];
+    const skipped = [];
+    for (const recipient of recipients) {
+        const result = resolveRecipientRuntime({ contact: byPhone.get(String(recipient.to)), recipient, mappings });
+        if (result.missing.length) {
+            skipped.push({ to: recipient.to, reason: "missing_variable", missing: result.missing });
+        } else {
+            resolved.push(result.recipient);
+        }
+    }
+    return { recipients: resolved, skipped };
+}
+
 async function createCampaign(req) {
     await enforceMonthlyLimit({
         workspaceId: req.workspace.id,
@@ -83,12 +111,35 @@ async function createCampaign(req) {
     if (audience.mode === CAMPAIGN_AUDIENCE_MODES.TAGS && !audience.tags.length) {
         throw new HttpError(400, "Select at least one audience tag");
     }
-    const normalizedRecipients = audience.mode === CAMPAIGN_AUDIENCE_MODES.TAGS
+    if (audience.mode === CAMPAIGN_AUDIENCE_MODES.ATTRIBUTES && !audience.attributeFilters.length) {
+        throw new HttpError(400, "Select at least one attribute filter");
+    }
+    let audienceContactRecipients = null;
+    let normalizedRecipients = audience.mode === CAMPAIGN_AUDIENCE_MODES.TAGS
         ? await resolveTagRecipients({ workspaceId: req.workspace.id, wabaId: template.wabaId, audience })
-        : normalizeRecipients(recipients);
+        : audience.mode === CAMPAIGN_AUDIENCE_MODES.ATTRIBUTES
+            ? (audienceContactRecipients = await resolveAttributeRecipients({ workspaceId: req.workspace.id, wabaId: template.wabaId, audience })).map((item) => item.recipient)
+            : normalizeRecipients(recipients);
+    const mappings = {
+        body: req.body.templateVariableMappings || [],
+        header: req.body.headerVariableMappings || [],
+        button: req.body.buttonVariableMappings || [],
+    };
+    const mappingResult = audienceContactRecipients
+        ? (() => {
+            const resolved = [], skipped = [];
+            for (const item of audienceContactRecipients) {
+                const result = resolveRecipientRuntime({ contact: item.contact, recipient: item.recipient, mappings });
+                if (result.missing.length) skipped.push({ to: item.recipient.to, reason: "missing_variable", missing: result.missing });
+                else resolved.push(result.recipient);
+            }
+            return { recipients: resolved, skipped };
+        })()
+        : await resolveMappingsForRecipients({ workspaceId: req.workspace.id, wabaId: template.wabaId, recipients: normalizedRecipients, mappings });
+    normalizedRecipients = mappingResult.recipients;
     const normalizedType = String(type || CAMPAIGN_TYPES.BROADCAST).toLowerCase();
-    if (audience.mode === CAMPAIGN_AUDIENCE_MODES.TAGS && normalizedType !== CAMPAIGN_TYPES.BROADCAST) {
-        throw new HttpError(400, "Tag audience is only supported for broadcast campaigns");
+    if (audience.mode !== CAMPAIGN_AUDIENCE_MODES.MANUAL && normalizedType !== CAMPAIGN_TYPES.BROADCAST) {
+        throw new HttpError(400, "Tag and attribute audiences are only supported for broadcast campaigns");
     }
     const normalizedSchedule = normalizeScheduleInput({ scheduledAt, schedule });
     if (normalizedSchedule.isRecurring && normalizedType === CAMPAIGN_TYPES.API) {
@@ -119,7 +170,12 @@ async function createCampaign(req) {
         emitCampaignEvent(CAMPAIGN_EVENTS.CREATED, { campaignId: String(campaign._id), workspaceId: req.workspace.id });
         return { success: true, campaign, message: "API campaign created. Contacts will be provided by integrations at send time." };
     }
-    if (normalizedRecipients.length === 0) throw new HttpError(400, "At least one recipient required");
+    if (normalizedRecipients.length === 0) {
+        throw new HttpError(400, mappingResult.skipped.length ? "All recipients are missing required template variables" : "At least one recipient required", {
+            skippedRecipients: mappingResult.skipped.length,
+            missingVariablePreview: mappingResult.skipped.slice(0, 5),
+        });
+    }
     normalizedRecipients.forEach((recipient) => validateBeforeSend(template, recipient));
     const estimate = await computeCampaignEstimate({ workspaceId: req.workspace.id, template, recipients: normalizedRecipients });
     const { openWindowSet: _openWindowSet, ...publicEstimate } = estimate;
@@ -145,8 +201,12 @@ async function createCampaign(req) {
             mode: audience.mode,
             tags: audience.tags,
             tagMatch: audience.tagMatch,
+            attributeFilters: audience.attributeFilters,
             runtime: audience.runtime || undefined,
         },
+        templateVariableMappings: mappings.body,
+        headerVariableMappings: mappings.header,
+        buttonVariableMappings: mappings.button,
         schedule: recurringSchedule || undefined,
         recipientSnapshot: recurringSchedule && audience.mode === CAMPAIGN_AUDIENCE_MODES.MANUAL ? normalizedRecipients : undefined,
         totals: recurringSchedule
@@ -208,7 +268,18 @@ async function createCampaign(req) {
             emitCampaignEvent(failedCount > 0 ? CAMPAIGN_EVENTS.FAILED : CAMPAIGN_EVENTS.COMPLETED, { campaignId: String(campaign._id) });
         }
     }
-    return { success: true, campaign, creditEstimate: publicEstimate };
+    return {
+        success: true,
+        campaign,
+        creditEstimate: publicEstimate,
+        resolution: {
+            totalRecipients: normalizedRecipients.length + mappingResult.skipped.length,
+            resolvedRecipients: normalizedRecipients.length,
+            skippedRecipients: mappingResult.skipped.length,
+            skippedReasons: mappingResult.skipped.length ? { missing_variable: mappingResult.skipped.length } : {},
+            missingVariablePreview: mappingResult.skipped.slice(0, 5),
+        },
+    };
 }
 
 module.exports = { createCampaign };

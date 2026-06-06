@@ -5,6 +5,11 @@ const { subscriptionRepository } = require("@modules/billing/repositories");
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { contactAttributesRepository } = require("@modules/contacts/repositories/index");
+const {
+  normalizeAttributesMap,
+  removeAttributeKeys,
+} = require("@modules/contacts/utils/attributes.utils");
 
 function parseListPaging(req) {
   const page = Math.max(Number(req.query.page || 1), 1);
@@ -13,41 +18,64 @@ function parseListPaging(req) {
   return { page, limit, skip };
 }
 
-function buildListFilter(req, scope) {
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function buildListFilter(req, scope) {
   const filter = { workspaceId: req.workspace.id, wabaId: scope.wabaId };
   if (req.query.search) {
     const q = String(req.query.search).trim();
     if (q) {
-      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      const rx = new RegExp(escapeRegex(q), "i");
       filter.$or = [{ phone: rx }, { name: rx }, { email: rx }, { company: rx }];
     }
   }
-  return filter;
-}
-
-function normalizeAttributes(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
-  const out = {};
-  for (const [rawKey, rawValue] of Object.entries(input)) {
-    const key = String(rawKey || "").trim();
-    if (!key) continue;
-    if (typeof rawValue === "string") {
-      const trimmed = rawValue.trim();
-      if (!trimmed) continue;
-      out[key] = trimmed;
-      continue;
+  let attributeFilters = [];
+  if (req.query.attributeFilters) {
+    try {
+      attributeFilters = typeof req.query.attributeFilters === "string"
+        ? JSON.parse(req.query.attributeFilters)
+        : req.query.attributeFilters;
+    } catch {
+      throw new HttpError(400, "attributeFilters must be valid JSON");
     }
-    if (typeof rawValue === "number" || typeof rawValue === "boolean") {
-      out[key] = rawValue;
-    }
+  } else if (req.query.attributeKey) {
+    attributeFilters = [{
+      key: req.query.attributeKey,
+      operator: req.query.attributeOperator || "equals",
+      value: req.query.attributeValue,
+    }];
   }
-  return out;
+  if (attributeFilters.length > 10) throw new HttpError(400, "A maximum of 10 attribute filters is allowed");
+  if (attributeFilters.length) {
+    const definitions = await contactAttributesRepository.listDefinitions({ workspaceId: req.workspace.id, includeInactive: false });
+    const definitionMap = new Map(definitions.map((definition) => [definition.key, definition]));
+    const clauses = attributeFilters.map((item) => {
+      const key = String(item?.key || "").trim().toLowerCase();
+      const definition = definitionMap.get(key);
+      if (!definition) throw new HttpError(400, `Attribute '${key}' is not defined or active`);
+      const field = `attributes.${key}`;
+      const operator = String(item?.operator || "equals").toLowerCase();
+      if (operator === "exists") return { [field]: { $exists: true } };
+      if (operator === "not_exists") return { [field]: { $exists: false } };
+      const normalized = normalizeAttributesMap({ [key]: item?.value }, [definition]).values[key];
+      if (operator === "equals") return { [field]: normalized };
+      if (operator === "not_equals") return { [field]: { $ne: normalized } };
+      if (operator === "contains" && definition.type === "text") {
+        return { [field]: { $regex: escapeRegex(normalized), $options: "i" } };
+      }
+      throw new HttpError(400, `Operator '${operator}' is not supported for attribute '${key}'`);
+    });
+    filter.$and = [...(filter.$and || []), ...clauses];
+  }
+  return filter;
 }
 
 async function listContacts(req) {
   const scope = await requireActiveWabaScope(req.workspace.id);
   const { page, limit, skip } = parseListPaging(req);
-  const filter = buildListFilter(req, scope);
+  const filter = await buildListFilter(req, scope);
   const { contacts, total } = await contactsRepository.listContacts({ filter, skip, limit });
   return { success: true, contacts, page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) };
 }
@@ -86,6 +114,8 @@ async function createContact(req) {
   const phone = assertNormalizedPhone(req.body.phone);
   const duplicate = await contactsRepository.findIdByPhone({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone });
   if (duplicate) throw new HttpError(409, "A contact with this phone already exists");
+  const definitions = await contactAttributesRepository.listDefinitions({ workspaceId: req.workspace.id, includeInactive: true });
+  const normalizedAttributes = normalizeAttributesMap(req.body.attributes, definitions);
 
   const contact = await contactsRepository.createContact({
     workspaceId: req.workspace.id,
@@ -98,7 +128,7 @@ async function createContact(req) {
     language: req.body.language ? String(req.body.language).trim() : undefined,
     notes: req.body.notes || undefined,
     tags: Array.from(new Set((req.body.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean))),
-    attributes: normalizeAttributes(req.body.attributes),
+    attributes: normalizedAttributes.values,
     source: "manual",
   });
 
@@ -129,8 +159,16 @@ async function updateContact(req) {
     language: req.body.language,
     notes: req.body.notes,
     tags: req.body.tags,
-    attributes: req.body.attributes,
+    attributes: undefined,
   };
+  if (req.body.attributes !== undefined) {
+    const definitions = await contactAttributesRepository.listDefinitions({ workspaceId: req.workspace.id, includeInactive: true });
+    const normalized = normalizeAttributesMap(req.body.attributes, definitions);
+    updates.attributes = removeAttributeKeys(normalized.values, normalized.removals);
+    if (normalized.removals.length) {
+      existing.attributes = removeAttributeKeys(existing.attributes, normalized.removals);
+    }
+  }
 
   const contact = await contactsRepository.updateContact(existing, updates);
   return { success: true, contact };

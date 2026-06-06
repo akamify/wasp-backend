@@ -4,13 +4,15 @@ const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate")
 const { contactsRepository, templatesRepository } = require("@modules/campaigns/repositories/index");
 const { getOrCreateWallet, roundCurrency } = require("@modules/wallet/services/wallet.core.service");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
+const { buildAttributeAudienceClauses } = require("@modules/campaigns/utils/attributeAudience");
 
 function normalizeAudience(input) {
     const tags = Array.from(new Set((input?.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)));
     return {
-        mode: String(input?.mode || "manual").toLowerCase() === "tags" ? "tags" : "manual",
+        mode: ["tags", "attributes"].includes(String(input?.mode || "").toLowerCase()) ? String(input.mode).toLowerCase() : "manual",
         tags,
         tagMatch: String(input?.tagMatch || "all").toLowerCase() === "any" ? "any" : "all",
+        attributeFilters: Array.isArray(input?.attributeFilters) ? input.attributeFilters : [],
         runtime: input?.runtime && typeof input.runtime === "object" ? input.runtime : {},
     };
 }
@@ -42,6 +44,12 @@ async function estimateCampaign(req) {
             tags: audience.tags,
             tagMatch: audience.tagMatch,
         })).map((contact) => buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime))
+        : audience.mode === "attributes"
+            ? (await contactsRepository.findContactsByAttributeFilters({
+                workspaceId: req.workspace.id,
+                wabaId: template.wabaId,
+                filters: await buildAttributeAudienceClauses({ workspaceId: req.workspace.id, filters: audience.attributeFilters }),
+            })).map((contact) => buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime))
         : normalizeRecipients(recipients);
     if (normalizedRecipients.length === 0) throw new HttpError(400, "At least one recipient required");
     const estimate = await computeCampaignEstimate({ workspaceId: req.workspace.id, template, recipients: normalizedRecipients });

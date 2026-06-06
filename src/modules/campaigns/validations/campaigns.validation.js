@@ -14,13 +14,28 @@ const recipientSchema = Joi.alternatives().try(
     })
 );
 
+const variableMappingSchema = Joi.object({
+    position: Joi.number().integer().min(1).max(20).required(),
+    sourceType: Joi.string().valid("static", "contact_field", "contact_attribute").required(),
+    sourceKey: Joi.string().trim().max(50).allow("").optional(),
+    value: Joi.string().max(500).allow("").optional(),
+    fallback: Joi.string().max(500).allow("").optional(),
+});
+
+const attributeFilterSchema = Joi.object({
+    key: Joi.string().trim().max(50).required(),
+    operator: Joi.string().valid("equals", "not_equals", "exists", "not_exists", "contains").required(),
+    value: Joi.any().optional(),
+});
+
 const estimateSchema = Joi.object({
     templateId: Joi.string().required(),
     recipients: Joi.array().items(recipientSchema).min(1).max(50000).optional(),
     audience: Joi.object({
-        mode: Joi.string().valid("manual", "tags").default("manual"),
+        mode: Joi.string().valid("manual", "tags", "attributes").default("manual"),
         tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
         tagMatch: Joi.string().valid("all", "any").default("all"),
+        attributeFilters: Joi.array().items(attributeFilterSchema).max(10).optional(),
         runtime: Joi.object({
             variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
             headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
@@ -40,9 +55,10 @@ const scheduleSchema = Joi.object({
 }).optional();
 
 const audienceSchema = Joi.object({
-    mode: Joi.string().valid("manual", "tags").default("manual"),
+    mode: Joi.string().valid("manual", "tags", "attributes").default("manual"),
     tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
     tagMatch: Joi.string().valid("all", "any").default("all"),
+    attributeFilters: Joi.array().items(attributeFilterSchema).max(10).optional(),
     runtime: Joi.object({
         variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
         headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
@@ -62,6 +78,9 @@ const createSchema = Joi.object({
     scheduledAt: Joi.date().iso().optional(),
     schedule: scheduleSchema,
     audience: audienceSchema,
+    templateVariableMappings: Joi.array().items(variableMappingSchema).max(20).optional(),
+    headerVariableMappings: Joi.array().items(variableMappingSchema).max(10).optional(),
+    buttonVariableMappings: Joi.array().items(variableMappingSchema).max(10).optional(),
 });
 
 const actionSchema = Joi.object({

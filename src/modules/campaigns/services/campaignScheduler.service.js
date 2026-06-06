@@ -3,6 +3,8 @@ const { emitCampaignEvent } = require("@modules/campaigns/events/campaign.events
 const { campaignsRepository, contactsRepository } = require("@modules/campaigns/repositories/index");
 const { getNextRunAt } = require("@modules/campaigns/utils/schedule");
 const { enqueueCampaignRecipients, enqueueScheduledCampaignDispatch } = require("@modules/campaigns/services/campaignsQueue.service");
+const { buildAttributeAudienceClauses } = require("@modules/campaigns/utils/attributeAudience");
+const { resolveRecipientRuntime } = require("@modules/campaigns/utils/templateVariableResolver");
 
 function isStoppedStatus(status) {
     return [
@@ -45,18 +47,42 @@ function buildRecipientFromRuntime(to, runtime) {
 
 async function resolveCampaignRecipients(campaign) {
     const audience = campaign.audience || {};
-    if (audience.mode !== CAMPAIGN_AUDIENCE_MODES.TAGS) {
+    if (audience.mode === CAMPAIGN_AUDIENCE_MODES.MANUAL) {
         return normalizeRecipientSnapshot(campaign.recipientSnapshot);
     }
-    const tags = Array.from(new Set((audience.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)));
-    if (!tags.length) return [];
-    const contacts = await contactsRepository.findContactsByTags({
-        workspaceId: campaign.workspaceId,
-        wabaId: campaign.wabaId,
-        tags,
-        tagMatch: audience.tagMatch,
-    });
-    return (contacts || []).map((contact) => buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime));
+    let contacts = [];
+    if (audience.mode === CAMPAIGN_AUDIENCE_MODES.TAGS) {
+        const tags = Array.from(new Set((audience.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)));
+        if (!tags.length) return [];
+        contacts = await contactsRepository.findContactsByTags({
+            workspaceId: campaign.workspaceId,
+            wabaId: campaign.wabaId,
+            tags,
+            tagMatch: audience.tagMatch,
+        });
+    } else if (audience.mode === CAMPAIGN_AUDIENCE_MODES.ATTRIBUTES) {
+        const filters = await buildAttributeAudienceClauses({
+            workspaceId: campaign.workspaceId,
+            filters: audience.attributeFilters || [],
+        });
+        contacts = await contactsRepository.findContactsByAttributeFilters({
+            workspaceId: campaign.workspaceId,
+            wabaId: campaign.wabaId,
+            filters,
+        });
+    }
+    const mappings = {
+        body: campaign.templateVariableMappings || [],
+        header: campaign.headerVariableMappings || [],
+        button: campaign.buttonVariableMappings || [],
+    };
+    const recipients = [];
+    for (const contact of contacts || []) {
+        const recipient = buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime);
+        const resolved = resolveRecipientRuntime({ contact, recipient, mappings });
+        if (!resolved.missing.length) recipients.push(resolved.recipient);
+    }
+    return recipients;
 }
 
 async function scheduleNextCampaignDispatch({ workspaceId, campaignId, runAt }) {

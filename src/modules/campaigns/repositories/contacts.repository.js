@@ -9,10 +9,20 @@ function findContactsByTags({ workspaceId, wabaId, tags, tagMatch, select, limit
     if (!normalizedTags.length) return [];
     const tagQuery = String(tagMatch || "all") === "any" ? { $in: normalizedTags } : { $all: normalizedTags };
     return Contact.find({ workspaceId, wabaId, tags: tagQuery })
-        .select(select || "phone")
+        .select(select || "phone name email company language attributes")
         .sort({ updatedAt: -1, _id: 1 })
         .limit(Math.min(Math.max(Number(limit || 50000), 1), 50000))
         .lean();
 }
 
-module.exports = { findContactsByPhones, findContactsByTags };
+function findContactsByAttributeFilters({ workspaceId, wabaId, filters, limit }) {
+    const query = { workspaceId, wabaId };
+    if (filters?.length) query.$and = filters;
+    return Contact.find(query)
+        .select("phone name email company language attributes tags")
+        .sort({ updatedAt: -1, _id: 1 })
+        .limit(Math.min(Math.max(Number(limit || 50000), 1), 50000))
+        .lean();
+}
+
+module.exports = { findContactsByPhones, findContactsByTags, findContactsByAttributeFilters };

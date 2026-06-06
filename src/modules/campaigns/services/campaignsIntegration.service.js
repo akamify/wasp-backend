@@ -19,6 +19,8 @@ const { upsertContactMetadataForUser } = require("@shared/services/contactServic
 const { resolveActiveConnection } = require("@shared/services/whatsappConnectionService");
 const { fetchTemplateStatus } = require("@shared/utils/whatsappSender");
 const { validateBeforeSend } = require("@shared/utils/templateStructure");
+const { contactAttributesRepository } = require("@modules/contacts/repositories");
+const { normalizeAttributesMap } = require("@modules/contacts/utils/attributes.utils");
 
 function isUpstashRequestLimitError(err) {
     const msg = String(err?.message || "").toLowerCase();
@@ -73,9 +75,17 @@ function buildRecipientContactPatch(recipient) {
 }
 
 async function upsertApiCampaignContacts({ workspaceId, scope, recipients }) {
+    const definitions = await contactAttributesRepository.listDefinitions({ workspaceId, includeInactive: true });
+    const warnings = new Set();
+    const normalizedRecipients = recipients.map((recipient) => {
+        if (!recipient.attributes || typeof recipient.attributes !== "object" || Array.isArray(recipient.attributes)) return recipient;
+        const normalized = normalizeAttributesMap(recipient.attributes, definitions, { allowUnknown: true });
+        normalized.warnings.forEach((warning) => warnings.add(warning));
+        return { ...recipient, attributes: normalized.values };
+    });
     const batchSize = Math.min(Math.max(Number(process.env.API_CAMPAIGN_CONTACT_UPSERT_BATCH_SIZE || 100), 10), 500);
-    for (let index = 0; index < recipients.length; index += batchSize) {
-        const batch = recipients.slice(index, index + batchSize);
+    for (let index = 0; index < normalizedRecipients.length; index += batchSize) {
+        const batch = normalizedRecipients.slice(index, index + batchSize);
         await Promise.all(batch.map((recipient) =>
             upsertContactMetadataForUser({
                 userId: workspaceId,
@@ -87,6 +97,7 @@ async function upsertApiCampaignContacts({ workspaceId, scope, recipients }) {
             })
         ));
     }
+    return Array.from(warnings);
 }
 
 async function syncTemplateFromMetaBeforeSend({ workspaceId, template }) {
@@ -196,7 +207,7 @@ async function sendApiCampaignByName(req) {
     await assertTemplateBelongsToCurrentWaba({ template, workspaceId });
     const sendTemplate = await syncTemplateFromMetaBeforeSend({ workspaceId, template });
     recipients.forEach((recipient) => validateBeforeSend(sendTemplate, recipient));
-    await upsertApiCampaignContacts({ workspaceId, scope, recipients });
+    const warnings = await upsertApiCampaignContacts({ workspaceId, scope, recipients });
 
     const estimate = await computeCampaignEstimate({ workspaceId, template: sendTemplate, recipients });
     if (estimate.estimatedCredits > 0) {
@@ -416,7 +427,9 @@ async function sendApiCampaignByName(req) {
             },
             request: requestTotals,
             billing,
+            warnings,
         },
+        warnings,
     };
 }
 
