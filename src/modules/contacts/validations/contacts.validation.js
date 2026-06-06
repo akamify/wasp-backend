@@ -47,6 +47,7 @@ const attributeDefinitionCreateSchema = Joi.object({
   required: Joi.boolean().optional(),
   visible: Joi.boolean().optional(),
   editable: Joi.boolean().optional(),
+  active: Joi.boolean().optional(),
 });
 
 const attributeDefinitionUpdateSchema = Joi.object({
