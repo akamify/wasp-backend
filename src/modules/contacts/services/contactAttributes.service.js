@@ -94,7 +94,7 @@ async function updateContactAttributes(req, { replace = false } = {}) {
   const contact = await contactsRepository.getContact({ id: req.params.id, workspaceId: req.workspace.id, wabaId: scope.wabaId });
   if (!contact) throw new HttpError(404, "Contact not found");
   const definitions = await getDefinitions(req.workspace.id, true);
-  const normalized = normalizeAttributesMap(req.body.attributes, definitions);
+  const normalized = normalizeAttributesMap(req.body.attributes, definitions, { enforceRequired: replace });
   const legacy = Object.fromEntries(
     Object.entries(toPlainAttributes(contact.attributes)).filter(([key]) => !definitions.some((definition) => definition.key === key))
   );

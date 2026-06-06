@@ -17,6 +17,7 @@ const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templat
 const { validateBeforeSend } = require("@shared/utils/templateStructure");
 const { buildAttributeAudienceClauses } = require("@modules/campaigns/utils/attributeAudience");
 const { resolveRecipientRuntime } = require("@modules/campaigns/utils/templateVariableResolver");
+const { contactAttributesRepository } = require("@modules/contacts/repositories");
 
 function buildStoredSendError(err) {
     const metaError = err?.metaDebug?.meta || err?.metaDebug?.raw?.error || err?.response?.data?.error || {};
@@ -92,6 +93,21 @@ async function resolveMappingsForRecipients({ workspaceId, wabaId, recipients, m
     return { recipients: resolved, skipped };
 }
 
+async function validateMappings({ workspaceId, mappings }) {
+    const all = [...mappings.body, ...mappings.header, ...mappings.button];
+    const contactFields = new Set(["name", "phone", "email", "company", "language"]);
+    const definitions = await contactAttributesRepository.listDefinitions({ workspaceId, includeInactive: false });
+    const activeKeys = new Set(definitions.filter((definition) => definition.visible).map((definition) => definition.key));
+    for (const mapping of all) {
+        if (mapping.sourceType === "contact_field" && !contactFields.has(mapping.sourceKey)) {
+            throw new HttpError(400, `Invalid contact field mapping '${mapping.sourceKey || ""}'`);
+        }
+        if (mapping.sourceType === "contact_attribute" && !activeKeys.has(mapping.sourceKey)) {
+            throw new HttpError(400, `Attribute '${mapping.sourceKey || ""}' is not active and visible`);
+        }
+    }
+}
+
 async function createCampaign(req) {
     await enforceMonthlyLimit({
         workspaceId: req.workspace.id,
@@ -125,6 +141,7 @@ async function createCampaign(req) {
         header: req.body.headerVariableMappings || [],
         button: req.body.buttonVariableMappings || [],
     };
+    await validateMappings({ workspaceId: req.workspace.id, mappings });
     const mappingResult = audienceContactRecipients
         ? (() => {
             const resolved = [], skipped = [];

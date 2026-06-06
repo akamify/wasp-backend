@@ -115,7 +115,7 @@ async function createContact(req) {
   const duplicate = await contactsRepository.findIdByPhone({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone });
   if (duplicate) throw new HttpError(409, "A contact with this phone already exists");
   const definitions = await contactAttributesRepository.listDefinitions({ workspaceId: req.workspace.id, includeInactive: true });
-  const normalizedAttributes = normalizeAttributesMap(req.body.attributes, definitions);
+  const normalizedAttributes = normalizeAttributesMap(req.body.attributes, definitions, { enforceRequired: true });
 
   const contact = await contactsRepository.createContact({
     workspaceId: req.workspace.id,
