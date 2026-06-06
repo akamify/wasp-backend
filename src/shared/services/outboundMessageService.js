@@ -40,6 +40,9 @@ function throwIfPhoneNotRegistered(err) {
 async function sendTemplateMessageForUser({
   userId,
   campaignId,
+  campaignRunId,
+  contactId,
+  messageId,
   template,
   to,
   languageCode,
@@ -112,11 +115,13 @@ async function sendTemplateMessageForUser({
 
   const now = new Date();
 
-  const message = await Message.create({
+  const messageData = {
     workspaceId: userId,
     wabaId: creds.wabaId,
     phoneNumberId: creds.phoneNumberId,
     ...(campaignId ? { campaignId } : {}),
+    ...(campaignRunId ? { campaignRunId } : {}),
+    ...(contactId ? { contactId } : {}),
     templateId: normalizedTemplate._id,
     phone: resolvedPhone,
     direction: "outbound",
@@ -142,7 +147,15 @@ async function sendTemplateMessageForUser({
       },
       components: sendComponents,
     },
-  });
+  };
+  const message = messageId
+    ? await Message.findOneAndUpdate(
+        { _id: messageId, workspaceId: userId },
+        { $set: messageData, $unset: { error: 1 } },
+        { new: true }
+      )
+    : await Message.create(messageData);
+  if (!message) throw new Error("Outbound message reservation not found");
 
   const conversation = await touchConversation({
     userId,

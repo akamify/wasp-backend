@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const CampaignRecipientSnapshotSchema = new mongoose.Schema(
   {
+    contactId: { type: mongoose.Schema.Types.ObjectId, ref: "Contact" },
     to: { type: String, required: true, trim: true },
     variables: [{ type: String, default: "" }],
     headerVariables: [{ type: String, default: "" }],
@@ -92,22 +93,32 @@ const CampaignSchema = new mongoose.Schema(
     headerVariableMappings: [VariableMappingSchema],
     buttonVariableMappings: [VariableMappingSchema],
     schedule: {
+      type: {
+        type: String,
+        enum: ["once", "daily", "weekly"],
+        index: true,
+      },
       frequency: {
         type: String,
         enum: ["once", "daily", "weekly"],
-        default: "once",
         index: true,
       },
       status: {
         type: String,
-        enum: ["inactive", "active", "completed", "canceled"],
+        enum: ["inactive", "active", "paused", "completed", "failed", "canceled"],
         default: "inactive",
         index: true,
       },
+      timezone: { type: String, trim: true, default: "Asia/Kolkata" },
+      runAt: { type: Date },
+      timeOfDay: { type: String, trim: true },
+      weekdays: [{ type: Number, min: 1, max: 7 }],
       startAt: { type: Date },
       endAt: { type: Date },
       nextRunAt: { type: Date, index: true },
       lastRunAt: { type: Date },
+      lockUntil: { type: Date, default: null, index: true },
+      lockedBy: { type: String, default: null },
       maxOccurrences: { type: Number, min: 1 },
       occurrencesRun: { type: Number, default: 0, min: 0 },
     },

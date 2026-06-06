@@ -1,9 +1,15 @@
 const mongoose = require("mongoose");
 const { HttpError } = require("@shared/utils/httpError");
-const { CAMPAIGN_STATUSES, CAMPAIGN_TYPES } = require("@modules/campaigns/constants/campaign.constants");
+const {
+    CAMPAIGN_QUEUE_JOBS,
+    CAMPAIGN_STATUSES,
+    CAMPAIGN_TYPES,
+} = require("@modules/campaigns/constants/campaign.constants");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { campaignsRepository, messagesRepository } = require("@modules/campaigns/repositories/index");
 const { campaignQueue } = require("@infra/queues/index");
+const { getNextRunAt } = require("@modules/campaigns/utils/schedule");
+const { scheduleNextCampaignDispatch } = require("@modules/campaigns/services/campaignScheduler.service");
 
 async function updateCampaignStatus(req) {
     const { id } = req.params;
@@ -16,8 +22,13 @@ async function updateCampaignStatus(req) {
     const isStopped = currentStatus === CAMPAIGN_STATUSES.CANCELED || currentStatus === CAMPAIGN_STATUSES.CANCELLED;
     const isPaused = currentStatus === CAMPAIGN_STATUSES.PAUSED;
     const isLive = currentStatus === CAMPAIGN_STATUSES.RUNNING;
+    const isQueued = currentStatus === CAMPAIGN_STATUSES.QUEUED;
     const isApiCampaign = String(campaign.type || "") === CAMPAIGN_TYPES.API;
-    const allowedActions = isLive ? new Set(["pause", "stop", ...(isApiCampaign ? ["complete"] : [])]) : isPaused ? new Set(["resume", "stop"]) : new Set([]);
+    const allowedActions = (isLive || isQueued)
+        ? new Set(["pause", "stop", ...(isApiCampaign ? ["complete"] : [])])
+        : isPaused
+            ? new Set(["resume", "stop"])
+            : new Set([]);
     if (isStopped || !allowedActions.has(action)) throw new HttpError(400, "Action not allowed for current campaign status");
 
     const nextStatus = action === "pause" ? CAMPAIGN_STATUSES.PAUSED : action === "resume" ? CAMPAIGN_STATUSES.QUEUED : action === "stop" ? CAMPAIGN_STATUSES.CANCELED : action === "complete" ? CAMPAIGN_STATUSES.COMPLETED : null;
@@ -28,12 +39,18 @@ async function updateCampaignStatus(req) {
             const queue = campaignQueue.getCampaignQueue();
             const campaignId = String(campaign._id);
             if (action === "pause") {
-                const jobs = await queue.getJobs(["waiting", "prioritized"], 0, 5000);
-                await Promise.all(jobs.filter((job) => String(job?.data?.campaignId || "") === campaignId).map((job) => job.moveToDelayed(Date.now() + 365 * 24 * 60 * 60 * 1000)));
+                const jobs = await queue.getJobs(["waiting", "prioritized", "delayed"], 0, 5000);
+                await Promise.all(jobs.filter((job) =>
+                    String(job?.data?.campaignId || "") === campaignId &&
+                    job.name === CAMPAIGN_QUEUE_JOBS.DISPATCH_SCHEDULED
+                ).map(async (job) => { try { await job.remove(); } catch {} }));
             }
             if (action === "resume") {
                 const jobs = await queue.getJobs(["delayed"], 0, 5000);
-                await Promise.all(jobs.filter((job) => String(job?.data?.campaignId || "") === campaignId).map((job) => job.promote()));
+                await Promise.all(jobs.filter((job) =>
+                    String(job?.data?.campaignId || "") === campaignId &&
+                    job.name === CAMPAIGN_QUEUE_JOBS.DISPATCH_SCHEDULED
+                ).map(async (job) => { try { await job.remove(); } catch {} }));
             }
             if (action === "stop") {
                 const jobs = await queue.getJobs(["waiting", "delayed", "active", "prioritized", "paused"], 0, 5000);
@@ -45,12 +62,35 @@ async function updateCampaignStatus(req) {
     }
 
     campaign.status = nextStatus;
-    if (campaign.schedule && String(campaign.schedule.frequency || "") !== "once") {
+    let resumedRunAt = null;
+    if (campaign.schedule?.type || campaign.schedule?.frequency) {
+        const scheduleType = String(campaign.schedule.type || campaign.schedule.frequency || "");
         if (action === "stop") campaign.schedule.status = "canceled";
         if (action === "complete") campaign.schedule.status = "completed";
-        if (action === "resume" && campaign.schedule.nextRunAt) campaign.schedule.status = "active";
+        if (action === "pause") {
+            campaign.schedule.status = "paused";
+            campaign.schedule.lockUntil = null;
+            campaign.schedule.lockedBy = null;
+        }
+        if (action === "resume") {
+            if (scheduleType === "once" && new Date(campaign.schedule.runAt || campaign.schedule.startAt).getTime() <= Date.now()) {
+                throw new HttpError(400, "Completed or expired one-time campaign must be duplicated or rescheduled");
+            }
+            resumedRunAt = getNextRunAt({ schedule: campaign.schedule, now: new Date() });
+            campaign.schedule.nextRunAt = resumedRunAt;
+            campaign.schedule.status = "active";
+            campaign.schedule.lockUntil = null;
+            campaign.schedule.lockedBy = null;
+        }
     }
     await campaign.save();
+    if (resumedRunAt) {
+        await scheduleNextCampaignDispatch({
+            workspaceId: req.workspace.id,
+            campaignId: campaign._id,
+            runAt: resumedRunAt,
+        });
+    }
     emitCampaignEvent(CAMPAIGN_EVENTS.PROCESSING, { campaignId: String(campaign._id), status: nextStatus });
     return { success: true, campaign };
 }

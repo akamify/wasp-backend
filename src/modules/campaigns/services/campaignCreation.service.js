@@ -4,7 +4,7 @@ const { CAMPAIGN_AUDIENCE_MODES, CAMPAIGN_STATUSES, CAMPAIGN_TYPES } = require("
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { normalizeRecipients } = require("@modules/campaigns/utils/normalizeRecipients");
 const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate");
-const { buildRecurringSchedule, normalizeScheduleInput } = require("@modules/campaigns/utils/schedule");
+const { normalizeScheduleInput } = require("@modules/campaigns/utils/schedule");
 const { campaignsRepository, contactsRepository, templatesRepository } = require("@modules/campaigns/repositories/index");
 const { debit, credit, ensureBalance, getOrCreateWallet } = require("@modules/wallet/services/wallet.core.service");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
@@ -162,17 +162,6 @@ async function createCampaign(req) {
     if (normalizedSchedule.isRecurring && normalizedType === CAMPAIGN_TYPES.API) {
         throw new HttpError(400, "Recurring schedule is only supported for broadcast and CSV campaigns");
     }
-    if (normalizedSchedule.isRecurring && !normalizedSchedule.startAt) {
-        throw new HttpError(400, "scheduledAt is required for recurring campaigns");
-    }
-    if (
-        normalizedSchedule.isRecurring &&
-        normalizedSchedule.endAt &&
-        normalizedSchedule.startAt &&
-        normalizedSchedule.endAt.getTime() < normalizedSchedule.startAt.getTime()
-    ) {
-        throw new HttpError(400, "schedule.endAt must be after scheduledAt");
-    }
     const hasCampaignApiAccess = !isPlanRestrictionsEnabled()
         ? true
         : activeSubscription
@@ -187,7 +176,10 @@ async function createCampaign(req) {
         emitCampaignEvent(CAMPAIGN_EVENTS.CREATED, { campaignId: String(campaign._id), workspaceId: req.workspace.id });
         return { success: true, campaign, message: "API campaign created. Contacts will be provided by integrations at send time." };
     }
-    if (normalizedRecipients.length === 0) {
+    const canResolveDynamicAudienceAtRun =
+        normalizedSchedule.isScheduled &&
+        audience.mode !== CAMPAIGN_AUDIENCE_MODES.MANUAL;
+    if (normalizedRecipients.length === 0 && !canResolveDynamicAudienceAtRun) {
         throw new HttpError(400, mappingResult.skipped.length ? "All recipients are missing required template variables" : "At least one recipient required", {
             skippedRecipients: mappingResult.skipped.length,
             missingVariablePreview: mappingResult.skipped.slice(0, 5),
@@ -206,14 +198,11 @@ async function createCampaign(req) {
             throw err;
         }
     }
-    const recurringSchedule = buildRecurringSchedule({ scheduledAt, schedule });
-    if (normalizedSchedule.isRecurring && !recurringSchedule?.nextRunAt) {
-        throw new HttpError(400, "Recurring campaign needs a valid future run time");
-    }
     const campaign = await campaignsRepository.createCampaign({
         workspaceId: req.workspace.id, wabaId: template.wabaId, name, templateId: template._id,
-        status: normalizedType === CAMPAIGN_TYPES.API && !scheduledAt ? CAMPAIGN_STATUSES.RUNNING : CAMPAIGN_STATUSES.QUEUED,
-        type: normalizedType || CAMPAIGN_TYPES.BROADCAST, scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
+        status: CAMPAIGN_STATUSES.QUEUED,
+        type: normalizedType || CAMPAIGN_TYPES.BROADCAST,
+        scheduledAt: normalizedSchedule.isScheduled ? normalizedSchedule.nextRunAt : undefined,
         audience: {
             mode: audience.mode,
             tags: audience.tags,
@@ -224,18 +213,34 @@ async function createCampaign(req) {
         templateVariableMappings: mappings.body,
         headerVariableMappings: mappings.header,
         buttonVariableMappings: mappings.button,
-        schedule: recurringSchedule || undefined,
-        recipientSnapshot: recurringSchedule && audience.mode === CAMPAIGN_AUDIENCE_MODES.MANUAL ? normalizedRecipients : undefined,
-        totals: recurringSchedule
+        schedule: normalizedSchedule.isScheduled ? normalizedSchedule : undefined,
+        recipientSnapshot: normalizedSchedule.isScheduled && audience.mode === CAMPAIGN_AUDIENCE_MODES.MANUAL
+            ? await (async () => {
+                const contacts = await contactsRepository.findContactsByPhones({
+                    workspaceId: req.workspace.id,
+                    wabaId: template.wabaId,
+                    phones: normalizedRecipients.map((recipient) => recipient.to),
+                    select: "_id phone",
+                });
+                const contactIdByPhone = new Map(
+                    (contacts || []).map((contact) => [String(contact.phone), contact._id])
+                );
+                return normalizedRecipients.map((recipient) => ({
+                    ...recipient,
+                    contactId: contactIdByPhone.get(String(recipient.to)),
+                }));
+            })()
+            : undefined,
+        totals: normalizedSchedule.isScheduled
             ? { total: 0, queued: 0, sent: 0, failed: 0 }
             : { total: normalizedRecipients.length, queued: normalizedRecipients.length, sent: 0, failed: 0 },
     });
     emitCampaignEvent(CAMPAIGN_EVENTS.CREATED, { campaignId: String(campaign._id), workspaceId: req.workspace.id });
-    if (recurringSchedule) {
+    if (normalizedSchedule.isScheduled) {
         await scheduleNextCampaignDispatch({
             workspaceId: req.workspace.id,
             campaignId: campaign._id,
-            runAt: recurringSchedule.nextRunAt,
+            runAt: normalizedSchedule.nextRunAt,
         });
         return { success: true, campaign, creditEstimate: publicEstimate };
     }

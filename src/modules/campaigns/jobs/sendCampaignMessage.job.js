@@ -7,6 +7,7 @@ const { templateMessageChargeAmount } = require("@shared/services/pricingService
 const { CAMPAIGN_STATUSES } = require("@modules/campaigns/constants/campaign.constants");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
+const { campaignRunsRepository } = require("@modules/campaigns/repositories/index");
 
 function buildStoredSendError(err) {
     const metaError = err?.metaDebug?.meta || err?.metaDebug?.raw?.error || err?.response?.data?.error || {};
@@ -50,7 +51,7 @@ async function finalizeCampaignIfDone({ workspaceId, campaignId }) {
         const hasNextRecurringRun =
             campaign?.schedule?.status === "active" &&
             campaign?.schedule?.nextRunAt &&
-            String(campaign?.schedule?.frequency || "") !== "once";
+            String(campaign?.schedule?.type || campaign?.schedule?.frequency || "") !== "once";
         await Campaign.updateOne(
             { _id: campaignId, workspaceId },
             { $set: { status: hasNextRecurringRun ? CAMPAIGN_STATUSES.QUEUED : CAMPAIGN_STATUSES.COMPLETED } }
@@ -59,10 +60,67 @@ async function finalizeCampaignIfDone({ workspaceId, campaignId }) {
     } catch { }
 }
 
+async function reserveCampaignRunMessage({
+    job,
+    workspaceId,
+    campaignId,
+    campaignRunId,
+    contactId,
+    templateId,
+    wabaId,
+    to,
+    runtime,
+}) {
+    if (!campaignRunId) return { message: null, duplicate: false };
+    const queueJobId = String(job.id || "");
+    try {
+        const message = await Message.create({
+            workspaceId,
+            wabaId,
+            campaignId,
+            campaignRunId,
+            ...(contactId ? { contactId } : {}),
+            templateId,
+            phone: to,
+            direction: "outbound",
+            status: "processing",
+            text: "",
+            payload: { to, queueJobId, runtime },
+        });
+        return { message, duplicate: false };
+    } catch (err) {
+        if (Number(err?.code) !== 11000) throw err;
+        const message = await Message.findOne({
+            campaignRunId,
+            ...(contactId ? { contactId } : { phone: to }),
+        });
+        if (!message) throw err;
+        const existingJobId = String(message?.payload?.queueJobId || "");
+        const finalStatus = ["accepted", "sent", "delivered", "read", "failed"].includes(String(message.status || ""));
+        return {
+            message,
+            duplicate: finalStatus || (existingJobId && existingJobId !== queueJobId),
+        };
+    }
+}
+
+async function finalizeCampaignRunMessage({ messageId, campaignRunId, sent }) {
+    if (!messageId || !campaignRunId) return;
+    const finalized = await Message.findOneAndUpdate(
+        { _id: messageId, campaignRunFinalized: { $ne: true } },
+        { $set: { campaignRunFinalized: true } },
+        { new: true }
+    );
+    if (!finalized) return;
+    await campaignRunsRepository.finalizeCampaignRunMessage({ runId: campaignRunId, sent });
+}
+
 async function sendCampaignMessageJob(job) {
     const {
         workspaceId,
         campaignId,
+        campaignRunId,
+        contactId,
         templateId,
         to,
         variables,
@@ -110,6 +168,29 @@ async function sendCampaignMessageJob(job) {
 
     const pricing = await templateMessageChargeAmount({ workspaceId, phone: to, category: template.category });
     const chargeAmount = pricing.amount;
+    const runtime = {
+        variables: variables || [],
+        headerVariables: headerVariables || [],
+        otpCode: otpCode || "",
+        buttonValues: buttonValues || [],
+        buttonTtlMinutes: buttonTtlMinutes || [],
+        flowTokens: flowTokens || [],
+        flowActionData: flowActionData || [],
+    };
+    const reservation = await reserveCampaignRunMessage({
+        job,
+        workspaceId,
+        campaignId,
+        campaignRunId,
+        contactId,
+        templateId,
+        wabaId: campaign.wabaId,
+        to,
+        runtime,
+    });
+    if (reservation.duplicate) {
+        return { ok: true, skipped: true, reason: "campaign_run_recipient_already_processed" };
+    }
     try {
         if (chargeAmount > 0) {
             await debit(workspaceId, chargeAmount, "Message send (campaign)", { campaignId, templateId, to, pricing });
@@ -117,6 +198,9 @@ async function sendCampaignMessageJob(job) {
         await sendTemplateMessageForUser({
             userId: workspaceId,
             campaignId,
+            campaignRunId,
+            contactId,
+            messageId: reservation.message?._id,
             template,
             to,
             variables,
@@ -129,6 +213,11 @@ async function sendCampaignMessageJob(job) {
         });
 
         await Campaign.updateOne({ _id: campaignId, workspaceId }, { $inc: { "totals.queued": -1, "totals.sent": 1 } });
+        await finalizeCampaignRunMessage({
+            messageId: reservation.message?._id,
+            campaignRunId,
+            sent: true,
+        });
         await finalizeCampaignIfDone({ workspaceId, campaignId });
         return { ok: true };
     } catch (err) {
@@ -138,10 +227,12 @@ async function sendCampaignMessageJob(job) {
         }
         try {
             const now = new Date();
-            await Message.create({
+            const failedMessageData = {
                 workspaceId,
                 wabaId: campaign.wabaId,
                 campaignId,
+                ...(campaignRunId ? { campaignRunId } : {}),
+                ...(contactId ? { contactId } : {}),
                 templateId,
                 phone: to,
                 direction: "outbound",
@@ -151,18 +242,18 @@ async function sendCampaignMessageJob(job) {
                 payload: {
                     to,
                     template: { id: templateId },
-                    runtime: {
-                        variables: variables || [],
-                        headerVariables: headerVariables || [],
-                        otpCode: otpCode || "",
-                        buttonValues: buttonValues || [],
-                        buttonTtlMinutes: buttonTtlMinutes || [],
-                        flowTokens: flowTokens || [],
-                        flowActionData: flowActionData || [],
-                    },
+                    runtime,
                 },
                 error: storedError,
-            });
+            };
+            if (reservation.message?._id) {
+                await Message.updateOne(
+                    { _id: reservation.message._id },
+                    { $set: failedMessageData }
+                );
+            } else {
+                await Message.create(failedMessageData);
+            }
         } catch { }
         if (err?.response) {
             try {
@@ -182,6 +273,11 @@ async function sendCampaignMessageJob(job) {
                 $set: { lastError: { message: storedError.providerMessage || storedError.message } },
             }
         );
+        await finalizeCampaignRunMessage({
+            messageId: reservation.message?._id,
+            campaignRunId,
+            sent: false,
+        });
         await finalizeCampaignIfDone({ workspaceId, campaignId });
         emitCampaignEvent(CAMPAIGN_EVENTS.FAILED, { campaignId: String(campaignId), workspaceId, reason: storedError.providerMessage || storedError.message });
         return { ok: false, failed: true, error: storedError.providerMessage || storedError.message };

@@ -3,7 +3,11 @@ const { createWorker } = require("@infra/queues/queueFactory");
 const { attachQueueObserver } = require("@infra/queues/queueObserver");
 const { CAMPAIGN_QUEUE_JOBS } = require("@modules/campaigns/constants/campaign.constants");
 const { sendCampaignMessageJob } = require("@modules/campaigns/jobs/sendCampaignMessage.job");
-const { dispatchScheduledCampaign, recoverScheduledCampaignDispatches } = require("@modules/campaigns/services/campaignScheduler.service");
+const {
+    dispatchScheduledCampaign,
+    recoverScheduledCampaignDispatches,
+    reconcileDueCampaignSchedules,
+} = require("@modules/campaigns/services/campaignScheduler.service");
 const logger = require("@core/logger/logger");
 
 function startCampaignWorker() {
@@ -57,8 +61,28 @@ function startCampaignWorker() {
         .then((result) => logger.info("Campaign schedule recovery completed", result))
         .catch((err) => logger.warn("Campaign schedule recovery failed", { message: err?.message || String(err) }));
 
-    logger.info("Campaign worker running", { concurrency, ratePerSec });
-    return worker;
+    let reconcileRunning = false;
+    const reconcileInterval = setInterval(async () => {
+        if (reconcileRunning) return;
+        reconcileRunning = true;
+        try {
+            await reconcileDueCampaignSchedules();
+        } catch (err) {
+            logger.warn("Campaign schedule reconciler failed", { message: err?.message || String(err) });
+        } finally {
+            reconcileRunning = false;
+        }
+    }, 60 * 1000);
+    reconcileInterval.unref?.();
+
+    logger.info("Campaign worker started", { concurrency, ratePerSec });
+    logger.info("Campaign schedule reconciler started", { intervalMs: 60 * 1000 });
+    return {
+        async close() {
+            clearInterval(reconcileInterval);
+            await worker.close();
+        },
+    };
 }
 
 module.exports = { startCampaignWorker };

@@ -30,6 +30,41 @@ function findCampaignForScheduledDispatch({ campaignId, workspaceId }) {
     );
 }
 
+function acquireScheduledCampaignLock({ campaignId, workspaceId, now, lockUntil, lockedBy }) {
+    return Campaign.findOneAndUpdate(
+        {
+            _id: campaignId,
+            workspaceId,
+            "schedule.status": "active",
+            "schedule.nextRunAt": { $lte: now },
+            $or: [
+                { "schedule.lockUntil": { $exists: false } },
+                { "schedule.lockUntil": null },
+                { "schedule.lockUntil": { $lt: now } },
+            ],
+            status: { $nin: ["paused", "completed", "failed", "canceled", "cancelled"] },
+        },
+        {
+            $set: {
+                "schedule.lockUntil": lockUntil,
+                "schedule.lockedBy": lockedBy,
+            },
+        },
+        { new: true }
+    ).select(
+        "_id workspaceId wabaId templateId type status audience schedule recipientSnapshot totals templateVariableMappings headerVariableMappings buttonVariableMappings"
+    );
+}
+
+function releaseScheduledCampaignLock({ campaignId, workspaceId, lockedBy, update = {} }) {
+    const $set = { ...(update.$set || {}), "schedule.lockUntil": null, "schedule.lockedBy": null };
+    const normalizedUpdate = { ...update, $set };
+    return Campaign.updateOne(
+        { _id: campaignId, workspaceId, "schedule.lockedBy": lockedBy },
+        normalizedUpdate
+    );
+}
+
 function listActiveScheduledCampaigns({ limit }) {
     return Campaign.find({
         "schedule.status": "active",
@@ -39,6 +74,23 @@ function listActiveScheduledCampaigns({ limit }) {
         .select("_id workspaceId schedule.nextRunAt")
         .sort({ "schedule.nextRunAt": 1 })
         .limit(limit);
+}
+
+function listDueScheduledCampaigns({ now, limit }) {
+    return Campaign.find({
+        "schedule.status": "active",
+        "schedule.nextRunAt": { $lte: now },
+        status: { $nin: ["paused", "completed", "failed", "canceled", "cancelled"] },
+        $or: [
+            { "schedule.lockUntil": { $exists: false } },
+            { "schedule.lockUntil": null },
+            { "schedule.lockUntil": { $lt: now } },
+        ],
+    })
+        .select("_id workspaceId schedule.nextRunAt")
+        .sort({ "schedule.nextRunAt": 1 })
+        .limit(limit)
+        .lean();
 }
 
 function deleteCampaign(query) {
@@ -65,7 +117,10 @@ module.exports = {
     createCampaign,
     updateCampaign,
     findCampaignForScheduledDispatch,
+    acquireScheduledCampaignLock,
+    releaseScheduledCampaignLock,
     listActiveScheduledCampaigns,
+    listDueScheduledCampaigns,
     deleteCampaign,
     incrementCampaignTotals,
     countCampaignsCreatedBetween,

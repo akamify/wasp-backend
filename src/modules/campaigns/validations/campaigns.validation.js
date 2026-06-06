@@ -49,10 +49,47 @@ const estimateSchema = Joi.object({
 });
 
 const scheduleSchema = Joi.object({
-    frequency: Joi.string().valid("once", "daily", "weekly").default("once"),
+    type: Joi.string().valid("once", "daily", "weekly").optional(),
+    status: Joi.string().valid("active", "paused", "completed", "failed").optional(),
+    timezone: Joi.string().trim().max(80).default("Asia/Kolkata"),
+    runAt: Joi.date().iso().optional(),
+    timeOfDay: Joi.string().pattern(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
+    weekdays: Joi.array().items(Joi.number().integer().min(1).max(7)).max(7).optional(),
+    frequency: Joi.string().valid("once", "daily", "weekly").optional(),
+    startAt: Joi.date().iso().optional(),
     endAt: Joi.date().iso().optional(),
     maxOccurrences: Joi.number().integer().min(1).max(365).optional(),
-}).optional();
+})
+    .custom((value, helpers) => {
+        if (!value.type) return value;
+        if (value.type === "once") {
+            if (!value.runAt) return helpers.error("any.custom", { message: "schedule.runAt is required" });
+            if (new Date(value.runAt).getTime() <= Date.now()) {
+                return helpers.error("any.custom", { message: "schedule.runAt must be in the future" });
+            }
+            if (value.timeOfDay !== undefined || value.weekdays !== undefined) {
+                return helpers.error("any.custom", { message: "Once schedule only accepts runAt" });
+            }
+        }
+        if (value.type === "daily") {
+            if (!value.timeOfDay) return helpers.error("any.custom", { message: "schedule.timeOfDay is required" });
+            if (value.runAt !== undefined || value.weekdays !== undefined) {
+                return helpers.error("any.custom", { message: "Daily schedule only accepts timeOfDay" });
+            }
+        }
+        if (value.type === "weekly") {
+            if (!value.timeOfDay) return helpers.error("any.custom", { message: "schedule.timeOfDay is required" });
+            if (!Array.isArray(value.weekdays) || !value.weekdays.length) {
+                return helpers.error("any.custom", { message: "Select at least one weekday" });
+            }
+            if (value.runAt !== undefined) {
+                return helpers.error("any.custom", { message: "Weekly schedule does not accept runAt" });
+            }
+        }
+        return value;
+    }, "campaign schedule validation")
+    .messages({ "any.custom": "{{#message}}" })
+    .optional();
 
 const audienceSchema = Joi.object({
     mode: Joi.string().valid("manual", "tags", "attributes").default("manual"),

@@ -14,6 +14,19 @@ const MessageSchema = new mongoose.Schema(
       index: true,
       default: undefined,
     },
+    campaignRunId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CampaignRun",
+      index: true,
+      default: undefined,
+    },
+    contactId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Contact",
+      index: true,
+      default: undefined,
+    },
+    campaignRunFinalized: { type: Boolean, default: false },
     templateId: { type: mongoose.Schema.Types.ObjectId, ref: "Template", index: true },
 
     phone: { type: String, required: true, index: true },
@@ -23,7 +36,7 @@ const MessageSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["queued", "accepted", "sent", "delivered", "read", "failed", "received", "timeout_unknown"],
+      enum: ["queued", "processing", "accepted", "sent", "delivered", "read", "failed", "received", "timeout_unknown"],
       default: "queued",
       index: true,
     },
@@ -62,6 +75,25 @@ MessageSchema.index(
     unique: true,
     partialFilterExpression: {
       whatsappMessageId: { $type: "string" },
+    },
+  }
+);
+MessageSchema.index(
+  { campaignRunId: 1, contactId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      campaignRunId: { $type: "objectId" },
+      contactId: { $type: "objectId" },
+    },
+  }
+);
+MessageSchema.index(
+  { campaignRunId: 1, phone: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      campaignRunId: { $type: "objectId" },
     },
   }
 );

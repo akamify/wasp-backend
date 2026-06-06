@@ -1,5 +1,4 @@
 const express = require("express");
-const Joi = require("joi");
 const { auth } = require("@core/middleware/auth");
 const { authOrApiKey } = require("@core/middleware/authOrApiKey");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
@@ -8,6 +7,11 @@ const { requireApiPermission } = require("@modules/api-keys/middleware/requireAp
 const { requireWorkspacePermission } = require("@modules/workspaces/middleware/requireWorkspacePermission");
 const { validate } = require("@core/middleware/validate");
 const { asyncHandler } = require("@shared/utils/asyncHandler");
+const {
+  actionSchema,
+  createSchema,
+  estimateSchema,
+} = require("@modules/campaigns/validations/campaigns.validation");
 const {
   listCampaigns,
   getCampaign,
@@ -43,7 +47,7 @@ router.post(
   requireWorkspace,
   requireWorkspacePermission("campaigns.send"),
   requireCampaignsAccess,
-  validate(Joi.object({ action: Joi.string().valid("pause", "resume", "stop", "complete").required() })),
+  validate(actionSchema),
   asyncHandler(updateCampaignStatus)
 );
 router.post(
@@ -53,44 +57,7 @@ router.post(
   requireWorkspacePermission("campaigns.send"),
   requireCampaignsAccess,
   requireApiPermission("campaignSend"),
-  validate(
-    Joi.object({
-      templateId: Joi.string().required(),
-      recipients: Joi.array()
-        .items(
-          Joi.alternatives().try(
-            Joi.string().min(8).max(30),
-            Joi.object({
-              to: Joi.string().min(8).max(30).required(),
-              variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
-              headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-              otpCode: Joi.string().allow("").max(20).optional(),
-              buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-              buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
-              flowTokens: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-              flowActionData: Joi.array().max(10).optional(),
-            })
-          )
-        )
-        .min(1)
-        .max(50000)
-        .optional(),
-      audience: Joi.object({
-        mode: Joi.string().valid("manual", "tags").default("manual"),
-        tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
-        tagMatch: Joi.string().valid("all", "any").default("all"),
-        runtime: Joi.object({
-          variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
-          headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-          otpCode: Joi.string().allow("").max(20).optional(),
-          buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-          buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
-          flowTokens: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-          flowActionData: Joi.array().max(10).optional(),
-        }).optional(),
-      }).optional(),
-    })
-  ),
+  validate(estimateSchema),
   asyncHandler(estimateCampaign)
 );
 
@@ -102,51 +69,7 @@ router.post(
   requireWorkspacePermission("campaigns.send"),
   requireCampaignsAccess,
   requireApiPermission("campaignSend"),
-  validate(
-    Joi.object({
-      name: Joi.string().trim().min(2).max(140).required(),
-      type: Joi.string().valid("broadcast", "csv", "api").optional(),
-      templateId: Joi.string().required(),
-      recipients: Joi.array()
-        .items(
-          Joi.alternatives().try(
-            Joi.string().min(8).max(30),
-            Joi.object({
-              to: Joi.string().min(8).max(30).required(),
-              variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
-              headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-              otpCode: Joi.string().allow("").max(20).optional(),
-              buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-              buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
-              flowTokens: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-              flowActionData: Joi.array().max(10).optional(),
-            })
-          )
-        )
-        .max(50000)
-        .optional(),
-      scheduledAt: Joi.date().iso().optional(),
-      schedule: Joi.object({
-        frequency: Joi.string().valid("once", "daily", "weekly").default("once"),
-        endAt: Joi.date().iso().optional(),
-        maxOccurrences: Joi.number().integer().min(1).max(365).optional(),
-      }).optional(),
-      audience: Joi.object({
-        mode: Joi.string().valid("manual", "tags").default("manual"),
-        tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
-        tagMatch: Joi.string().valid("all", "any").default("all"),
-        runtime: Joi.object({
-          variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
-          headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-          otpCode: Joi.string().allow("").max(20).optional(),
-          buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-          buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
-          flowTokens: Joi.array().items(Joi.string().allow("")).max(10).optional(),
-          flowActionData: Joi.array().max(10).optional(),
-        }).optional(),
-      }).optional(),
-    })
-  ),
+  validate(createSchema),
   asyncHandler(createCampaign)
 );
 

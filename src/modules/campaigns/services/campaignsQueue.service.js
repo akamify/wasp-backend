@@ -1,7 +1,13 @@
 const { campaignQueue } = require("@infra/queues/index");
 const { CAMPAIGN_QUEUE_JOBS } = require("@modules/campaigns/constants/campaign.constants");
 
-async function enqueueCampaignRecipients({ workspaceId, campaignId, templateId, recipients, delayMs }) {
+function buildRecipientJobId({ campaignRunId, contactId, to }) {
+    if (!campaignRunId) return undefined;
+    const recipientKey = contactId ? `contact:${String(contactId)}` : `phone:${String(to)}`;
+    return `campaign-message:${String(campaignRunId)}:${recipientKey}`;
+}
+
+async function enqueueCampaignRecipients({ workspaceId, campaignId, campaignRunId, templateId, recipients, delayMs }) {
     const queue = campaignQueue.getCampaignQueue();
     await Promise.all(
         recipients.map((recipient) =>
@@ -10,6 +16,8 @@ async function enqueueCampaignRecipients({ workspaceId, campaignId, templateId, 
                 {
                     workspaceId,
                     campaignId: String(campaignId),
+                    campaignRunId: campaignRunId ? String(campaignRunId) : undefined,
+                    contactId: recipient.contactId ? String(recipient.contactId) : undefined,
                     templateId: String(templateId),
                     to: recipient.to,
                     variables: recipient.variables,
@@ -22,6 +30,11 @@ async function enqueueCampaignRecipients({ workspaceId, campaignId, templateId, 
                 },
                 {
                     delay: delayMs || 0,
+                    jobId: buildRecipientJobId({
+                        campaignRunId,
+                        contactId: recipient.contactId,
+                        to: recipient.to,
+                    }),
                 }
             )
         )
