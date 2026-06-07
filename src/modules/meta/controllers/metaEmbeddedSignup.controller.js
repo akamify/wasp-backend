@@ -201,6 +201,12 @@ async function exchangeEmbeddedSignupCode(req, res) {
   if (debugTokenData?.is_valid !== true) {
     throw new HttpError(400, "Meta returned an invalid business token. Please reconnect WhatsApp.");
   }
+  if (String(debugTokenData?.app_id || "").trim() !== appId) {
+    throw new HttpError(
+      400,
+      "Meta returned a token for a different app. Verify the Embedded Signup configuration ID and reconnect WhatsApp."
+    );
+  }
   if (scopes.includes("public_profile") && scopes.length === 1) {
     throw new HttpError(
       400,

@@ -28,6 +28,17 @@ function warningFor(stage, err) {
   return `${stage}: ${message}`;
 }
 
+function isMetaAuthorizationWarning(value) {
+  const message = String(value || "").toLowerCase();
+  return [
+    "cannot call api for app",
+    "error validating access token",
+    "invalid oauth access token",
+    "session has expired",
+    "has not authorized the application",
+  ].some((fragment) => message.includes(fragment));
+}
+
 function normalizePhone(phone) {
   if (!phone) return {};
   return {
@@ -60,6 +71,8 @@ function computeConnectionStatus(connection) {
   const metadataFetchStatus = String(connection.metadataFetchStatus || "pending").toLowerCase();
   const codeVerificationStatus = String(connection.codeVerificationStatus || "").toUpperCase();
   const nameStatus = String(connection.nameStatus || "").toUpperCase();
+  const metadataWarnings = Array.isArray(connection.metadataWarnings) ? connection.metadataWarnings : [];
+  if (metadataWarnings.some(isMetaAuthorizationWarning)) return "reauthorization_required";
   if (codeVerificationStatus && codeVerificationStatus !== "VERIFIED") return "pending_verification";
   if (["PENDING", "IN_REVIEW"].includes(nameStatus)) return "pending_display_name_review";
   if (metadataFetchStatus === "error") return "error";
@@ -81,6 +94,7 @@ function serializeWhatsAppConnection(doc) {
   const wabaId = String(doc.wabaId || doc.businessAccountIdPlain || "").trim();
   const phoneNumberId = String(doc.phoneNumberId || doc.phoneNumberIdPlain || "").trim();
   const tokenDebug = doc.tokenDebugSummary || null;
+  const metadataWarnings = Array.isArray(doc.metadataWarnings) ? doc.metadataWarnings : [];
   const activeIsSystemUser = String(tokenDebug?.type || "").toUpperCase() === "SYSTEM_USER";
   const manualOrLegacyConnection = !isEmbeddedSignupConnection(doc);
   return {
@@ -120,7 +134,8 @@ function serializeWhatsAppConnection(doc) {
     businessProfile: doc.businessProfile || null,
     lastMetadataSyncAt: doc.lastMetadataSyncAt || null,
     metadataFetchStatus: doc.metadataFetchStatus || "pending",
-    metadataWarnings: Array.isArray(doc.metadataWarnings) ? doc.metadataWarnings : [],
+    metadataWarnings,
+    authorizationRequired: metadataWarnings.some(isMetaAuthorizationWarning),
     webhookSubscribed: Boolean(doc.webhookSubscribed),
     connectedAt: doc.connectedAt || null,
     lastError: doc.lastError || null,
@@ -252,8 +267,37 @@ async function refreshWhatsAppConnectionMetadata(workspaceId) {
   return connection.doc;
 }
 
+async function cacheWhatsAppBusinessProfile(workspaceId, profile) {
+  const connection = await resolveActiveConnection(workspaceId, { requireValid: false });
+  if (!connection) return null;
+  const normalized = normalizeBusinessProfile(profile);
+  const existing = connection.doc.businessProfile?.toObject
+    ? connection.doc.businessProfile.toObject()
+    : connection.doc.businessProfile || {};
+  const hasProfilePicture =
+    Object.prototype.hasOwnProperty.call(profile || {}, "profile_picture_url") ||
+    Object.prototype.hasOwnProperty.call(profile || {}, "profilePictureUrl");
+  const merged = {
+    ...existing,
+    ...normalized,
+    profilePictureUrl: hasProfilePicture
+      ? normalized.profilePictureUrl
+      : existing.profilePictureUrl || null,
+  };
+  await connection.doc.updateOne({
+    $set: {
+      businessProfile: merged,
+      lastMetadataSyncAt: new Date(),
+    },
+  });
+  return merged;
+}
+
 module.exports = {
+  cacheWhatsAppBusinessProfile,
   computeConnectionStatus,
+  isMetaAuthorizationWarning,
+  normalizeBusinessProfile,
   refreshWhatsAppConnectionMetadata,
   serializeWhatsAppConnection,
 };

@@ -2,6 +2,10 @@ const axios = require("axios");
 const { HttpError } = require("@shared/utils/httpError");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { getMetaAppConfig } = require("@core/config/metaAppConfig");
+const {
+  cacheWhatsAppBusinessProfile,
+  normalizeBusinessProfile,
+} = require("@shared/services/whatsappConnectionMetadataService");
 
 function graphBaseUrl(graphApiVersion) {
   const version = graphApiVersion || process.env.META_GRAPH_VERSION || "v22.0";
@@ -67,8 +71,17 @@ async function updateBusinessProfile(req, res) {
   } catch {
     // Best-effort; update already succeeded.
   }
+  const profileForCache = profile || {
+    about: payload.about,
+    address: payload.address,
+    description: payload.description,
+    email: payload.email,
+    websites: payload.websites,
+    vertical: payload.vertical,
+  };
+  await cacheWhatsAppBusinessProfile(req.workspace.id, profileForCache);
 
-  res.json({ success: true, businessProfile: profile });
+  res.json({ success: true, businessProfile: profile || normalizeBusinessProfile(profileForCache) });
 }
 
 async function uploadProfilePicture(req, res) {

@@ -1,5 +1,6 @@
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { decryptString } = require("@shared/utils/crypto");
+const { isMetaAuthorizationWarning } = require("@shared/services/whatsappConnectionMetadataService");
 const axios = require("axios");
 
 function parseTierLimitToNumber(tier) {
@@ -29,12 +30,40 @@ function graphBaseUrl(graphApiVersion) {
   return `https://graph.facebook.com/${version}`;
 }
 
+function storedPhone(doc, phoneNumberId) {
+  return {
+    id: phoneNumberId || null,
+    display_phone_number: doc.displayPhoneNumber || null,
+    verified_name: doc.verifiedName || null,
+    quality_rating: doc.qualityRating || null,
+    code_verification_status: doc.codeVerificationStatus || null,
+    name_status: doc.nameStatus || null,
+    platform_type: doc.platformType || null,
+    throughput: doc.throughput ?? null,
+    account_mode: doc.accountMode || null,
+  };
+}
+
+function storedBusinessProfile(doc) {
+  const profile = doc.businessProfile;
+  if (!profile) return null;
+  return {
+    about: profile.about || null,
+    address: profile.address || null,
+    description: profile.description || null,
+    email: profile.email || null,
+    profile_picture_url: profile.profilePictureUrl || null,
+    websites: Array.isArray(profile.websites) ? profile.websites : [],
+    vertical: profile.vertical || null,
+  };
+}
+
 async function metaStatus(req, res) {
   // This endpoint is dynamic and should not be cached by browsers/proxies.
   res.set("Cache-Control", "no-store");
 
   const doc = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select(
-    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid lastValidatedAt createdAt updatedAt messagingLimitTierCached messagingLimitCurrentCached messagingLimitNextCached lastLimitsUpdateAt"
+    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid lastValidatedAt createdAt updatedAt messagingLimitTierCached messagingLimitCurrentCached messagingLimitNextCached lastLimitsUpdateAt displayPhoneNumber verifiedName qualityRating codeVerificationStatus nameStatus platformType throughput accountMode businessProfile metadataWarnings"
   );
 
   if (!doc) {
@@ -50,8 +79,8 @@ async function metaStatus(req, res) {
   const phoneNumberId = decryptString(doc.phoneNumberIdEnc);
   const businessAccountId = decryptString(doc.businessAccountIdEnc);
 
-  let phone = null;
-  let businessProfile = null;
+  let phone = storedPhone(doc, phoneNumberId);
+  let businessProfile = storedBusinessProfile(doc);
   let debugHint = null;
   let apiTier = null;
 
@@ -125,6 +154,9 @@ async function metaStatus(req, res) {
       source: doc.messagingLimitTierCached || doc.messagingLimitCurrentCached ? "webhook" : apiTier ? "api" : null,
     },
     debugHint,
+    authorizationRequired:
+      isMetaAuthorizationWarning(debugHint) ||
+      (Array.isArray(doc.metadataWarnings) && doc.metadataWarnings.some(isMetaAuthorizationWarning)),
     build: { commit: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA || null },
   });
 }
