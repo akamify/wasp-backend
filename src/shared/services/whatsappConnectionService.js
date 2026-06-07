@@ -23,6 +23,7 @@ function isEmbeddedSignupConnection(doc) {
   const connectionMethod = String(doc?.connectionMethod || "").toLowerCase();
   return (
     connectionMode === "customer_embedded_signup" ||
+    connectionMode === "embedded_signup_system_user" ||
     tokenType === "embedded_signup_customer_token" ||
     tokenType === "business_integration_token" ||
     connectionMethod === "embedded_signup"

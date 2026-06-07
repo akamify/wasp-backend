@@ -95,7 +95,6 @@ function serializeWhatsAppConnection(doc) {
   const phoneNumberId = String(doc.phoneNumberId || doc.phoneNumberIdPlain || "").trim();
   const tokenDebug = doc.tokenDebugSummary || null;
   const metadataWarnings = Array.isArray(doc.metadataWarnings) ? doc.metadataWarnings : [];
-  const activeIsSystemUser = String(tokenDebug?.type || "").toUpperCase() === "SYSTEM_USER";
   const manualOrLegacyConnection = !isEmbeddedSignupConnection(doc);
   return {
     connected: Boolean(doc.isActive && doc.isValid),
@@ -116,7 +115,7 @@ function serializeWhatsAppConnection(doc) {
           granularScopes: Array.isArray(tokenDebug.granularScopes) ? tokenDebug.granularScopes : [],
         }
       : null,
-    warning: activeIsSystemUser || manualOrLegacyConnection
+    warning: manualOrLegacyConnection
       ? "This workspace is using a manual/system-user token. Reconnect with Embedded Signup to use customer self-connect."
       : null,
     wabaName: doc.wabaName || null,
