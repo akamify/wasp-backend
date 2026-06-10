@@ -252,6 +252,8 @@ async function exchangeEmbeddedSignupCode(req, res) {
 
   const scopes = Array.isArray(debugTokenData?.scopes) ? debugTokenData.scopes.map(sanitizeScope).filter(Boolean) : [];
   const granularScopes = Array.isArray(debugTokenData?.granular_scopes) ? debugTokenData.granular_scopes : [];
+  const granularScopeNames = granularScopes.map((scope) => sanitizeScope(scope?.scope)).filter(Boolean);
+  const grantedScopes = [...new Set([...scopes, ...granularScopeNames])];
   const targetIds = [
     ...new Set(
       granularScopes.flatMap((scope) =>
@@ -263,6 +265,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
   // eslint-disable-next-line no-console
   console.info("[embedded-signup] debug_token", {
     scopes,
+    grantedScopes,
     granularScopes: granularScopes.map((scope) => ({
       scope: sanitizeScope(scope?.scope),
       target_ids: Array.isArray(scope?.target_ids) ? scope.target_ids.map(maskId) : [],
@@ -279,17 +282,24 @@ async function exchangeEmbeddedSignupCode(req, res) {
       "Meta returned a token for a different app. Verify the Embedded Signup configuration ID and reconnect WhatsApp."
     );
   }
-  if (scopes.includes("public_profile") && scopes.length === 1) {
+  if (grantedScopes.includes("public_profile") && grantedScopes.length === 1) {
     throw new HttpError(
       400,
-      "Meta did not grant WhatsApp permissions. For testing, use an app-role user. For production, complete App Review/Advanced Access."
+      "Meta granted only public_profile. In Development mode, sign in with a Facebook account that accepted this app's Admin, Developer, or Tester role."
     );
   }
-  const hasWhatsAppScope = scopes.includes("whatsapp_business_management") || scopes.includes("whatsapp_business_messaging");
+  const hasWhatsAppScope =
+    grantedScopes.includes("whatsapp_business_management") ||
+    grantedScopes.includes("whatsapp_business_messaging");
   if (!hasWhatsAppScope) {
     throw new HttpError(
       400,
-      "Meta token is missing whatsapp_business_management. Reconnect with Embedded Signup or complete App Review/Advanced Access."
+      "Meta did not grant WhatsApp permissions to this login. Confirm the app-role invitation is accepted and the Embedded Signup configuration requests whatsapp_business_management and whatsapp_business_messaging.",
+      {
+        grantedScopes,
+        developmentModeHint:
+          "Log out of Facebook in the popup, then sign in with the exact Facebook profile listed under App Roles.",
+      }
     );
   }
   if (granularScopes.length > 0 && !targetIncludesWaba) {
