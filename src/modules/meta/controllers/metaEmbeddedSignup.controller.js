@@ -282,13 +282,6 @@ async function exchangeEmbeddedSignupCode(req, res) {
       "Meta returned a token for a different app. Verify the Embedded Signup configuration ID and reconnect WhatsApp."
     );
   }
-  if (granularScopes.length > 0 && !targetIncludesWaba) {
-    throw new HttpError(
-      400,
-      "This token does not grant access to the currently connected WABA. Remove old Business Integration and reconnect."
-    );
-  }
-
   const customerHeaders = { Authorization: `Bearer ${businessToken}` };
   let validatedPhoneNumber = null;
 
