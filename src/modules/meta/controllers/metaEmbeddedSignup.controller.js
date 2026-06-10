@@ -282,26 +282,6 @@ async function exchangeEmbeddedSignupCode(req, res) {
       "Meta returned a token for a different app. Verify the Embedded Signup configuration ID and reconnect WhatsApp."
     );
   }
-  if (grantedScopes.includes("public_profile") && grantedScopes.length === 1) {
-    throw new HttpError(
-      400,
-      "Meta granted only public_profile. In Development mode, sign in with a Facebook account that accepted this app's Admin, Developer, or Tester role."
-    );
-  }
-  const hasWhatsAppScope =
-    grantedScopes.includes("whatsapp_business_management") ||
-    grantedScopes.includes("whatsapp_business_messaging");
-  if (!hasWhatsAppScope) {
-    throw new HttpError(
-      400,
-      "Meta did not grant WhatsApp permissions to this login. Confirm the app-role invitation is accepted and the Embedded Signup configuration requests whatsapp_business_management and whatsapp_business_messaging.",
-      {
-        grantedScopes,
-        developmentModeHint:
-          "Log out of Facebook in the popup, then sign in with the exact Facebook profile listed under App Roles.",
-      }
-    );
-  }
   if (granularScopes.length > 0 && !targetIncludesWaba) {
     throw new HttpError(
       400,
@@ -309,15 +289,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
     );
   }
 
-  const operationalSystemUser = await getOperationalSystemUser({
-    client,
-    appId,
-    appSecret,
-    wabaId,
-  });
-  const operationalToken = operationalSystemUser.accessToken;
-  const operationalDebugData = operationalSystemUser.debugData;
-  const operationalHeaders = { Authorization: `Bearer ${operationalToken}` };
+  const customerHeaders = { Authorization: `Bearer ${businessToken}` };
   let validatedPhoneNumber = null;
 
   try {
@@ -328,7 +300,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
       phoneNumberId,
     });
     const phoneListRes = await client.get(`/${wabaId}/phone_numbers`, {
-      headers: operationalHeaders,
+      headers: customerHeaders,
       params: { fields: "id,display_phone_number" },
     });
     const phoneRows = Array.isArray(phoneListRes?.data?.data) ? phoneListRes.data.data : [];
@@ -363,11 +335,25 @@ async function exchangeEmbeddedSignupCode(req, res) {
     }
   } catch (err) {
     if (err instanceof HttpError) throw err;
-    throw new HttpError(400, "Could not read phone numbers from the connected WABA. Please make sure the embedded signup configuration includes WhatsApp Business Management access and try again.", {
-      message: sanitizeMetaError(err, "WABA phone read failed"),
-    });
+    throw new HttpError(
+      400,
+      "Meta authorized the login but did not allow access to the selected WABA. Verify the app-role invitation is accepted and the Embedded Signup configuration includes WhatsApp Business Management.",
+      {
+        message: sanitizeMetaError(err, "WABA phone read failed"),
+        grantedScopes,
+      }
+    );
   }
 
+  const operationalSystemUser = await getOperationalSystemUser({
+    client,
+    appId,
+    appSecret,
+    wabaId,
+  });
+  const operationalToken = operationalSystemUser.accessToken;
+  const operationalDebugData = operationalSystemUser.debugData;
+  const operationalHeaders = { Authorization: `Bearer ${operationalToken}` };
   let subscribed = false;
   try {
     logGraphCall({
