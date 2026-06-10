@@ -88,38 +88,15 @@ async function debugAccessToken({ client, token, appId, appSecret }) {
 }
 
 async function getOperationalSystemUser({ client, appId, appSecret, wabaId }) {
-  const [accessToken, systemUserId] = await Promise.all([
-    platformSettingsResolver.getSettingSecret(
-      PLATFORM_SETTING_KEYS.SYSTEM_USER_ACCESS_TOKEN,
-      process.env.SYSTEM_USER_ACCESS_TOKEN || ""
-    ),
-    platformSettingsResolver.getSetting(
-      PLATFORM_SETTING_KEYS.SYSTEM_USER_ID,
-      process.env.SYSTEM_USER_ID || ""
-    ),
-  ]);
+  const accessToken = await platformSettingsResolver.getSettingSecret(
+    PLATFORM_SETTING_KEYS.SYSTEM_USER_ACCESS_TOKEN,
+    process.env.SYSTEM_USER_ACCESS_TOKEN || ""
+  );
   const token = String(accessToken || "").trim();
-  const userId = String(systemUserId || "").trim();
-  if (!token || !userId) {
+  if (!token) {
     throw new HttpError(
       500,
-      "Stable Embedded Signup requires SYSTEM_USER_ACCESS_TOKEN and SYSTEM_USER_ID in Meta platform settings."
-    );
-  }
-
-  try {
-    await client.post(`/${wabaId}/assigned_users`, null, {
-      headers: { Authorization: `Bearer ${token}` },
-      params: {
-        user: userId,
-        tasks: JSON.stringify(["MANAGE"]),
-      },
-    });
-  } catch (err) {
-    throw new HttpError(
-      400,
-      "Could not assign the platform system user to this WABA. Complete Meta Tech Provider onboarding and Advanced Access.",
-      { message: sanitizeMetaError(err, "System user WABA assignment failed") }
+      "Stable Embedded Signup requires SYSTEM_USER_ACCESS_TOKEN in Meta platform settings."
     );
   }
 
@@ -143,6 +120,27 @@ async function getOperationalSystemUser({ client, appId, appSecret, wabaId }) {
     throw new HttpError(
       400,
       "Configured Meta system-user token needs whatsapp_business_management and whatsapp_business_messaging."
+    );
+  }
+
+  const appScopedSystemUserId = String(debugData?.user_id || "").trim();
+  if (!appScopedSystemUserId) {
+    throw new HttpError(400, "Meta did not return an app-scoped user ID for the configured system-user token.");
+  }
+
+  try {
+    await client.post(`/${wabaId}/assigned_users`, null, {
+      headers: { Authorization: `Bearer ${token}` },
+      params: {
+        user: appScopedSystemUserId,
+        tasks: JSON.stringify(["MANAGE"]),
+      },
+    });
+  } catch (err) {
+    throw new HttpError(
+      400,
+      "Could not assign the platform system user to this WABA.",
+      { message: sanitizeMetaError(err, "System user WABA assignment failed") }
     );
   }
 
