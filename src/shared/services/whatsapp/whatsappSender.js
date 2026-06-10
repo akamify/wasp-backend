@@ -342,13 +342,6 @@ async function submitTemplate({
   const tokenDebug = await debugToken({ inputToken: accessToken, graphApiVersion });
   const tokenScopes = new Set((tokenDebug?.scopes || []).map((scope) => String(scope)));
   safeConsole("info", "[templates] business_management not required for this operation");
-  const granularTargets = [
-    ...new Set(
-      (tokenDebug?.granularScopes || []).flatMap((scope) =>
-        Array.isArray(scope?.target_ids) ? scope.target_ids.map((targetId) => String(targetId).trim()).filter(Boolean) : []
-      )
-    ),
-  ];
   const isPublicProfileOnly = tokenScopes.size === 1 && tokenScopes.has("public_profile");
   if (tokenDebug?.isValid && isPublicProfileOnly) {
     safeConsole("warn", "[templates] whatsapp_business_management missing", {
@@ -372,18 +365,6 @@ async function submitTemplate({
         "Meta token is missing whatsapp_business_management. Reconnect with Embedded Signup or complete App Review/Advanced Access.",
     });
   }
-  if (tokenDebug?.isValid && granularTargets.length && !granularTargets.includes(String(wabaId))) {
-    safeConsole("warn", "[templates] whatsapp_business_management missing", {
-      tokenType: tokenDebug?.type || null,
-      scopes: Array.from(tokenScopes),
-    });
-    throw Object.assign(new Error("Meta template submit permission missing"), {
-      tokenDebug,
-      providerError:
-        "This token does not grant access to the currently connected WABA. Remove old Business Integration and reconnect.",
-    });
-  }
-
   const createPayload = {
     name: template.name,
     language: template.language,
@@ -483,9 +464,6 @@ async function submitTemplate({
         } else if (tokenDebug?.isValid && scopes.size === 1 && scopes.has("public_profile")) {
           providerError =
             "Meta did not grant WhatsApp permissions. Use an app-role user for testing or complete App Review/Advanced Access.";
-        } else if (tokenDebug?.isValid && granularTargets.length && !granularTargets.includes(String(wabaId))) {
-          providerError =
-            "This token does not grant access to the currently connected WABA. Remove old Business Integration and reconnect.";
         } else {
           providerError = err?.response?.data?.error?.message || err?.response?.data?.error?.error_user_msg || err.message;
         }
