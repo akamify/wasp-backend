@@ -5,8 +5,6 @@ const { hashForLookup } = require("@shared/utils/hash");
 const { decryptString, encryptString } = require("@shared/utils/crypto");
 const { encryptSecret } = require("@shared/utils/secretCrypto");
 const { getMetaAppConfig } = require("@core/config/metaAppConfig");
-const platformSettingsResolver = require("@modules/platform-settings/services/platformSettingsResolver.service");
-const { PLATFORM_SETTING_KEYS } = require("@modules/platform-settings/constants/platformSettingKeys");
 const { markTemplatesStaleForInactiveWabas, stampUntaggedTemplatesForWaba } = require("@shared/services/templateOwnershipService");
 const {
   refreshWhatsAppConnectionMetadata,
@@ -85,66 +83,6 @@ async function debugAccessToken({ client, token, appId, appSecret }) {
     },
   });
   return response?.data?.data || null;
-}
-
-async function getOperationalSystemUser({ client, appId, appSecret, wabaId }) {
-  const accessToken = await platformSettingsResolver.getSettingSecret(
-    PLATFORM_SETTING_KEYS.SYSTEM_USER_ACCESS_TOKEN,
-    process.env.SYSTEM_USER_ACCESS_TOKEN || ""
-  );
-  const token = String(accessToken || "").trim();
-  if (!token) {
-    throw new HttpError(
-      500,
-      "Stable Embedded Signup requires SYSTEM_USER_ACCESS_TOKEN in Meta platform settings."
-    );
-  }
-
-  let debugData = null;
-  try {
-    debugData = await debugAccessToken({ client, token, appId, appSecret });
-  } catch (err) {
-    throw new HttpError(400, "Could not validate the configured Meta system-user token", {
-      message: sanitizeMetaError(err, "System-user token debug failed"),
-    });
-  }
-
-  const scopes = Array.isArray(debugData?.scopes) ? debugData.scopes.map(sanitizeScope).filter(Boolean) : [];
-  if (debugData?.is_valid !== true || String(debugData?.type || "").toUpperCase() !== "SYSTEM_USER") {
-    throw new HttpError(400, "Configured Meta token must be a valid system-user access token.");
-  }
-  if (String(debugData?.app_id || "").trim() !== appId) {
-    throw new HttpError(400, "Configured Meta system-user token belongs to a different app.");
-  }
-  if (!scopes.includes("whatsapp_business_management") || !scopes.includes("whatsapp_business_messaging")) {
-    throw new HttpError(
-      400,
-      "Configured Meta system-user token needs whatsapp_business_management and whatsapp_business_messaging."
-    );
-  }
-
-  const appScopedSystemUserId = String(debugData?.user_id || "").trim();
-  if (!appScopedSystemUserId) {
-    throw new HttpError(400, "Meta did not return an app-scoped user ID for the configured system-user token.");
-  }
-
-  try {
-    await client.post(`/${wabaId}/assigned_users`, null, {
-      headers: { Authorization: `Bearer ${token}` },
-      params: {
-        user: appScopedSystemUserId,
-        tasks: JSON.stringify(["MANAGE"]),
-      },
-    });
-  } catch (err) {
-    throw new HttpError(
-      400,
-      "Could not assign the platform system user to this WABA.",
-      { message: sanitizeMetaError(err, "System user WABA assignment failed") }
-    );
-  }
-
-  return { accessToken: token, debugData };
 }
 
 function logGraphCall({ operation, path, wabaId, phoneNumberId }) {
@@ -336,15 +274,6 @@ async function exchangeEmbeddedSignupCode(req, res) {
     );
   }
 
-  const operationalSystemUser = await getOperationalSystemUser({
-    client,
-    appId,
-    appSecret,
-    wabaId,
-  });
-  const operationalToken = operationalSystemUser.accessToken;
-  const operationalDebugData = operationalSystemUser.debugData;
-  const operationalHeaders = { Authorization: `Bearer ${operationalToken}` };
   let subscribed = false;
   try {
     logGraphCall({
@@ -353,7 +282,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
       wabaId,
       phoneNumberId: String(validatedPhoneNumber?.id || phoneNumberId),
     });
-    const subscribeRes = await client.post(`/${wabaId}/subscribed_apps`, null, { headers: operationalHeaders });
+    const subscribeRes = await client.post(`/${wabaId}/subscribed_apps`, null, { headers: customerHeaders });
     subscribed = Boolean(subscribeRes?.data?.success);
     if (debug) {
       // eslint-disable-next-line no-console
@@ -384,7 +313,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
   await markTemplatesStaleForInactiveWabas({ workspaceId, activeWabaId: wabaId });
   await WhatsAppCredentials.create({
     workspaceId,
-    accessTokenEnc: encryptString(operationalToken),
+    accessTokenEnc: encryptString(businessToken),
     businessTokenEnc: encryptSecret(businessToken),
     phoneNumberIdEnc: encryptString(String(validatedPhoneNumber.id)),
     businessAccountIdEnc: encryptString(wabaId),
@@ -394,9 +323,9 @@ async function exchangeEmbeddedSignupCode(req, res) {
     businessAccountIdPlain: wabaId,
     phoneNumberId: String(validatedPhoneNumber.id),
     wabaId,
-    connectionMode: "embedded_signup_system_user",
-    tokenType: "system_user_token",
-    tokenDebugSummary: buildTokenDebugSummary(operationalDebugData),
+    connectionMode: "customer_embedded_signup",
+    tokenType: "embedded_signup_customer_token",
+    tokenDebugSummary: buildTokenDebugSummary(debugTokenData),
     displayPhoneNumber: String(validatedPhoneNumber?.display_phone_number || "").trim() || null,
     graphApiVersion: process.env.META_GRAPH_VERSION || "v25.0",
     isValid: true,
