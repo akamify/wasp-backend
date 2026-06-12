@@ -5,7 +5,7 @@ const { ensureDefaultWorkspace } = require("@modules/auth/auth.service.user.work
 const { normalizeAdminPermissions } = require("@shared/utils/adminPermissions");
 
 async function me({ authUser, selectedWorkspaceId }) {
-  if (String(authUser?.role || "") === "admin") {
+  if (String(authUser?.accountType || "") === "admin_account") {
     const admin = await AdminAccount.findById(authUser.id).select("_id username displayName");
     if (!admin) throw new HttpError(401, "Invalid or expired token");
     return {
