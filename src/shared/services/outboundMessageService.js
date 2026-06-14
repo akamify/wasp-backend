@@ -4,6 +4,7 @@ const { getCredentialsForUser } = require("@shared/services/credentialsService")
 const {
   sendTemplateMessage,
   sendTextMessage,
+  sendInteractiveButtonMessage,
   sendInteractiveListMessage,
   sendMediaMessage,
 } = require("@shared/utils/whatsappSender");
@@ -40,6 +41,26 @@ function throwIfPhoneNotRegistered(err) {
       "This phone number is connected but not registered on WhatsApp Cloud API yet."
     );
   }
+}
+
+function outboundFailure(error) {
+  const meta = error?.metaDebug?.meta || error?.metaDebug?.raw?.error || null;
+  return {
+    message: String(error?.message || "WhatsApp send failed"),
+    provider: "meta",
+    status: error?.metaDebug?.axios?.status || error?.response?.status || null,
+    meta: meta
+      ? {
+          message: meta.message || null,
+          type: meta.type || null,
+          code: meta.code || null,
+          error_subcode: meta.error_subcode || null,
+          error_user_title: meta.error_user_title || null,
+          error_user_msg: meta.error_user_msg || null,
+          fbtrace_id: meta.fbtrace_id || null,
+        }
+      : null,
+  };
 }
 
 async function sendTemplateMessageForUser({
@@ -367,6 +388,134 @@ async function sendInteractiveListMessageForUser({
   return { message, apiResponse };
 }
 
+async function sendInteractiveButtonMessageForUser({
+  userId,
+  to,
+  text,
+  buttons,
+  sentBy,
+}) {
+  const creds = await getCredentialsForUser(userId);
+  const now = new Date();
+  const normalizedButtons = (buttons || []).map((button) => ({
+    id: String(button?.id || "").trim(),
+    title: String(button?.title || "").trim(),
+  }));
+  const payload = {
+    to,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text },
+      action: {
+        buttons: normalizedButtons.map((button) => ({
+          type: "reply",
+          reply: button,
+        })),
+      },
+    },
+  };
+  const message = await Message.create({
+    workspaceId: userId,
+    wabaId: creds.wabaId,
+    phoneNumberId: creds.phoneNumberId,
+    phone: to,
+    direction: "outbound",
+    status: "processing",
+    sentBy: sentBy || { kind: "system" },
+    type: "interactive_buttons",
+    text,
+    buttons: normalizedButtons,
+    payload,
+  });
+
+  try {
+    const apiResponse = await sendInteractiveButtonMessage({
+      accessToken: creds.accessToken,
+      phoneNumberId: creds.phoneNumberId,
+      to,
+      text,
+      buttons: normalizedButtons,
+      graphApiVersion: creds.graphApiVersion,
+    });
+    const whatsappMessageId = Array.isArray(apiResponse?.messages)
+      ? apiResponse.messages[0]?.id
+      : undefined;
+    const waId = Array.isArray(apiResponse?.contacts)
+      ? apiResponse.contacts[0]?.wa_id
+      : undefined;
+    const resolvedPhone = waId ? String(waId) : to;
+    const sentMessage = await Message.findOneAndUpdate(
+      { _id: message._id, workspaceId: userId },
+      {
+        $set: {
+          phone: resolvedPhone,
+          whatsappMessageId,
+          status: "sent",
+          "statusTimestamps.acceptedAt": now,
+          "statusTimestamps.sentAt": now,
+        },
+        $unset: { error: 1 },
+      },
+      { new: true }
+    );
+
+    const conversation = await touchConversation({
+      userId,
+      wabaId: creds.wabaId,
+      phoneNumberId: creds.phoneNumberId,
+      phone: resolvedPhone,
+      lastMessageAt: now,
+      lastMessagePreview: text,
+      incrementUnread: false,
+    });
+    await touchContactFromMessage({
+      userId,
+      wabaId: creds.wabaId,
+      phoneNumberId: creds.phoneNumberId,
+      phone: resolvedPhone,
+      direction: "outbound",
+      preview: text,
+      occurredAt: now,
+    });
+    if (conversation) {
+      await Message.updateOne(
+        { _id: message._id },
+        {
+          $set: {
+            lastAssignedEmployeeId: conversation.assignedEmployeeId || null,
+            lastAssignedAt: conversation.assignedAt || null,
+            leadStatusSnapshot: conversation.leadStatus || null,
+          },
+        }
+      ).catch(() => {});
+    }
+    return { message: sentMessage, apiResponse };
+  } catch (error) {
+    const failure = outboundFailure(error);
+    await Message.updateOne(
+      { _id: message._id, workspaceId: userId },
+      {
+        $set: {
+          status: "failed",
+          "statusTimestamps.failedAt": new Date(),
+          error: failure,
+        },
+      }
+    ).catch(() => {});
+    error.outboundMessageId = message._id;
+    error.outboundFailure = failure;
+    try {
+      throwIfPhoneNotRegistered(error);
+    } catch (normalizedError) {
+      normalizedError.outboundMessageId = message._id;
+      normalizedError.outboundFailure = failure;
+      throw normalizedError;
+    }
+    throw error;
+  }
+}
+
 async function sendMediaMessageForUser({
   userId,
   campaignId,
@@ -484,6 +633,7 @@ async function sendMediaMessageForUser({
 module.exports = {
   sendTemplateMessageForUser,
   sendTextMessageForUser,
+  sendInteractiveButtonMessageForUser,
   sendInteractiveListMessageForUser,
   sendMediaMessageForUser,
 };

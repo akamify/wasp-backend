@@ -15,6 +15,7 @@ const {
   requestHandover,
 } = require("@modules/flows/services/flowActionNodes.service");
 const {
+  sendTextButtonsNode,
   sendListNode,
   sendMediaNode,
   sendTemplateNode,
@@ -28,6 +29,129 @@ const MAX_FALLBACKS = 3;
 const GENERIC_RETRY_MESSAGE = "Sorry, I could not understand that. Please try again.";
 const GENERIC_END_MESSAGE =
   "Sorry, I could not complete this automation. A team member can assist you.";
+
+function flowLog(label, data) {
+  process.stdout.write(`${label} ${JSON.stringify(data)}\n`);
+}
+
+function sendFailureData(error) {
+  return {
+    reason: String(error?.outboundFailure?.message || error?.message || "WhatsApp send failed"),
+    metaError: error?.outboundFailure?.meta || error?.metaDebug?.meta || null,
+    walletError:
+      Number(error?.statusCode || error?.status) === 402
+        ? String(error?.message || "Insufficient wallet balance")
+        : null,
+    outboundMessageId: error?.outboundMessageId
+      ? String(error.outboundMessageId)
+      : null,
+  };
+}
+
+function logSessionState(session) {
+  flowLog("[FLOW_SESSION_STATE]", {
+    sessionId: String(session?._id || ""),
+    status: session?.status || null,
+    currentNodeId: session?.currentNodeId || null,
+    waitingFor: session?.waitingFor || null,
+    fallbackCount: Number(session?.fallbackCount || 0),
+  });
+}
+
+async function failPromptSend({ workspaceId, session, node, error }) {
+  const failure = sendFailureData(error);
+  flowLog("[FLOW_SEND_FAILED]", {
+    nodeType: node.type,
+    ...failure,
+  });
+  const failed = await moveSession({
+    workspaceId,
+    session,
+    nodeId: node.id,
+    updates: {
+      status: "failed",
+      completedAt: new Date(),
+      waitingFor: { type: null, attributeKey: null, nodeId: null },
+      error: {
+        message: failure.reason,
+        nodeId: node.id,
+        nodeType: node.type,
+        provider: "meta",
+        details: failure,
+      },
+    },
+  });
+  await writeEvent({
+    workspaceId,
+    session: failed,
+    eventType: "message_failed",
+    nodeId: node.id,
+    data: failure,
+  });
+  logSessionState(failed);
+  return { status: "failed", session: failed };
+}
+
+async function sendButtonsAndWait({ workspaceId, session, contact, node, scope }) {
+  flowLog("[FLOW_VERSION_NODE_CONFIG]", {
+    flowVersionId: String(session.flowVersionId),
+    nodeId: node.id,
+    nodeType: node.type,
+    text: String(node.config?.text || ""),
+    buttonsCount: Array.isArray(node.config?.buttons) ? node.config.buttons.length : 0,
+    buttonIds: Array.isArray(node.config?.buttons)
+      ? node.config.buttons.map((button) => button?.id)
+      : [],
+  });
+  try {
+    const result = await sendTextButtonsNode({
+      workspaceId,
+      contact,
+      node,
+      scope,
+    });
+    const sentAt = new Date();
+    const waitingSession = await moveSession({
+      workspaceId,
+      session,
+      nodeId: node.id,
+      updates: {
+        waitingFor: {
+          type: "button_reply",
+          attributeKey: null,
+          nodeId: node.id,
+        },
+        context: {
+          ...(session.context || {}),
+          lastPrompt: {
+            type: "button_reply",
+            nodeId: node.id,
+            status: "sent",
+            messageId: result.message?._id ? String(result.message._id) : null,
+            providerMessageId: result.message?.whatsappMessageId || null,
+            sentAt,
+          },
+        },
+      },
+    });
+    await writeEvent({
+      workspaceId,
+      session: waitingSession,
+      eventType: "message_sent",
+      nodeId: node.id,
+      data: {
+        messageType: "interactive_buttons",
+        messageId: result.message?._id ? String(result.message._id) : null,
+        providerMessageId: result.message?.whatsappMessageId || null,
+        buttonsCount: Array.isArray(node.config?.buttons) ? node.config.buttons.length : 0,
+      },
+    });
+    logSessionState(waitingSession);
+    return { status: "waiting", session: waitingSession };
+  } catch (error) {
+    return failPromptSend({ workspaceId, session, node, error });
+  }
+}
 
 async function executeSession({
   workspaceId,
@@ -111,24 +235,13 @@ async function executeSession({
     }
 
     if (node.type === "text_buttons") {
-      await sendText({
-        workspaceId,
-        contact,
-        text: resolveVariables(node.config?.text, scope),
-      });
-      session = await moveSession({
+      return sendButtonsAndWait({
         workspaceId,
         session,
-        nodeId: node.id,
-        updates: {
-          waitingFor: {
-            type: "button_reply",
-            attributeKey: null,
-            nodeId: node.id,
-          },
-        },
+        contact,
+        node,
+        scope,
       });
-      return { status: "waiting", session };
     }
 
     if (node.type === "ask_question") {
@@ -281,6 +394,16 @@ async function executeSession({
     }
 
     if (node.type === "end") {
+      const endMessage = String(
+        resolveVariables(node.config?.message || "", scope)
+      ).trim();
+      if (endMessage) {
+        await sendText({
+          workspaceId,
+          contact,
+          text: endMessage,
+        });
+      }
       return completeSession({ workspaceId, session, node });
     }
 
@@ -397,11 +520,34 @@ async function continueSession({
   let edge = null;
   let context = { ...(session.context || {}) };
   if (waiting.type === "button_reply") {
+    const buttonId = inboundMessage?.buttonReply?.id;
+    if (buttonId) {
+      flowLog("[FLOW_BUTTON_REPLY_RECEIVED]", {
+        sessionId: String(session._id),
+        buttonId,
+        buttonTitle: inboundMessage?.buttonReply?.title || "",
+      });
+    }
     edge = edgeForHandle(
       version,
       waiting.nodeId,
-      inboundMessage?.buttonReply?.id
+      buttonId
     );
+    if (edge) {
+      flowLog("[FLOW_BUTTON_EDGE_MATCH]", {
+        sourceNodeId: waiting.nodeId,
+        sourceHandle: buttonId,
+        targetNodeId: edge.target,
+      });
+    } else if (buttonId) {
+      flowLog("[FLOW_BUTTON_EDGE_MISSING]", {
+        buttonId,
+        availableHandles: (version.edges || [])
+          .filter((item) => String(item?.source) === String(waiting.nodeId))
+          .map((item) => item?.sourceHandle)
+          .filter(Boolean),
+      });
+    }
   } else if (waiting.type === "list_reply") {
     edge = edgeForHandle(
       version,
@@ -424,6 +570,35 @@ async function continueSession({
   }
 
   if (!edge) {
+    if (waiting.type === "button_reply") {
+      const waitingNode = nodeById(version, waiting.nodeId);
+      const lastPrompt = session.context?.lastPrompt;
+      if (
+        !lastPrompt ||
+        lastPrompt.status !== "sent" ||
+        String(lastPrompt.nodeId || "") !== String(waiting.nodeId || "")
+      ) {
+        return failPromptSend({
+          workspaceId,
+          session,
+          node: waitingNode || { id: waiting.nodeId, type: "text_buttons" },
+          error: new Error("Interactive button prompt was not successfully sent"),
+        });
+      }
+      const incomingText = String(inboundMessage?.text || "").trim().toLowerCase();
+      const restartsFlow = (version.trigger?.keywords || []).some(
+        (keyword) => String(keyword || "").trim().toLowerCase() === incomingText
+      );
+      if (incomingText && restartsFlow && waitingNode) {
+        return sendButtonsAndWait({
+          workspaceId,
+          session,
+          contact,
+          node: waitingNode,
+          scope: buildScope(session, contact, inboundMessage),
+        });
+      }
+    }
     return handleFallback({ workspaceId, session, version, contact });
   }
 

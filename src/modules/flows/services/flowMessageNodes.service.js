@@ -1,5 +1,6 @@
 const { HttpError } = require("@shared/utils/httpError");
 const {
+  sendInteractiveButtonMessageForUser,
   sendInteractiveListMessageForUser,
   sendMediaMessageForUser,
   sendTemplateMessageForUser,
@@ -24,6 +25,24 @@ function normalizeListSections(sections, scope) {
         : {}),
     })),
   }));
+}
+
+function normalizeReplyButtons(buttons, scope) {
+  return (buttons || []).map((button) => ({
+    id: String(button?.id || "").trim(),
+    title: String(resolveVariables(button?.title || "", scope)).trim(),
+  }));
+}
+
+async function sendTextButtonsNode({ workspaceId, contact, node, scope }) {
+  const config = node.config || {};
+  return sendInteractiveButtonMessageForUser({
+    userId: workspaceId,
+    to: contact.phone,
+    text: String(resolveVariables(config.text, scope)).trim(),
+    buttons: normalizeReplyButtons(config.buttons, scope),
+    sentBy: { kind: "system" },
+  });
 }
 
 function resolveHttpUrl(value, scope) {
@@ -97,6 +116,7 @@ async function sendTemplateNode({ workspaceId, contact, node, scope }) {
 }
 
 module.exports = {
+  sendTextButtonsNode,
   sendListNode,
   sendMediaNode,
   sendTemplateNode,

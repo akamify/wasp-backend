@@ -62,6 +62,17 @@ const MessageSchema = new mongoose.Schema(
     leadStatusSnapshot: { type: String, default: null },
 
     text: { type: String },
+    type: { type: String, trim: true, default: null },
+    buttons: {
+      type: [
+        {
+          _id: false,
+          id: { type: String, trim: true, required: true },
+          title: { type: String, trim: true, required: true },
+        },
+      ],
+      default: undefined,
+    },
     payload: { type: Object },
     error: { type: Object },
   },

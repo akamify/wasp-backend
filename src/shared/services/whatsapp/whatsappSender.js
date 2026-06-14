@@ -682,6 +682,61 @@ async function sendInteractiveListMessage({
   }
 }
 
+async function sendInteractiveButtonMessage({
+  accessToken,
+  phoneNumberId,
+  to,
+  text,
+  buttons,
+  graphApiVersion,
+}) {
+  const baseURL = graphBaseUrl(graphApiVersion);
+  const client = axios.create({ baseURL, timeout: 20000 });
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text },
+      action: {
+        buttons: buttons.map((button) => ({
+          type: "reply",
+          reply: {
+            id: button.id,
+            title: button.title,
+          },
+        })),
+      },
+    },
+  };
+
+  process.stdout.write(
+    `[WHATSAPP_INTERACTIVE_BUTTON_PAYLOAD] ${JSON.stringify({
+      to,
+      bodyText: text,
+      buttonsCount: buttons.length,
+      buttonIds: buttons.map((button) => button.id),
+      buttonTitles: buttons.map((button) => button.title),
+    })}\n`
+  );
+
+  try {
+    const res = await client.post(`/${phoneNumberId}/messages`, payload, {
+      headers: authHeaders(accessToken),
+    });
+    return res.data;
+  } catch (err) {
+    throw Object.assign(new Error("Meta send interactive buttons failed"), {
+      metaDebug: toMetaErrorInfo(err, "send_interactive_buttons", {
+        method: "POST",
+        url: `/${phoneNumberId}/messages`,
+        body: payload,
+      }),
+    });
+  }
+}
+
 async function sendMediaMessage({
   accessToken,
   phoneNumberId,
@@ -799,6 +854,7 @@ module.exports = {
   fetchWabaName,
   sendTemplateMessage,
   sendTextMessage,
+  sendInteractiveButtonMessage,
   sendInteractiveListMessage,
   sendMediaMessage,
   markMessageAsRead,
