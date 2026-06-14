@@ -13,6 +13,18 @@ const triggerSchema = Joi.object({
   .allow(null)
   .optional();
 
+const runtimeSettingsSchema = Joi.object({
+  sessionTimeoutMinutes: Joi.number().integer().min(1).max(10080).optional(),
+  onSessionExpired: Joi.object({
+    action: Joi.string().valid("none", "text", "template").optional(),
+    textMessage: Joi.string().trim().max(4096).allow("").optional(),
+    templateName: Joi.string().trim().max(512).allow("").optional(),
+    languageCode: Joi.string().trim().max(32).allow("").optional(),
+    variables: Joi.array().items(Joi.string().max(4096)).optional(),
+  }).optional(),
+  allowKeywordRestartWhenWaiting: Joi.boolean().optional(),
+}).optional();
+
 const createFlowSchema = Joi.object({
   name: Joi.string().trim().min(1).max(120).required(),
   description: Joi.string().trim().max(2000).allow("").optional(),
@@ -29,6 +41,7 @@ const saveDraftSchema = Joi.object({
   edges: Joi.array().items(Joi.object().unknown(true)).required(),
   fallbackNodeId: Joi.string().trim().max(200).allow(null, "").optional(),
   handoverNodeId: Joi.string().trim().max(200).allow(null, "").optional(),
+  runtimeSettings: runtimeSettingsSchema,
 });
 
 const listFlowsQuerySchema = Joi.object({

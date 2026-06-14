@@ -11,6 +11,9 @@ const {
 const {
   executeSession,
 } = require("@modules/flows/services/flowRuntime.service");
+const {
+  normalizeRuntimeSettings,
+} = require("@modules/flows/constants/flowRuntimeSettings");
 
 function assertValidFlowId(flowId) {
   if (!mongoose.Types.ObjectId.isValid(String(flowId || ""))) {
@@ -127,6 +130,7 @@ async function createFlow({ workspaceId, actorId, payload }) {
     description: payload.description || "",
     status: "draft",
     trigger: normalizeTrigger(null),
+    runtimeSettings: normalizeRuntimeSettings(null),
     draft: {
       nodes: [],
       edges: [],
@@ -182,7 +186,7 @@ async function updateFlowMetadata({ workspaceId, flowId, actorId, payload }) {
 }
 
 async function saveDraft({ workspaceId, flowId, actorId, payload }) {
-  await requireMutableFlow({ workspaceId, flowId });
+  const existing = await requireMutableFlow({ workspaceId, flowId });
   const flow = await flowsRepository.updateFlowById({
     workspaceId,
     flowId,
@@ -194,6 +198,9 @@ async function saveDraft({ workspaceId, flowId, actorId, payload }) {
         fallbackNodeId: payload.fallbackNodeId || null,
         handoverNodeId: payload.handoverNodeId || null,
       },
+      runtimeSettings: normalizeRuntimeSettings(
+        payload.runtimeSettings || existing.runtimeSettings
+      ),
       updatedBy: actorId || null,
     },
   });
@@ -266,6 +273,7 @@ async function publishFlow({ workspaceId, flowId, actorId }) {
       versionNumber: Number(latestVersion?.versionNumber || 0) + 1,
       status: "active",
       trigger: flow.trigger.toObject ? flow.trigger.toObject() : flow.trigger,
+      runtimeSettings: normalizeRuntimeSettings(flow.runtimeSettings),
       nodes: snapshot.nodes,
       edges: snapshot.edges,
       fallbackNodeId: snapshot.fallbackNodeId,

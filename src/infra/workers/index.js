@@ -3,6 +3,7 @@ const { startRetryWorker } = require("@infra/workers/retry.worker");
 const { startNotificationWorker } = require("@infra/workers/notification.worker");
 const { startCleanupWorker } = require("@infra/workers/cleanup.worker");
 const { startCrmLeadAssignmentWorker } = require("@infra/workers/crmLeadAssignment.worker");
+const { startFlowSessionExpiryWorker } = require("@infra/workers/flowSessionExpiry.worker");
 const logger = require("@core/logger/logger");
 const { closeAllQueueResources } = require("@infra/queues/index");
 
@@ -16,6 +17,7 @@ function startAllWorkers() {
         startNotificationWorker(),
         startCleanupWorker(),
         startCrmLeadAssignmentWorker(),
+        startFlowSessionExpiryWorker(),
     ].filter(Boolean);
     return _started;
 }
@@ -47,6 +49,7 @@ module.exports = {
     startNotificationWorker,
     startCleanupWorker,
     startCrmLeadAssignmentWorker,
+    startFlowSessionExpiryWorker,
     startAllWorkers,
     stopAllWorkers,
 };

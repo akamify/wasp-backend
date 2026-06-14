@@ -1,5 +1,8 @@
 const { sendTextMessageForUser } = require("@shared/services/outboundMessageService");
 const flowSessionRepository = require("@modules/flows/repositories/flowSession.repository");
+const {
+  assertFreeformSendAllowed,
+} = require("@shared/services/whatsappCustomerWindow");
 
 function asPlainAttributes(attributes) {
   if (!attributes) return {};
@@ -117,9 +120,19 @@ function buildScope(session, contact, inboundMessage) {
   };
 }
 
-async function sendText({ workspaceId, contact, text }) {
+async function sendText({
+  workspaceId,
+  contact,
+  text,
+  businessInitiated = false,
+}) {
   const normalized = String(text || "").trim();
   if (!normalized) return;
+  assertFreeformSendAllowed({
+    contact,
+    sendType: "text",
+    businessInitiated,
+  });
   await sendTextMessageForUser({
     userId: workspaceId,
     to: contact.phone,

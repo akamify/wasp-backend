@@ -1,5 +1,8 @@
 const mongoose = require("mongoose");
-const { FlowTriggerSchema } = require("@infra/database/Flow");
+const {
+  FlowTriggerSchema,
+  FlowRuntimeSettingsSchema,
+} = require("@infra/database/Flow");
 
 const FlowVersionSchema = new mongoose.Schema(
   {
@@ -22,6 +25,12 @@ const FlowVersionSchema = new mongoose.Schema(
       default: "inactive",
     },
     trigger: { type: FlowTriggerSchema, required: true, immutable: true },
+    runtimeSettings: {
+      type: FlowRuntimeSettingsSchema,
+      required: true,
+      immutable: true,
+      default: () => ({}),
+    },
     nodes: {
       type: [mongoose.Schema.Types.Mixed],
       required: true,

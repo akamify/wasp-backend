@@ -9,6 +9,9 @@ const flowSessionRepository = require("@modules/flows/repositories/flowSession.r
 const {
   resolveVariables,
 } = require("@modules/flows/services/flowRuntime.utils");
+const {
+  assertFreeformSendAllowed,
+} = require("@shared/services/whatsappCustomerWindow");
 
 function normalizeListSections(sections, scope) {
   return (sections || []).map((section) => ({
@@ -34,8 +37,19 @@ function normalizeReplyButtons(buttons, scope) {
   }));
 }
 
-async function sendTextButtonsNode({ workspaceId, contact, node, scope }) {
+async function sendTextButtonsNode({
+  workspaceId,
+  contact,
+  node,
+  scope,
+  businessInitiated = false,
+}) {
   const config = node.config || {};
+  assertFreeformSendAllowed({
+    contact,
+    sendType: "interactive_buttons",
+    businessInitiated,
+  });
   return sendInteractiveButtonMessageForUser({
     userId: workspaceId,
     to: contact.phone,
@@ -59,8 +73,19 @@ function resolveHttpUrl(value, scope) {
   return parsed.toString();
 }
 
-async function sendListNode({ workspaceId, contact, node, scope }) {
+async function sendListNode({
+  workspaceId,
+  contact,
+  node,
+  scope,
+  businessInitiated = false,
+}) {
   const config = node.config || {};
+  assertFreeformSendAllowed({
+    contact,
+    sendType: "interactive_list",
+    businessInitiated,
+  });
   await sendInteractiveListMessageForUser({
     userId: workspaceId,
     to: contact.phone,
@@ -71,8 +96,19 @@ async function sendListNode({ workspaceId, contact, node, scope }) {
   });
 }
 
-async function sendMediaNode({ workspaceId, contact, node, scope }) {
+async function sendMediaNode({
+  workspaceId,
+  contact,
+  node,
+  scope,
+  businessInitiated = false,
+}) {
   const config = node.config || {};
+  assertFreeformSendAllowed({
+    contact,
+    sendType: `media_${config.mediaType || "unknown"}`,
+    businessInitiated,
+  });
   await sendMediaMessageForUser({
     userId: workspaceId,
     to: contact.phone,

@@ -4,6 +4,8 @@ const { FlowEvent } = require("@infra/database/FlowEvent");
 const { FlowVersion } = require("@infra/database/FlowVersion");
 const { Conversation } = require("@infra/database/Conversation");
 const { Template } = require("@infra/database/Template");
+const { Flow } = require("@infra/database/Flow");
+const { Message } = require("@infra/database/Message");
 
 async function findContactById({ workspaceId, contactId }) {
   return Contact.findOne({ _id: contactId, workspaceId });
@@ -15,6 +17,14 @@ async function findActiveSession({ workspaceId, contactId, now }) {
     contactId,
     status: "active",
     expiresAt: { $gt: now },
+  }).sort({ startedAt: -1 });
+}
+
+async function findLatestActiveSession({ workspaceId, contactId }) {
+  return FlowSession.findOne({
+    workspaceId,
+    contactId,
+    status: "active",
   }).sort({ startedAt: -1 });
 }
 
@@ -146,12 +156,97 @@ async function expireSession({ workspaceId, sessionId, completedAt }) {
       $set: {
         status: "expired",
         completedAt,
+        expiredAt: completedAt,
+        expiryReason: "manual",
+        expiresAt: completedAt,
+        waitingFor: { type: null, attributeKey: null, nodeId: null },
         lockedUntil: null,
         lockedBy: null,
       },
     },
     { new: true, runValidators: true }
   );
+}
+
+async function transitionSessionToExpired({
+  workspaceId,
+  sessionId,
+  now,
+  reason,
+  requireTimedOut = false,
+}) {
+  const filter = {
+    _id: sessionId,
+    workspaceId,
+    status: "active",
+  };
+  if (requireTimedOut) filter.expiresAt = { $lte: now };
+  return FlowSession.findOneAndUpdate(
+    filter,
+    {
+      $set: {
+        status: "expired",
+        completedAt: now,
+        expiredAt: now,
+        expiryReason: reason,
+        expiresAt: now,
+        waitingFor: { type: null, attributeKey: null, nodeId: null },
+        lockedUntil: null,
+        lockedBy: null,
+      },
+    },
+    { returnDocument: "after", runValidators: true }
+  );
+}
+
+async function findTimedOutActiveSessions({ now, limit = 100 }) {
+  return FlowSession.find({
+    status: "active",
+    expiresAt: { $ne: null, $lte: now },
+  })
+    .sort({ expiresAt: 1, _id: 1 })
+    .limit(limit);
+}
+
+async function findFlowById({ workspaceId, flowId }) {
+  return Flow.findOne({ _id: flowId, workspaceId }).select("_id name");
+}
+
+async function findConversationInboundState({ workspaceId, wabaId, phone }) {
+  return Conversation.findOne({ workspaceId, wabaId, phone })
+    .select("lastInboundAt lastCustomerMessageAt")
+    .lean();
+}
+
+async function createFailedExpiryMessage({
+  workspaceId,
+  contact,
+  templateName,
+  languageCode,
+  error,
+}) {
+  return Message.create({
+    workspaceId,
+    wabaId: contact.wabaId || null,
+    phoneNumberId: contact.phoneNumberId || null,
+    contactId: contact._id,
+    phone: contact.phone,
+    direction: "outbound",
+    type: "template",
+    status: "failed",
+    statusTimestamps: { failedAt: new Date() },
+    sentBy: { kind: "system" },
+    text: "",
+    payload: {
+      to: contact.phone,
+      template: {
+        name: templateName,
+        language: languageCode,
+      },
+      purpose: "flow_session_expiry",
+    },
+    error,
+  });
 }
 
 async function deleteSession({ workspaceId, sessionId }) {
@@ -161,6 +256,7 @@ async function deleteSession({ workspaceId, sessionId }) {
 module.exports = {
   findContactById,
   findActiveSession,
+  findLatestActiveSession,
   createSession,
   createFlowStartedEvent,
   createFlowEvent,
@@ -175,5 +271,10 @@ module.exports = {
   findPausedConversation,
   findApprovedTemplate,
   expireSession,
+  transitionSessionToExpired,
+  findTimedOutActiveSessions,
+  findFlowById,
+  findConversationInboundState,
+  createFailedExpiryMessage,
   deleteSession,
 };

@@ -45,6 +45,20 @@ const FlowSessionSchema = new mongoose.Schema(
     lastMessageAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
     expiresAt: { type: Date, default: null },
+    expiredAt: { type: Date, default: null },
+    expiryReason: {
+      type: String,
+      enum: ["timeout", "completed", "replaced", "manual", "send_failed"],
+      default: null,
+    },
+    lastPromptSentAt: { type: Date, default: null },
+    lastPromptNodeId: { type: String, trim: true, default: null },
+    lastPromptMessageStatus: {
+      type: String,
+      enum: ["sent", "failed"],
+      default: null,
+    },
+    lastPromptFailureReason: { type: String, trim: true, default: null },
     error: { type: mongoose.Schema.Types.Mixed, default: null },
   },
   { timestamps: true }

@@ -16,6 +16,7 @@ async function executeSetTagNode({
   contact,
   node,
   scope,
+  businessInitiated = false,
 }) {
   const tags = normalizeTags(resolveVariables(node.config?.tags || [], scope));
   const action = node.config?.action === "remove" ? "remove" : "add";
@@ -78,7 +79,12 @@ async function requestHandover({
   const config = node.config || {};
   const message = resolveVariables(config.message, scope);
   if (String(message || "").trim()) {
-    await sendText({ workspaceId, contact, text: message });
+    await sendText({
+      workspaceId,
+      contact,
+      text: message,
+      businessInitiated,
+    });
   }
 
   const now = new Date();

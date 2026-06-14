@@ -107,4 +107,5 @@ async function findMatchingFlowVersion({ workspaceId, inboundMessage }) {
 
 module.exports = {
   findMatchingFlowVersion,
+  matchesTrigger,
 };

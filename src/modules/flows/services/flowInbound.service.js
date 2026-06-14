@@ -11,7 +11,9 @@ const {
   findMatchingFlowVersion,
 } = require("@modules/flows/services/flowTrigger.service");
 const {
-  findActiveSession,
+  findLatestActiveSession,
+  expireActiveSession,
+  allowsKeywordRestart,
   shouldSkipForHandover,
   startSession,
 } = require("@modules/flows/services/flowSession.service");
@@ -19,6 +21,34 @@ const {
   executeSession,
   continueSession,
 } = require("@modules/flows/services/flowRuntime.service");
+
+function flowLog(label, data) {
+  process.stdout.write(`${label} ${JSON.stringify(data)}\n`);
+}
+
+async function startMatchedFlow({
+  workspaceId,
+  contact,
+  match,
+  inboundMessage,
+  now,
+}) {
+  const session = await startSession({
+    workspaceId,
+    contactId: contact._id,
+    flow: match.flow,
+    version: match.version,
+    initialContext: {},
+    now,
+  });
+  const runtimeResult = await executeSession({
+    workspaceId,
+    sessionId: session._id,
+    inboundMessage,
+    businessInitiated: false,
+  });
+  return { session, runtimeResult };
+}
 
 function isDuplicateKeyError(error) {
   return (
@@ -136,44 +166,92 @@ async function processInboundMessage(normalizedMessage) {
     ) {
       automationResult = { status: "skipped_handover" };
     } else {
-      const existingSession = await findActiveSession({
+      let existingSession = await findLatestActiveSession({
         workspaceId,
         contactId: contact._id,
-        now,
       });
-      if (existingSession) {
-        const runtimeResult = await continueSession({
+      if (
+        existingSession?.expiresAt &&
+        new Date(existingSession.expiresAt).getTime() <= now.getTime()
+      ) {
+        await expireActiveSession({
           workspaceId,
           session: existingSession,
+          reason: "timeout",
+          now,
+          requireTimedOut: true,
+        });
+        existingSession = null;
+      }
+
+      if (existingSession) {
+        const restartMatch = await findMatchingFlowVersion({
+          workspaceId,
           inboundMessage: normalizedMessage,
         });
-        automationResult = {
-          status:
-            runtimeResult.status === "handover"
-              ? "skipped_handover"
-              : "existing_session_found",
-          sessionId: String(existingSession._id),
-          sessionStatus: runtimeResult.session?.status || existingSession.status,
-          runtimeStatus: runtimeResult.status,
-        };
+        const restartAllowed =
+          restartMatch &&
+          (await allowsKeywordRestart({
+            workspaceId,
+            session: existingSession,
+          }));
+        if (restartAllowed) {
+          const oldSessionId = String(existingSession._id);
+          await expireActiveSession({
+            workspaceId,
+            session: existingSession,
+            reason: "replaced",
+            now,
+          });
+          const { session, runtimeResult } = await startMatchedFlow({
+            workspaceId,
+            contact,
+            match: restartMatch,
+            inboundMessage: normalizedMessage,
+            now,
+          });
+          flowLog("[FLOW_KEYWORD_RESTART]", {
+            oldSessionId,
+            newSessionId: String(session._id),
+            keyword: normalizedMessage.text || "",
+          });
+          automationResult = {
+            status: "session_started",
+            sessionId: String(session._id),
+            flowId: String(restartMatch.flow._id),
+            flowVersionId: String(restartMatch.version._id),
+            runtimeStatus: runtimeResult.status,
+            replacedSessionId: oldSessionId,
+          };
+        } else {
+          const runtimeResult = await continueSession({
+            workspaceId,
+            session: existingSession,
+            inboundMessage: normalizedMessage,
+          });
+          automationResult = {
+            status:
+              runtimeResult.status === "handover"
+                ? "skipped_handover"
+                : "existing_session_found",
+            sessionId: String(existingSession._id),
+            sessionStatus:
+              runtimeResult.session?.status || existingSession.status,
+            runtimeStatus: runtimeResult.status,
+          };
+        }
       } else {
         const match = await findMatchingFlowVersion({
           workspaceId,
           inboundMessage: normalizedMessage,
         });
         if (match) {
-          const session = await startSession({
+          const { session, runtimeResult } = await startMatchedFlow({
             workspaceId,
-            contactId: contact._id,
-            flow: match.flow,
-            version: match.version,
-            initialContext: {},
-            now,
-          });
-          const runtimeResult = await executeSession({
-            workspaceId,
-            sessionId: session._id,
+            contact,
+            match,
             inboundMessage: normalizedMessage,
+            now,
           });
           automationResult = {
             status: "session_started",

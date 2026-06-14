@@ -1,4 +1,10 @@
-const { campaignQueue, retryQueue, notificationQueue, webhookQueue } = require("@infra/queues/index");
+const {
+    campaignQueue,
+    retryQueue,
+    notificationQueue,
+    webhookQueue,
+    flowSessionExpiryQueue,
+} = require("@infra/queues/index");
 const logger = require("@core/logger/logger");
 
 function startCleanupWorker() {
@@ -10,6 +16,7 @@ function startCleanupWorker() {
         retryQueue.getRetryQueue(),
         notificationQueue.getNotificationQueue(),
         webhookQueue.getWebhookQueue(),
+        flowSessionExpiryQueue.getFlowSessionExpiryQueue(),
     ];
 
     const timer = setInterval(async () => {

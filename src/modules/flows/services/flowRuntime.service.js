@@ -23,6 +23,9 @@ const {
 const {
   executeApiRequestNode,
 } = require("@modules/flows/services/flowApiRequest.service");
+const {
+  sessionExpiresAt,
+} = require("@modules/flows/constants/flowRuntimeSettings");
 
 const MAX_AUTO_STEPS = 50;
 const MAX_FALLBACKS = 3;
@@ -71,7 +74,12 @@ async function failPromptSend({ workspaceId, session, node, error }) {
     updates: {
       status: "failed",
       completedAt: new Date(),
+      expiryReason: "send_failed",
+      expiresAt: new Date(),
       waitingFor: { type: null, attributeKey: null, nodeId: null },
+      lastPromptNodeId: node.id,
+      lastPromptMessageStatus: "failed",
+      lastPromptFailureReason: failure.reason,
       error: {
         message: failure.reason,
         nodeId: node.id,
@@ -92,7 +100,15 @@ async function failPromptSend({ workspaceId, session, node, error }) {
   return { status: "failed", session: failed };
 }
 
-async function sendButtonsAndWait({ workspaceId, session, contact, node, scope }) {
+async function sendButtonsAndWait({
+  workspaceId,
+  session,
+  contact,
+  node,
+  scope,
+  version,
+  businessInitiated = false,
+}) {
   flowLog("[FLOW_VERSION_NODE_CONFIG]", {
     flowVersionId: String(session.flowVersionId),
     nodeId: node.id,
@@ -109,6 +125,7 @@ async function sendButtonsAndWait({ workspaceId, session, contact, node, scope }
       contact,
       node,
       scope,
+      businessInitiated,
     });
     const sentAt = new Date();
     const waitingSession = await moveSession({
@@ -121,6 +138,11 @@ async function sendButtonsAndWait({ workspaceId, session, contact, node, scope }
           attributeKey: null,
           nodeId: node.id,
         },
+        expiresAt: sessionExpiresAt(version.runtimeSettings, sentAt),
+        lastPromptSentAt: sentAt,
+        lastPromptNodeId: node.id,
+        lastPromptMessageStatus: "sent",
+        lastPromptFailureReason: null,
         context: {
           ...(session.context || {}),
           lastPrompt: {
@@ -157,6 +179,7 @@ async function executeSession({
   workspaceId,
   sessionId,
   inboundMessage = null,
+  businessInitiated = inboundMessage == null,
 }) {
   let session = await flowSessionRepository.findSessionById({
     workspaceId,
@@ -209,7 +232,14 @@ async function executeSession({
     const scope = buildScope(session, contact, inboundMessage);
     if (node.type === "start") {
       const edge = defaultEdge(version, node.id);
-      if (!edge) return failSession({ workspaceId, session, contact });
+      if (!edge) {
+        return failSession({
+          workspaceId,
+          session,
+          contact,
+          businessInitiated,
+        });
+      }
       session = await moveSession({
         workspaceId,
         session,
@@ -219,11 +249,16 @@ async function executeSession({
     }
 
     if (node.type === "text") {
-      await sendText({
-        workspaceId,
-        contact,
-        text: resolveVariables(node.config?.text, scope),
-      });
+      try {
+        await sendText({
+          workspaceId,
+          contact,
+          text: resolveVariables(node.config?.text, scope),
+          businessInitiated,
+        });
+      } catch (error) {
+        return failPromptSend({ workspaceId, session, node, error });
+      }
       const edge = defaultEdge(version, node.id);
       if (!edge) return completeSession({ workspaceId, session, node });
       session = await moveSession({
@@ -241,15 +276,23 @@ async function executeSession({
         contact,
         node,
         scope,
+        version,
+        businessInitiated,
       });
     }
 
     if (node.type === "ask_question") {
-      await sendText({
-        workspaceId,
-        contact,
-        text: resolveVariables(node.config?.question, scope),
-      });
+      const promptSentAt = new Date();
+      try {
+        await sendText({
+          workspaceId,
+          contact,
+          text: resolveVariables(node.config?.question, scope),
+          businessInitiated,
+        });
+      } catch (error) {
+        return failPromptSend({ workspaceId, session, node, error });
+      }
       session = await moveSession({
         workspaceId,
         session,
@@ -260,13 +303,32 @@ async function executeSession({
             attributeKey: node.config?.saveToAttribute || null,
             nodeId: node.id,
           },
+          expiresAt: sessionExpiresAt(
+            version.runtimeSettings,
+            promptSentAt
+          ),
+          lastPromptSentAt: promptSentAt,
+          lastPromptNodeId: node.id,
+          lastPromptMessageStatus: "sent",
+          lastPromptFailureReason: null,
         },
       });
       return { status: "waiting", session };
     }
 
     if (node.type === "list") {
-      await sendListNode({ workspaceId, contact, node, scope });
+      const promptSentAt = new Date();
+      try {
+        await sendListNode({
+          workspaceId,
+          contact,
+          node,
+          scope,
+          businessInitiated,
+        });
+      } catch (error) {
+        return failPromptSend({ workspaceId, session, node, error });
+      }
       session = await moveSession({
         workspaceId,
         session,
@@ -277,13 +339,31 @@ async function executeSession({
             attributeKey: null,
             nodeId: node.id,
           },
+          expiresAt: sessionExpiresAt(
+            version.runtimeSettings,
+            promptSentAt
+          ),
+          lastPromptSentAt: promptSentAt,
+          lastPromptNodeId: node.id,
+          lastPromptMessageStatus: "sent",
+          lastPromptFailureReason: null,
         },
       });
       return { status: "waiting", session };
     }
 
     if (node.type === "media") {
-      await sendMediaNode({ workspaceId, contact, node, scope });
+      try {
+        await sendMediaNode({
+          workspaceId,
+          contact,
+          node,
+          scope,
+          businessInitiated,
+        });
+      } catch (error) {
+        return failPromptSend({ workspaceId, session, node, error });
+      }
       const edge = defaultEdge(version, node.id);
       if (node.config?.autoContinue === true && edge) {
         session = await moveSession({
@@ -297,7 +377,11 @@ async function executeSession({
     }
 
     if (node.type === "template") {
-      await sendTemplateNode({ workspaceId, contact, node, scope });
+      try {
+        await sendTemplateNode({ workspaceId, contact, node, scope });
+      } catch (error) {
+        return failPromptSend({ workspaceId, session, node, error });
+      }
       const edge = defaultEdge(version, node.id);
       if (node.config?.autoContinue === true && edge) {
         session = await moveSession({
@@ -384,13 +468,18 @@ async function executeSession({
     }
 
     if (node.type === "request_intervention") {
-      return requestHandover({
-        workspaceId,
-        session,
-        contact,
-        node,
-        scope,
-      });
+      try {
+        return await requestHandover({
+          workspaceId,
+          session,
+          contact,
+          node,
+          scope,
+          businessInitiated,
+        });
+      } catch (error) {
+        return failPromptSend({ workspaceId, session, node, error });
+      }
     }
 
     if (node.type === "end") {
@@ -398,11 +487,16 @@ async function executeSession({
         resolveVariables(node.config?.message || "", scope)
       ).trim();
       if (endMessage) {
-        await sendText({
-          workspaceId,
-          contact,
-          text: endMessage,
-        });
+        try {
+          await sendText({
+            workspaceId,
+            contact,
+            text: endMessage,
+            businessInitiated,
+          });
+        } catch (error) {
+          return failPromptSend({ workspaceId, session, node, error });
+        }
       }
       return completeSession({ workspaceId, session, node });
     }
@@ -431,6 +525,8 @@ async function completeSession({ workspaceId, session, node }) {
     updates: {
       status: "completed",
       completedAt: new Date(),
+      expiryReason: "completed",
+      expiresAt: new Date(),
       waitingFor: { type: null, attributeKey: null, nodeId: null },
     },
   });
@@ -443,12 +539,18 @@ async function completeSession({ workspaceId, session, node }) {
   return { status: "completed", session: completed };
 }
 
-async function failSession({ workspaceId, session, contact }) {
+async function failSession({
+  workspaceId,
+  session,
+  contact,
+  businessInitiated = false,
+}) {
   await sendText({
     workspaceId,
     contact,
     text: GENERIC_END_MESSAGE,
-  });
+    businessInitiated,
+  }).catch(() => {});
   const failed = await moveSession({
     workspaceId,
     session,
@@ -456,6 +558,7 @@ async function failSession({ workspaceId, session, contact }) {
     updates: {
       status: "failed",
       completedAt: new Date(),
+      expiresAt: new Date(),
       waitingFor: { type: null, attributeKey: null, nodeId: null },
       error: { message: "Flow could not continue" },
     },
@@ -472,7 +575,12 @@ function validQuestionAnswer(inputType, value) {
   return true;
 }
 
-async function handleFallback({ workspaceId, session, version, contact }) {
+async function handleFallback({
+  workspaceId,
+  session,
+  version,
+  contact,
+}) {
   const updated = await flowSessionRepository.incrementFallbackCount({
     workspaceId,
     sessionId: session._id,
@@ -491,11 +599,17 @@ async function handleFallback({ workspaceId, session, version, contact }) {
       return executeSession({
         workspaceId,
         sessionId: moved._id,
+        businessInitiated: false,
       });
     }
     return failSession({ workspaceId, session: updated, contact });
   }
-  await sendText({ workspaceId, contact, text: GENERIC_RETRY_MESSAGE });
+  await sendText({
+    workspaceId,
+    contact,
+    text: GENERIC_RETRY_MESSAGE,
+    businessInitiated: false,
+  });
   return { status: "waiting", session: updated };
 }
 
@@ -596,6 +710,8 @@ async function continueSession({
           contact,
           node: waitingNode,
           scope: buildScope(session, contact, inboundMessage),
+          version,
+          businessInitiated: false,
         });
       }
     }
@@ -616,6 +732,7 @@ async function continueSession({
     workspaceId,
     sessionId: moved._id,
     inboundMessage,
+    businessInitiated: false,
   });
 }
 

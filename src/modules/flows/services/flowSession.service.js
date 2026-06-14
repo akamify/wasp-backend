@@ -2,8 +2,10 @@ const mongoose = require("mongoose");
 const { HttpError } = require("@shared/utils/httpError");
 const flowsRepository = require("@modules/flows/repositories/flows.repository");
 const flowSessionRepository = require("@modules/flows/repositories/flowSession.repository");
-
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const {
+  normalizeRuntimeSettings,
+  sessionExpiresAt,
+} = require("@modules/flows/constants/flowRuntimeSettings");
 
 function assertValidObjectId(value, label) {
   if (!mongoose.Types.ObjectId.isValid(String(value || ""))) {
@@ -25,6 +27,41 @@ async function findActiveSession({ workspaceId, contactId, now = new Date() }) {
   });
 }
 
+async function findLatestActiveSession({ workspaceId, contactId }) {
+  return flowSessionRepository.findLatestActiveSession({
+    workspaceId,
+    contactId,
+  });
+}
+
+async function expireActiveSession({
+  workspaceId,
+  session,
+  reason,
+  now = new Date(),
+  requireTimedOut = false,
+}) {
+  const expired = await flowSessionRepository.transitionSessionToExpired({
+    workspaceId,
+    sessionId: session._id,
+    now,
+    reason,
+    requireTimedOut,
+  });
+  if (!expired) return null;
+  await flowSessionRepository.createFlowEvent({
+    workspaceId,
+    flowId: expired.flowId,
+    flowVersionId: expired.flowVersionId,
+    sessionId: expired._id,
+    contactId: expired.contactId,
+    eventType: "session_expired",
+    nodeId: expired.currentNodeId,
+    data: { reason },
+  });
+  return expired;
+}
+
 async function shouldSkipForHandover({ workspaceId, contact }) {
   if (!workspaceId || !contact?.phone) return false;
   return Boolean(
@@ -34,6 +71,16 @@ async function shouldSkipForHandover({ workspaceId, contact }) {
       phone: contact.phone,
     })
   );
+}
+
+async function allowsKeywordRestart({ workspaceId, session }) {
+  if (!session?.waitingFor?.type) return false;
+  const version = await flowSessionRepository.findFlowVersionById({
+    workspaceId,
+    flowVersionId: session.flowVersionId,
+  });
+  return normalizeRuntimeSettings(version?.runtimeSettings)
+    .allowKeywordRestartWhenWaiting;
 }
 
 async function startSession({
@@ -49,6 +96,7 @@ async function startSession({
     throw new HttpError(409, "Published flow version has no start node");
   }
 
+  const runtimeSettings = normalizeRuntimeSettings(version.runtimeSettings);
   let session;
   try {
     session = await flowSessionRepository.createSession({
@@ -62,7 +110,7 @@ async function startSession({
       fallbackCount: 0,
       startedAt: now,
       lastMessageAt: now,
-      expiresAt: new Date(now.getTime() + SESSION_TTL_MS),
+      expiresAt: sessionExpiresAt(runtimeSettings, now),
     });
 
     await flowSessionRepository.createFlowStartedEvent({
@@ -117,21 +165,34 @@ async function manualStart({
   }
 
   const now = new Date();
-  const existingSession = await findActiveSession({
+  let existingSession = await findLatestActiveSession({
     workspaceId,
     contactId,
-    now,
   });
+  if (
+    existingSession?.expiresAt &&
+    new Date(existingSession.expiresAt).getTime() <= now.getTime()
+  ) {
+    await expireActiveSession({
+      workspaceId,
+      session: existingSession,
+      reason: "timeout",
+      now,
+      requireTimedOut: true,
+    });
+    existingSession = null;
+  }
   if (existingSession && !force) {
     throw new HttpError(409, "Contact already has an active flow session", {
       sessionId: String(existingSession._id),
     });
   }
   if (existingSession && force) {
-    await flowSessionRepository.expireSession({
+    await expireActiveSession({
       workspaceId,
-      sessionId: existingSession._id,
-      completedAt: now,
+      session: existingSession,
+      reason: "replaced",
+      now,
     });
   }
 
@@ -147,6 +208,9 @@ async function manualStart({
 
 module.exports = {
   findActiveSession,
+  findLatestActiveSession,
+  expireActiveSession,
+  allowsKeywordRestart,
   shouldSkipForHandover,
   startSession,
   manualStart,

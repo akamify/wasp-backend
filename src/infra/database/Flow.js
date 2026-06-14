@@ -29,6 +29,35 @@ const FlowDraftSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const FlowRuntimeSettingsSchema = new mongoose.Schema(
+  {
+    sessionTimeoutMinutes: {
+      type: Number,
+      min: 1,
+      max: 10080,
+      default: 30,
+    },
+    onSessionExpired: {
+      action: {
+        type: String,
+        enum: ["none", "text", "template"],
+        default: "none",
+      },
+      textMessage: {
+        type: String,
+        trim: true,
+        default:
+          "Your previous session has expired. Please send Hi to start again.",
+      },
+      templateName: { type: String, trim: true, default: "" },
+      languageCode: { type: String, trim: true, default: "en" },
+      variables: { type: [String], default: [] },
+    },
+    allowKeywordRestartWhenWaiting: { type: Boolean, default: true },
+  },
+  { _id: false }
+);
+
 const FlowSchema = new mongoose.Schema(
   {
     workspaceId: {
@@ -45,6 +74,10 @@ const FlowSchema = new mongoose.Schema(
     },
     trigger: { type: FlowTriggerSchema, default: () => ({}) },
     draft: { type: FlowDraftSchema, default: () => ({}) },
+    runtimeSettings: {
+      type: FlowRuntimeSettingsSchema,
+      default: () => ({}),
+    },
     activeVersionId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "FlowVersion",
@@ -64,4 +97,8 @@ FlowSchema.index({ workspaceId: 1, "trigger.type": 1 });
 
 const Flow = mongoose.model("Flow", FlowSchema);
 
-module.exports = { Flow, FlowTriggerSchema };
+module.exports = {
+  Flow,
+  FlowTriggerSchema,
+  FlowRuntimeSettingsSchema,
+};
