@@ -33,7 +33,13 @@ const VALID_HTTP_METHODS = new Set([
 ]);
 const VALID_RESPONSE_MAPPING_TYPES = new Set(["string", "number", "boolean", "url", "json"]);
 const VALID_MEDIA_TYPES = new Set(["image", "video", "document", "audio"]);
-const VALID_MEDIA_SOURCE_TYPES = new Set(["upload", "url", "api_context", "contact_attribute"]);
+const VALID_MEDIA_SOURCE_TYPES = new Set([
+  "upload",
+  "library",
+  "url",
+  "api_context",
+  "contact_attribute",
+]);
 const TEMPLATE_TOKEN_PATTERN = /\{\{\s*[^}]+\s*\}\}/;
 const SENSITIVE_TEMPLATE_KEY_PATTERN = /(token|secret|password|apikey|api_key|authorization)/i;
 const FORBIDDEN_API_HEADERS = new Set([
@@ -521,7 +527,7 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
       addIssue(
         errors,
         "MEDIA_SOURCE_TYPE_INVALID",
-        "Media source type must be upload, url, api_context, or contact_attribute",
+        "Media source type must be upload, library, url, api_context, or contact_attribute",
         { nodeId, field: "config.sourceType" }
       );
     }
@@ -533,7 +539,7 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
       nodeId,
       field: "config.mediaType",
     });
-    if (sourceType === "upload") {
+    if (sourceType === "upload" || sourceType === "library") {
       validateRequiredString({
         errors,
         value: config.mediaAssetId,

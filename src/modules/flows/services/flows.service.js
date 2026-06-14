@@ -23,6 +23,7 @@ const {
 const {
   computeFlowDraftHash,
 } = require("@modules/flows/services/flowDraftHash.service");
+const mediaAssetRepository = require("@modules/media/repositories/mediaAsset.repository");
 
 function assertValidFlowId(flowId) {
   if (!mongoose.Types.ObjectId.isValid(String(flowId || ""))) {
@@ -89,6 +90,44 @@ async function addApprovedTemplateErrors({ workspaceId, flow, validation }) {
         field: check.nodeId
           ? "config.templateName"
           : "runtimeSettings.onSessionExpired.templateName",
+      });
+    }
+  }
+  validation.valid = validation.errors.length === 0;
+  return validation;
+}
+
+async function addMediaAssetErrors({ workspaceId, flow, validation }) {
+  const mediaNodes = (flow?.draft?.nodes || []).filter((node) => {
+    if (node?.type !== "media") return false;
+    return ["upload", "library"].includes(
+      String(node.config?.sourceType || "").trim()
+    );
+  });
+  for (const node of mediaNodes) {
+    const mediaAssetId = String(node.config?.mediaAssetId || "").trim();
+    if (!mediaAssetId || !mongoose.Types.ObjectId.isValid(mediaAssetId)) {
+      continue;
+    }
+    const asset = await mediaAssetRepository.findMediaAssetById({
+      workspaceId,
+      mediaAssetId,
+    });
+    if (!asset) {
+      validation.errors.push({
+        code: "MEDIA_ASSET_NOT_FOUND",
+        message: "Selected media asset was not found or is not ready",
+        nodeId: node.id,
+        field: "config.mediaAssetId",
+      });
+      continue;
+    }
+    if (String(asset.mediaType) !== String(node.config?.mediaType || "")) {
+      validation.errors.push({
+        code: "MEDIA_TYPE_NOT_SUPPORTED",
+        message: "Selected media asset type does not match the Media node type",
+        nodeId: node.id,
+        field: "config.mediaAssetId",
       });
     }
   }
@@ -320,11 +359,12 @@ async function validateDraft({ workspaceId, flowId }) {
   const flow = await flowsRepository.findFlowById({ workspaceId, flowId });
   if (!flow) throw new HttpError(404, "Flow not found");
   const draftHash = computeFlowDraftHash(flow);
-  const validation = await addApprovedTemplateErrors({
+  let validation = await addApprovedTemplateErrors({
     workspaceId,
     flow,
     validation: validateFlowDraft(flow),
   });
+  validation = await addMediaAssetErrors({ workspaceId, flow, validation });
   await flowsRepository.updateFlowById({
     workspaceId,
     flowId,
@@ -362,11 +402,12 @@ async function publishFlow({ workspaceId, flowId, actorId }) {
     );
   }
 
-  const validation = await addApprovedTemplateErrors({
+  let validation = await addApprovedTemplateErrors({
     workspaceId,
     flow,
     validation: validateFlowDraft(flow),
   });
+  validation = await addMediaAssetErrors({ workspaceId, flow, validation });
   if (!validation.valid) {
     await flowsRepository.updateFlowById({
       workspaceId,

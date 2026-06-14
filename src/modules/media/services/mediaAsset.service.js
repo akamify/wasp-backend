@@ -9,6 +9,7 @@ function serializeMediaAsset(asset) {
   return {
     id: String(asset._id),
     originalName: asset.originalName,
+    displayName: asset.displayName || asset.originalName,
     mimeType: asset.mimeType,
     extension: asset.extension,
     sizeBytes: asset.sizeBytes,
@@ -19,7 +20,13 @@ function serializeMediaAsset(asset) {
   };
 }
 
-async function uploadMediaAsset({ workspaceId, uploadedBy, mediaType, file }) {
+async function uploadMediaAsset({
+  workspaceId,
+  uploadedBy,
+  mediaType,
+  displayName,
+  file,
+}) {
   if (!file) {
     throw new HttpError(400, "File is required", { code: "MEDIA_FILE_REQUIRED" });
   }
@@ -28,6 +35,7 @@ async function uploadMediaAsset({ workspaceId, uploadedBy, mediaType, file }) {
     mimeType: file.mimetype,
     originalName: file.originalname,
     sizeBytes: file.size,
+    buffer: file.buffer,
   });
   let uploaded;
   try {
@@ -53,6 +61,8 @@ async function uploadMediaAsset({ workspaceId, uploadedBy, mediaType, file }) {
     workspaceId,
     uploadedBy: uploadedBy || null,
     originalName: file.originalname,
+    displayName: String(displayName || file.originalname).trim(),
+    storageProvider: uploaded.storageProvider,
     storageKey: uploaded.storageKey,
     publicUrl: uploaded.publicUrl,
     mimeType: file.mimetype,
@@ -60,20 +70,75 @@ async function uploadMediaAsset({ workspaceId, uploadedBy, mediaType, file }) {
     sizeBytes: file.size,
     mediaType: validation.mediaType,
     checksum: uploaded.checksum,
+    checksumSha256: uploaded.checksum,
     status: "ready",
   });
-  return { success: true, asset: serializeMediaAsset(asset) };
+  return { ok: true, asset: serializeMediaAsset(asset) };
 }
 
-async function listMediaAssets({ workspaceId, mediaType }) {
-  const assets = await mediaAssetRepository.listMediaAssets({
+async function listMediaAssets({
+  workspaceId,
+  mediaType,
+  search,
+  page,
+  limit,
+}) {
+  const result = await mediaAssetRepository.listMediaAssets({
     workspaceId,
     mediaType,
+    search,
+    page,
+    limit,
   });
-  return { success: true, assets: assets.map(serializeMediaAsset) };
+  return {
+    ok: true,
+    items: result.items.map(serializeMediaAsset),
+    pagination: {
+      page,
+      limit,
+      total: result.total,
+      pages: Math.max(1, Math.ceil(result.total / limit)),
+    },
+  };
+}
+
+async function getMediaAsset({ workspaceId, mediaAssetId }) {
+  const asset = await mediaAssetRepository.getMediaAsset({
+    workspaceId,
+    mediaAssetId,
+  });
+  if (!asset) {
+    throw new HttpError(404, "Media asset not found", {
+      code: "MEDIA_ASSET_NOT_FOUND",
+    });
+  }
+  return { ok: true, asset: serializeMediaAsset(asset) };
+}
+
+async function updateMediaAsset({ workspaceId, mediaAssetId, displayName }) {
+  const asset = await mediaAssetRepository.updateMediaAssetDisplayName({
+    workspaceId,
+    mediaAssetId,
+    displayName: String(displayName || "").trim(),
+  });
+  if (!asset) {
+    throw new HttpError(404, "Media asset not found", {
+      code: "MEDIA_ASSET_NOT_FOUND",
+    });
+  }
+  return { ok: true, asset: serializeMediaAsset(asset) };
 }
 
 async function deleteMediaAsset({ workspaceId, mediaAssetId }) {
+  const used = await mediaAssetRepository.isMediaAssetUsedByPublishedFlow({
+    workspaceId,
+    mediaAssetId,
+  });
+  if (used) {
+    throw new HttpError(409, "Media asset is used by an active published flow", {
+      code: "MEDIA_ASSET_IN_USE",
+    });
+  }
   const asset = await mediaAssetRepository.softDeleteMediaAsset({
     workspaceId,
     mediaAssetId,
@@ -83,12 +148,14 @@ async function deleteMediaAsset({ workspaceId, mediaAssetId }) {
       code: "MEDIA_ASSET_NOT_FOUND",
     });
   }
-  return { success: true };
+  return { ok: true };
 }
 
 module.exports = {
   deleteMediaAsset,
+  getMediaAsset,
   listMediaAssets,
   serializeMediaAsset,
+  updateMediaAsset,
   uploadMediaAsset,
 };

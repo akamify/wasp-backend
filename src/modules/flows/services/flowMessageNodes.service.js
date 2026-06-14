@@ -244,7 +244,7 @@ async function resolveMediaSource({ workspaceId, contact, session, node }) {
   let resolvedUrl = "";
   let asset = null;
 
-  if (sourceType === "upload") {
+  if (sourceType === "upload" || sourceType === "library") {
     const mediaAssetId = plainText(config.mediaAssetId);
     if (!mediaAssetId) {
       throw new HttpError(400, "Media asset is required", {

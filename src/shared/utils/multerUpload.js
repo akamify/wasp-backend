@@ -8,7 +8,11 @@ function buildMemoryUpload({ maxFileSizeBytes, allowedMimeTypes }) {
     limits: { fileSize: maxFileSizeBytes },
     fileFilter(req, file, cb) {
       if (allowed.length > 0 && !allowed.includes(String(file?.mimetype || ""))) {
-        return cb(new HttpError(400, "Unsupported file type"));
+        return cb(
+          new HttpError(400, "Unsupported file type", {
+            code: "MEDIA_TYPE_NOT_SUPPORTED",
+          })
+        );
       }
       return cb(null, true);
     },

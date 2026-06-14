@@ -7,6 +7,39 @@ function extensionOf(name) {
   return path.extname(String(name || "")).toLowerCase();
 }
 
+function detectMediaMime(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) return "";
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (buffer.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) {
+    return "image/png";
+  }
+  if (buffer.subarray(0, 4).toString("ascii") === "%PDF") {
+    return "application/pdf";
+  }
+  if (buffer.subarray(0, 2).toString("ascii") === "MZ") {
+    return "application/x-msdownload";
+  }
+  if (buffer.subarray(0, 4).toString("ascii") === "OggS") {
+    return "audio/ogg";
+  }
+  if (buffer.subarray(0, 3).toString("ascii") === "ID3") {
+    return "audio/mpeg";
+  }
+  if (buffer.subarray(0, 5).toString("ascii") === "#!AMR") {
+    return "audio/amr";
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(4, 8).toString("ascii") === "ftyp"
+  ) {
+    const brand = buffer.subarray(8, 12).toString("ascii").toLowerCase();
+    return brand.startsWith("3g") ? "video/3gpp" : "video/mp4";
+  }
+  return "";
+}
+
 function mediaLimit(mediaType) {
   const type = String(mediaType || "").toLowerCase();
   const limit = META_MEDIA_LIMITS[type];
@@ -18,7 +51,13 @@ function mediaLimit(mediaType) {
   return { type, limit };
 }
 
-function validateMediaFile({ mediaType, mimeType, originalName, sizeBytes }) {
+function validateMediaFile({
+  mediaType,
+  mimeType,
+  originalName,
+  sizeBytes,
+  buffer,
+}) {
   const { type, limit } = mediaLimit(mediaType);
   const size = Number(sizeBytes || 0);
   if (!size || size < 1) {
@@ -31,12 +70,37 @@ function validateMediaFile({ mediaType, mimeType, originalName, sizeBytes }) {
     });
   }
   const mime = String(mimeType || "").toLowerCase();
+  const extension = extensionOf(originalName);
+  const detectedMime = detectMediaMime(buffer);
+  if (detectedMime === "application/x-msdownload") {
+    throw new HttpError(400, "Executable files are not allowed", {
+      code: "MEDIA_TYPE_NOT_SUPPORTED",
+    });
+  }
+  const m4aContainerMatch =
+    extension === ".m4a" &&
+    mime === "audio/mp4" &&
+    detectedMime === "video/mp4";
+  if (detectedMime && detectedMime !== mime && !m4aContainerMatch) {
+    throw new HttpError(400, "File content does not match its MIME type", {
+      code: "MEDIA_TYPE_NOT_SUPPORTED",
+    });
+  }
   if (!limit.allowedMimeTypes.includes(mime)) {
     throw new HttpError(400, "Media MIME type is not supported", {
       code: "MEDIA_TYPE_NOT_SUPPORTED",
     });
   }
-  const extension = extensionOf(originalName);
+  const baseName = path.basename(String(originalName || "")).toLowerCase();
+  if (
+    /\.(exe|com|bat|cmd|ps1|sh|js|mjs|cjs|php|jar|msi|scr)(\.|$)/i.test(
+      baseName
+    )
+  ) {
+    throw new HttpError(400, "Executable or script files are not allowed", {
+      code: "MEDIA_EXTENSION_NOT_SUPPORTED",
+    });
+  }
   if (!limit.allowedExtensions.includes(extension)) {
     throw new HttpError(400, "Media extension is not supported", {
       code: "MEDIA_EXTENSION_NOT_SUPPORTED",
@@ -112,6 +176,7 @@ function maskedUrlLog(value) {
 
 module.exports = {
   extensionOf,
+  detectMediaMime,
   maskedUrlLog,
   mediaLimit,
   validateMediaFile,

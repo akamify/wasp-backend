@@ -401,6 +401,10 @@ async function sendInteractiveListMessageForUser({
       },
     },
   });
+  const mediaPreview =
+    normalizedType === "document"
+      ? String(filename || "Document")
+      : normalizedType.charAt(0).toUpperCase() + normalizedType.slice(1);
 
   const conversation = await touchConversation({
     userId,
@@ -729,7 +733,7 @@ async function sendMediaMessageForUser({
     phoneNumberId: creds.phoneNumberId,
     phone: resolvedPhone,
     lastMessageAt: now,
-    lastMessagePreview: message.text || "",
+    lastMessagePreview: message.text || mediaPreview,
     incrementUnread: false,
   });
   await touchContactFromMessage({
@@ -738,7 +742,7 @@ async function sendMediaMessageForUser({
     phoneNumberId: creds.phoneNumberId,
     phone: resolvedPhone,
     direction: "outbound",
-    preview: message.text || "",
+    preview: message.text || mediaPreview,
     occurredAt: now,
   });
   if (conversation) {

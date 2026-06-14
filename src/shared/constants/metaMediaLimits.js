@@ -7,8 +7,8 @@ const META_MEDIA_LIMITS = Object.freeze({
   }),
   video: Object.freeze({
     maxBytes: 16 * 1024 * 1024,
-    allowedMimeTypes: Object.freeze(["video/mp4"]),
-    allowedExtensions: Object.freeze([".mp4"]),
+    allowedMimeTypes: Object.freeze(["video/mp4", "video/3gpp"]),
+    allowedExtensions: Object.freeze([".mp4", ".3gp"]),
   }),
   audio: Object.freeze({
     maxBytes: 16 * 1024 * 1024,
