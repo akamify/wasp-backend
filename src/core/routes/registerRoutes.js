@@ -54,6 +54,7 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/billing`, require("@modules/billing/routes/billing.routes"));
   app.use(`${basePath}/campaigns`, require("@core/routes/campaignRoutes"));
   app.use(`${basePath}/flows`, require("@modules/flows/routes/flows.routes"));
+  app.use(`${basePath}/preferences`, require("@modules/preferences/routes/preferences.routes"));
   app.use(`${basePath}/wallet`, require("@core/routes/walletRoutes"));
   app.use(`${basePath}/integrations`, require("@core/routes/integrationRoutes"));
   app.use(`${basePath}/integrations/whatsapp`, require("@core/routes/whatsappIntegrationRoutes"));
