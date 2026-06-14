@@ -34,8 +34,8 @@ const FlowRuntimeSettingsSchema = new mongoose.Schema(
     sessionTimeoutMinutes: {
       type: Number,
       min: 1,
-        max: 1200,
-        default: 5,
+      max: 600,
+      default: 5,
     },
     onSessionExpired: {
       action: {
@@ -54,6 +54,12 @@ const FlowRuntimeSettingsSchema = new mongoose.Schema(
       variables: { type: [String], default: [] },
     },
     allowKeywordRestartWhenWaiting: { type: Boolean, default: true },
+    maxInvalidReplies: { type: Number, min: 1, max: 10, default: 2 },
+    invalidReplyMessage: {
+      type: String,
+      trim: true,
+      default: "Please choose one of the available options.",
+    },
   },
   { _id: false }
 );

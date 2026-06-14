@@ -154,6 +154,16 @@ async function processInboundMessage(normalizedMessage) {
         normalizedMessage.listReply?.title ||
         "",
     });
+    flowLog("[FLOW_INBOUND_NORMALIZED]", {
+      workspaceId: String(workspaceId),
+      contactId: String(contact._id),
+      messageId: normalizedMessage.whatsappMessageId || null,
+      type: normalizedMessage.type || null,
+      text: normalizedMessage.text || "",
+      buttonReply: normalizedMessage.buttonReply || null,
+      listReply: normalizedMessage.listReply || null,
+      timestamp: normalizedMessage.receivedAt || null,
+    });
 
     const now = new Date();
     let automationResult = { status: "no_trigger_match" };
@@ -185,6 +195,16 @@ async function processInboundMessage(normalizedMessage) {
       }
 
       if (existingSession) {
+        flowLog("[FLOW_ACTIVE_SESSION_FOUND]", {
+          sessionId: String(existingSession._id),
+          status: existingSession.status,
+          currentNodeId: existingSession.currentNodeId || null,
+          waitingFor: existingSession.waitingFor || null,
+          lastPromptNodeId: existingSession.lastPromptNodeId || null,
+          lastPromptMessageStatus:
+            existingSession.lastPromptMessageStatus || null,
+          expiresAt: existingSession.expiresAt || null,
+        });
         const restartMatch = await findMatchingFlowVersion({
           workspaceId,
           inboundMessage: normalizedMessage,
@@ -244,6 +264,22 @@ async function processInboundMessage(normalizedMessage) {
           };
         }
       } else {
+        if (
+          ["button_reply", "list_reply"].includes(
+            String(normalizedMessage.type || "")
+          )
+        ) {
+          flowLog("[FLOW_STALE_REPLY_OR_WRONG_NODE]", {
+            workspaceId: String(workspaceId),
+            contactId: String(contact._id),
+            reason: "no_active_session",
+            incomingType: normalizedMessage.type,
+            incomingReplyId:
+              normalizedMessage.buttonReply?.id ||
+              normalizedMessage.listReply?.id ||
+              null,
+          });
+        }
         const match = await findMatchingFlowVersion({
           workspaceId,
           inboundMessage: normalizedMessage,

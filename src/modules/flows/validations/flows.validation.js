@@ -14,7 +14,7 @@ const triggerSchema = Joi.object({
   .optional();
 
 const runtimeSettingsSchema = Joi.object({
-  sessionTimeoutMinutes: Joi.number().integer().min(1).max(1200).required(),
+  sessionTimeoutMinutes: Joi.number().integer().min(1).max(600).required(),
   onSessionExpired: Joi.object({
     action: Joi.string().valid("none", "text", "template").optional(),
     textMessage: Joi.string().trim().max(4096).allow("").when("action", {
@@ -35,6 +35,8 @@ const runtimeSettingsSchema = Joi.object({
     variables: Joi.array().items(Joi.string().max(4096)).optional(),
   }).optional(),
   allowKeywordRestartWhenWaiting: Joi.boolean().optional(),
+  maxInvalidReplies: Joi.number().integer().min(1).max(10).optional(),
+  invalidReplyMessage: Joi.string().trim().max(1000).allow("").optional(),
 }).optional();
 
 const createFlowSchema = Joi.object({

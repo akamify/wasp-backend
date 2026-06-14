@@ -24,6 +24,7 @@ const {
   executeApiRequestNode,
 } = require("@modules/flows/services/flowApiRequest.service");
 const {
+  normalizeRuntimeSettings,
   sessionExpiresAt,
 } = require("@modules/flows/constants/flowRuntimeSettings");
 
@@ -65,6 +66,83 @@ function logSessionState(session) {
     waitingFor: session?.waitingFor || null,
     fallbackCount: Number(session?.fallbackCount || 0),
   });
+}
+
+function normalizeHandleText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function availableEdgesForNode(version, nodeId) {
+  return (version.edges || [])
+    .filter((edge) => String(edge?.source || "") === String(nodeId || ""))
+    .map((edge) => ({
+      id: edge.id || null,
+      source: edge.source,
+      sourceHandle: edge.sourceHandle || "default",
+      target: edge.target,
+    }));
+}
+
+function logEdgeScan({ version, sourceNodeId, sourceHandle }) {
+  const availableEdges = availableEdgesForNode(version, sourceNodeId);
+  flowLog("[FLOW_EDGE_SCAN]", {
+    sourceNodeId,
+    sourceHandle,
+    availableEdges,
+  });
+  return availableEdges;
+}
+
+function logEdgeResult({ edge, sourceNodeId, sourceHandle, availableEdges }) {
+  if (edge) {
+    flowLog("[FLOW_EDGE_MATCH]", {
+      sourceNodeId,
+      sourceHandle,
+      targetNodeId: edge.target,
+    });
+    return;
+  }
+  flowLog("[FLOW_EDGE_MISSING]", {
+    sourceNodeId,
+    sourceHandle,
+    availableHandles: availableEdges
+      .map((item) => item.sourceHandle)
+      .filter(Boolean),
+    availableEdges,
+  });
+}
+
+function buttonHandleFromInbound(node, inboundMessage) {
+  const explicitId = inboundMessage?.buttonReply?.id;
+  if (explicitId) return explicitId;
+  const incomingText = normalizeHandleText(
+    inboundMessage?.buttonReply?.title || inboundMessage?.text
+  );
+  if (!incomingText) return "";
+  const button = (node?.config?.buttons || []).find(
+    (item) =>
+      normalizeHandleText(item?.id) === incomingText ||
+      normalizeHandleText(item?.title) === incomingText
+  );
+  return button?.id || "";
+}
+
+function listHandleFromInbound(node, inboundMessage) {
+  const explicitId = inboundMessage?.listReply?.id;
+  if (explicitId) return explicitId;
+  const incomingText = normalizeHandleText(
+    inboundMessage?.listReply?.title || inboundMessage?.text
+  );
+  if (!incomingText) return "";
+  for (const section of node?.config?.sections || []) {
+    const row = (section?.rows || []).find(
+      (item) =>
+        normalizeHandleText(item?.id) === incomingText ||
+        normalizeHandleText(item?.title) === incomingText
+    );
+    if (row?.id) return row.id;
+  }
+  return "";
 }
 
 async function failPromptSend({ workspaceId, session, node, error }) {
@@ -248,6 +326,7 @@ async function executeSession({
     const scope = buildScope(session, contact, inboundMessage, {
       flow,
       workspace,
+      node,
     });
     if (node.type === "start") {
       const edge = defaultEdge(version, node.id);
@@ -338,6 +417,15 @@ async function executeSession({
           lastPromptNodeId: node.id,
           lastPromptMessageStatus: "sent",
           lastPromptFailureReason: null,
+          context: {
+            ...(session.context || {}),
+            lastPrompt: {
+              type: "text",
+              nodeId: node.id,
+              status: "sent",
+              sentAt: promptSentAt,
+            },
+          },
         },
       });
       return { status: "waiting", session };
@@ -379,6 +467,15 @@ async function executeSession({
           lastPromptNodeId: node.id,
           lastPromptMessageStatus: "sent",
           lastPromptFailureReason: null,
+          context: {
+            ...(session.context || {}),
+            lastPrompt: {
+              type: "list_reply",
+              nodeId: node.id,
+              status: "sent",
+              sentAt: promptSentAt,
+            },
+          },
         },
       });
       return { status: "waiting", session };
@@ -624,12 +721,14 @@ async function handleFallback({
   contact,
   inboundMessage = null,
 }) {
+  const settings = normalizeRuntimeSettings(version.runtimeSettings);
   const updated = await flowSessionRepository.incrementFallbackCount({
     workspaceId,
     sessionId: session._id,
     now: new Date(),
   });
-  if (updated.fallbackCount >= MAX_FALLBACKS) {
+  const maxInvalidReplies = settings.maxInvalidReplies || MAX_FALLBACKS;
+  if (updated.fallbackCount >= maxInvalidReplies) {
     if (version.handoverNodeId && nodeById(version, version.handoverNodeId)) {
       const moved = await moveSession({
         workspaceId,
@@ -650,7 +749,7 @@ async function handleFallback({
   await sendText({
     workspaceId,
     contact,
-    text: GENERIC_RETRY_MESSAGE,
+    text: settings.invalidReplyMessage || GENERIC_RETRY_MESSAGE,
     businessInitiated: false,
     inboundMessage,
   });
@@ -682,41 +781,74 @@ async function continueSession({
   const waiting = session.waitingFor || {};
   let edge = null;
   let context = { ...(session.context || {}) };
+  flowLog("[FLOW_WAITING_FOR_MATCH]", {
+    waitingForType: waiting.type || null,
+    expectedNodeId: waiting.nodeId || null,
+    incomingType: inboundMessage?.type || null,
+    incomingReplyId:
+      inboundMessage?.buttonReply?.id || inboundMessage?.listReply?.id || null,
+    incomingReplyTitle:
+      inboundMessage?.buttonReply?.title ||
+      inboundMessage?.listReply?.title ||
+      null,
+  });
   if (waiting.type === "button_reply") {
-    const buttonId = inboundMessage?.buttonReply?.id;
+    const waitingNode = nodeById(version, waiting.nodeId);
+    const buttonId = buttonHandleFromInbound(waitingNode, inboundMessage);
     if (buttonId) {
       flowLog("[FLOW_BUTTON_REPLY_RECEIVED]", {
         sessionId: String(session._id),
+        currentNodeId: session.currentNodeId,
+        waitingNodeId: waiting.nodeId,
         buttonId,
-        buttonTitle: inboundMessage?.buttonReply?.title || "",
+        buttonTitle:
+          inboundMessage?.buttonReply?.title || inboundMessage?.text || "",
       });
     }
+    const availableEdges = logEdgeScan({
+      version,
+      sourceNodeId: waiting.nodeId,
+      sourceHandle: buttonId || null,
+    });
     edge = edgeForHandle(
       version,
       waiting.nodeId,
       buttonId
     );
-    if (edge) {
-      flowLog("[FLOW_BUTTON_EDGE_MATCH]", {
-        sourceNodeId: waiting.nodeId,
-        sourceHandle: buttonId,
-        targetNodeId: edge.target,
-      });
-    } else if (buttonId) {
-      flowLog("[FLOW_BUTTON_EDGE_MISSING]", {
-        buttonId,
-        availableHandles: (version.edges || [])
-          .filter((item) => String(item?.source) === String(waiting.nodeId))
-          .map((item) => item?.sourceHandle)
-          .filter(Boolean),
+    logEdgeResult({
+      edge,
+      sourceNodeId: waiting.nodeId,
+      sourceHandle: buttonId || null,
+      availableEdges,
+    });
+  } else if (waiting.type === "list_reply") {
+    const waitingNode = nodeById(version, waiting.nodeId);
+    const rowId = listHandleFromInbound(waitingNode, inboundMessage);
+    if (rowId) {
+      flowLog("[FLOW_LIST_REPLY_RECEIVED]", {
+        sessionId: String(session._id),
+        currentNodeId: session.currentNodeId,
+        waitingNodeId: waiting.nodeId,
+        rowId,
+        rowTitle: inboundMessage?.listReply?.title || inboundMessage?.text || "",
       });
     }
-  } else if (waiting.type === "list_reply") {
+    const availableEdges = logEdgeScan({
+      version,
+      sourceNodeId: waiting.nodeId,
+      sourceHandle: rowId || null,
+    });
     edge = edgeForHandle(
       version,
       waiting.nodeId,
-      inboundMessage?.listReply?.id
+      rowId
     );
+    logEdgeResult({
+      edge,
+      sourceNodeId: waiting.nodeId,
+      sourceHandle: rowId || null,
+      availableEdges,
+    });
   } else if (
     ["text", "number", "email", "phone"].includes(waiting.type)
   ) {
@@ -733,7 +865,7 @@ async function continueSession({
   }
 
   if (!edge) {
-    if (waiting.type === "button_reply") {
+    if (["button_reply", "list_reply"].includes(waiting.type)) {
       const waitingNode = nodeById(version, waiting.nodeId);
       const lastPrompt = session.context?.lastPrompt;
       if (
@@ -744,15 +876,15 @@ async function continueSession({
         return failPromptSend({
           workspaceId,
           session,
-          node: waitingNode || { id: waiting.nodeId, type: "text_buttons" },
-          error: new Error("Interactive button prompt was not successfully sent"),
+          node: waitingNode || { id: waiting.nodeId, type: waiting.type },
+          error: new Error("Interactive prompt was not successfully sent"),
         });
       }
       const incomingText = String(inboundMessage?.text || "").trim().toLowerCase();
       const restartsFlow = (version.trigger?.keywords || []).some(
         (keyword) => String(keyword || "").trim().toLowerCase() === incomingText
       );
-      if (incomingText && restartsFlow && waitingNode) {
+      if (incomingText && restartsFlow && waiting.type === "button_reply" && waitingNode) {
         return sendButtonsAndWait({
           workspaceId,
           session,
@@ -761,12 +893,23 @@ async function continueSession({
           scope: buildScope(session, contact, inboundMessage, {
             flow,
             workspace,
+            node: waitingNode,
           }),
           version,
           businessInitiated: false,
           inboundMessage,
         });
       }
+      flowLog("[FLOW_STALE_REPLY_OR_WRONG_NODE]", {
+        sessionId: String(session._id),
+        currentNodeId: session.currentNodeId,
+        waitingNodeId: waiting.nodeId,
+        waitingForType: waiting.type,
+        incomingType: inboundMessage?.type || null,
+        incomingText: inboundMessage?.text || "",
+        incomingReplyId:
+          inboundMessage?.buttonReply?.id || inboundMessage?.listReply?.id || null,
+      });
     }
     return handleFallback({ workspaceId, session, version, contact, inboundMessage });
   }

@@ -46,11 +46,11 @@ function addIssue(target, code, message, options = {}) {
 
 function validateRuntimeSettings(runtimeSettings, errors) {
   const timeout = Number(runtimeSettings?.sessionTimeoutMinutes);
-  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 1200) {
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 600) {
     addIssue(
       errors,
       "SESSION_TIMEOUT_INVALID",
-      "Session timeout must be between 1 and 1200 minutes",
+      "Session timeout must be between 1 and 600 minutes",
       { field: "runtimeSettings.sessionTimeoutMinutes" }
     );
   }
@@ -181,6 +181,14 @@ function validateTextButtonsNode(node, outgoingEdges, fallbackNodeId, errors) {
       { nodeId: node.id, field: "config.buttons" }
     );
     return;
+  }
+  if (config.buttons.length > 3) {
+    addIssue(
+      errors,
+      "TEXT_BUTTONS_MAX_EXCEEDED",
+      "WhatsApp reply button nodes can have at most 3 buttons",
+      { nodeId: node.id, field: "config.buttons" }
+    );
   }
 
   const buttonIds = new Set();

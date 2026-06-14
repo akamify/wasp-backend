@@ -20,9 +20,15 @@ function getPath(source, path) {
     .reduce((value, key) => value?.[key], source);
 }
 
-function logMissingVariable(path) {
+function logMissingVariable(path, scope) {
+  const meta = scope?.__meta || {};
   process.stdout.write(
-    `[FLOW_VARIABLE_MISSING] ${JSON.stringify({ path: String(path || "") })}\n`
+    `[FLOW_VARIABLE_MISSING] ${JSON.stringify({
+      variable: String(path || ""),
+      nodeId: meta.nodeId || null,
+      flowId: meta.flowId || null,
+      sessionId: meta.sessionId || null,
+    })}\n`
   );
 }
 
@@ -31,12 +37,12 @@ function resolveValue(value, scope) {
   const exact = value.match(/^\s*\{\{\s*([^}]+)\s*\}\}\s*$/);
   if (exact) {
     const resolved = getPath(scope, exact[1].trim());
-    if (resolved == null) logMissingVariable(exact[1].trim());
+    if (resolved == null) logMissingVariable(exact[1].trim(), scope);
     return resolved == null ? "" : resolved;
   }
   return value.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, path) => {
     const resolved = getPath(scope, path.trim());
-    if (resolved == null) logMissingVariable(path.trim());
+    if (resolved == null) logMissingVariable(path.trim(), scope);
     return resolved == null ? "" : String(resolved);
   });
 }
@@ -112,6 +118,7 @@ function buildScope(session, contact, inboundMessage, dependencies = {}) {
   const attributes = asPlainAttributes(contact.attributes);
   return {
     context: session.context || {},
+    static: dependencies.static || dependencies.flow?.staticValues || {},
     attributes,
     contact: {
       id: String(contact._id),
@@ -137,6 +144,11 @@ function buildScope(session, contact, inboundMessage, dependencies = {}) {
       text: inboundMessage?.text || "",
       buttonReply: inboundMessage?.buttonReply || null,
       listReply: inboundMessage?.listReply || null,
+    },
+    __meta: {
+      sessionId: String(session._id || ""),
+      flowId: String(dependencies.flow?._id || session.flowId || ""),
+      nodeId: dependencies.node?.id || null,
     },
   };
 }

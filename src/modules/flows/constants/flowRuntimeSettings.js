@@ -9,6 +9,8 @@ const DEFAULT_FLOW_RUNTIME_SETTINGS = Object.freeze({
     variables: Object.freeze([]),
   }),
   allowKeywordRestartWhenWaiting: true,
+  maxInvalidReplies: 2,
+  invalidReplyMessage: "Please choose one of the available options.",
 });
 
 function normalizeRuntimeSettings(value) {
@@ -19,9 +21,10 @@ function normalizeRuntimeSettings(value) {
       ? settings.onSessionExpired
       : {};
   const timeout = Number(settings.sessionTimeoutMinutes);
+  const maxInvalidReplies = Number(settings.maxInvalidReplies);
   return {
     sessionTimeoutMinutes:
-      Number.isFinite(timeout) && timeout >= 1 && timeout <= 1200
+      Number.isFinite(timeout) && timeout >= 1 && timeout <= 600
         ? Math.floor(timeout)
         : DEFAULT_FLOW_RUNTIME_SETTINGS.sessionTimeoutMinutes,
     onSessionExpired: {
@@ -43,6 +46,16 @@ function normalizeRuntimeSettings(value) {
     },
     allowKeywordRestartWhenWaiting:
       settings.allowKeywordRestartWhenWaiting !== false,
+    maxInvalidReplies:
+      Number.isInteger(maxInvalidReplies) &&
+      maxInvalidReplies >= 1 &&
+      maxInvalidReplies <= 10
+        ? maxInvalidReplies
+        : DEFAULT_FLOW_RUNTIME_SETTINGS.maxInvalidReplies,
+    invalidReplyMessage: String(
+      settings.invalidReplyMessage ||
+        DEFAULT_FLOW_RUNTIME_SETTINGS.invalidReplyMessage
+    ).trim(),
   };
 }
 
