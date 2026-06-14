@@ -40,11 +40,17 @@ function flowLog(label, data) {
 function sendFailureData(error) {
   return {
     reason: String(error?.outboundFailure?.message || error?.message || "WhatsApp send failed"),
+    stack: String(error?.stack || "")
+      .split("\n")
+      .slice(0, 8)
+      .map((line) => line.trim())
+      .filter(Boolean),
     metaError: error?.outboundFailure?.meta || error?.metaDebug?.meta || null,
     walletError:
-      Number(error?.statusCode || error?.status) === 402
+      error?.outboundFailure?.walletError ||
+      (Number(error?.statusCode || error?.status) === 402
         ? String(error?.message || "Insufficient wallet balance")
-        : null,
+        : null),
     outboundMessageId: error?.outboundMessageId
       ? String(error.outboundMessageId)
       : null,

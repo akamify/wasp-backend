@@ -63,6 +63,23 @@ function outboundFailure(error) {
   };
 }
 
+function expectedOutboundFailure(error) {
+  const failure = outboundFailure(error);
+  const message = String(error?.message || "").toLowerCase();
+  if (Number(error?.statusCode || error?.status) === 402) {
+    return {
+      ...failure,
+      reason: "insufficient_wallet_balance",
+      walletError: error?.message || "Insufficient wallet balance",
+    };
+  }
+  if (message.includes("waba") || message.includes("credential")) {
+    return { ...failure, reason: "waba_not_connected" };
+  }
+  if (failure.meta) return { ...failure, reason: "meta_api_error" };
+  return { ...failure, reason: "send_failed" };
+}
+
 async function sendTemplateMessageForUser({
   userId,
   campaignId,
@@ -420,6 +437,7 @@ async function sendInteractiveListMessageForUser({
 
 async function sendInteractiveButtonMessageForUser({
   userId,
+  contactId,
   to,
   text,
   buttons,
@@ -452,6 +470,7 @@ async function sendInteractiveButtonMessageForUser({
     workspaceId: userId,
     wabaId: creds.wabaId,
     phoneNumberId: creds.phoneNumberId,
+    ...(contactId ? { contactId } : {}),
     phone: to,
     direction: "outbound",
     source,
@@ -551,6 +570,84 @@ async function sendInteractiveButtonMessageForUser({
       throw normalizedError;
     }
     throw error;
+  }
+}
+
+async function sendInteractiveButtonsMessage({
+  workspaceId,
+  contactId,
+  conversationId,
+  to,
+  text,
+  buttons,
+  source = "automation",
+  flowSessionId,
+  flowId,
+  nodeId,
+  triggeredByMessageId,
+  businessInitiated = false,
+}) {
+  void conversationId;
+  void flowSessionId;
+  void flowId;
+  void nodeId;
+  void businessInitiated;
+  const bodyText = String(text || "").trim();
+  const normalizedButtons = (buttons || [])
+    .slice(0, 3)
+    .map((button) => ({
+      id: String(button?.id || "").trim(),
+      title: String(button?.title || "").trim(),
+    }));
+  const ids = normalizedButtons.map((button) => button.id);
+  const duplicateIds = ids.filter((id, index) => ids.indexOf(id) !== index);
+  if (!workspaceId || !to || !bodyText) {
+    return { success: false, reason: "invalid_interactive_button_input" };
+  }
+  if (
+    normalizedButtons.length === 0 ||
+    normalizedButtons.some((button) => !button.id || !button.title) ||
+    duplicateIds.length
+  ) {
+    return {
+      success: false,
+      reason: "invalid_interactive_buttons",
+    };
+  }
+
+  try {
+    const result = await sendInteractiveButtonMessageForUser({
+      userId: workspaceId,
+      contactId,
+      to,
+      text: bodyText,
+      buttons: normalizedButtons,
+      sentBy: { kind: "system" },
+      source,
+      senderType: source === "automation" ? "automation" : "business",
+      triggeredByMessageId,
+    });
+    return {
+      success: true,
+      providerMessageId: result.message?.whatsappMessageId || null,
+      outboundMessageId: result.message?._id ? String(result.message._id) : null,
+      message: result.message,
+      apiResponse: result.apiResponse,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      reason: expectedOutboundFailure(error).reason,
+      metaError: error?.outboundFailure?.meta || error?.metaDebug?.meta || null,
+      walletError:
+        Number(error?.statusCode || error?.status) === 402
+          ? String(error?.message || "Insufficient wallet balance")
+          : null,
+      outboundMessageId: error?.outboundMessageId
+        ? String(error.outboundMessageId)
+        : null,
+      error,
+    };
   }
 }
 
@@ -681,6 +778,7 @@ module.exports = {
   sendTemplateMessageForUser,
   sendTextMessageForUser,
   sendInteractiveButtonMessageForUser,
+  sendInteractiveButtonsMessage,
   sendInteractiveListMessageForUser,
   sendMediaMessageForUser,
 };

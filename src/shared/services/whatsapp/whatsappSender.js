@@ -712,9 +712,9 @@ async function sendInteractiveButtonMessage({
   };
 
   process.stdout.write(
-    `[WHATSAPP_INTERACTIVE_BUTTON_PAYLOAD] ${JSON.stringify({
+    `[WHATSAPP_INTERACTIVE_BUTTON_SEND] ${JSON.stringify({
       to,
-      bodyText: text,
+      bodyPreview: String(text || "").slice(0, 120),
       buttonsCount: buttons.length,
       buttonIds: buttons.map((button) => button.id),
       buttonTitles: buttons.map((button) => button.title),

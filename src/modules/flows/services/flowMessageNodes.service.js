@@ -1,6 +1,6 @@
 const { HttpError } = require("@shared/utils/httpError");
 const {
-  sendInteractiveButtonMessageForUser,
+  sendInteractiveButtonsMessage,
   sendInteractiveListMessageForUser,
   sendMediaMessageForUser,
   sendTemplateMessageForUser,
@@ -31,10 +31,21 @@ function normalizeListSections(sections, scope) {
 }
 
 function normalizeReplyButtons(buttons, scope) {
-  return (buttons || []).map((button) => ({
+  const normalized = (buttons || []).slice(0, 3).map((button) => ({
     id: String(button?.id || "").trim(),
     title: String(resolveVariables(button?.title || "", scope)).trim(),
   }));
+  const seen = new Set();
+  for (const button of normalized) {
+    if (!button.id || !button.title) {
+      throw new HttpError(400, "Reply button id and title are required");
+    }
+    if (seen.has(button.id)) {
+      throw new HttpError(400, "Reply button ids must be unique");
+    }
+    seen.add(button.id);
+  }
+  return normalized;
 }
 
 async function sendTextButtonsNode({
@@ -51,16 +62,28 @@ async function sendTextButtonsNode({
     sendType: "interactive_buttons",
     businessInitiated,
   });
-  return sendInteractiveButtonMessageForUser({
-    userId: workspaceId,
+  const result = await sendInteractiveButtonsMessage({
+    workspaceId,
+    contactId: contact._id,
     to: contact.phone,
     text: String(resolveVariables(config.text, scope)).trim(),
     buttons: normalizeReplyButtons(config.buttons, scope),
-    sentBy: { kind: "system" },
     source: "automation",
-    senderType: "automation",
+    nodeId: node.id,
     triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
+    businessInitiated,
   });
+  if (!result.success) {
+    const error = new Error(result.reason || "Interactive button send failed");
+    error.outboundFailure = {
+      message: result.reason || "Interactive button send failed",
+      meta: result.metaError || null,
+      walletError: result.walletError || null,
+    };
+    error.outboundMessageId = result.outboundMessageId || null;
+    throw error;
+  }
+  return result;
 }
 
 function resolveHttpUrl(value, scope) {

@@ -96,7 +96,7 @@ const MessageSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-MessageSchema.pre("validate", function normalizeMessageTimeline(next) {
+MessageSchema.pre("validate", function normalizeMessageTimeline() {
   const inbound = this.direction === "inbound";
   this.receivedAt =
     this.receivedAt ||
@@ -129,7 +129,6 @@ MessageSchema.pre("validate", function normalizeMessageTimeline(next) {
           : this.sentBy?.kind === "api"
             ? "api"
             : "manual");
-  next();
 });
 
 // Only enforce uniqueness when Meta message ID is actually present.
