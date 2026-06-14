@@ -4,6 +4,9 @@ const VALID_TRIGGER_TYPES = new Set([
   "ctwa",
   "manual",
 ]);
+const {
+  normalizeRuntimeSettings,
+} = require("@modules/flows/constants/flowRuntimeSettings");
 const VALID_MATCH_MODES = new Set(["exact", "contains", "regex"]);
 const VALID_NODE_TYPES = new Set([
   "start",
@@ -39,6 +42,42 @@ function addIssue(target, code, message, options = {}) {
     ...(options.nodeId ? { nodeId: options.nodeId } : {}),
     ...(options.field ? { field: options.field } : {}),
   });
+}
+
+function validateRuntimeSettings(runtimeSettings, errors) {
+  const timeout = Number(runtimeSettings?.sessionTimeoutMinutes);
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 1200) {
+    addIssue(
+      errors,
+      "SESSION_TIMEOUT_INVALID",
+      "Session timeout must be between 1 and 1200 minutes",
+      { field: "runtimeSettings.sessionTimeoutMinutes" }
+    );
+  }
+  const expiry = runtimeSettings?.onSessionExpired || {};
+  if (expiry.action === "text" && !isNonEmptyString(expiry.textMessage)) {
+    addIssue(errors, "EXPIRY_TEXT_REQUIRED", "Expiry text message is required", {
+      field: "runtimeSettings.onSessionExpired.textMessage",
+    });
+  }
+  if (expiry.action === "template") {
+    if (!isNonEmptyString(expiry.templateName)) {
+      addIssue(
+        errors,
+        "EXPIRY_TEMPLATE_REQUIRED",
+        "Expiry template name is required",
+        { field: "runtimeSettings.onSessionExpired.templateName" }
+      );
+    }
+    if (!isNonEmptyString(expiry.languageCode)) {
+      addIssue(
+        errors,
+        "EXPIRY_TEMPLATE_LANGUAGE_REQUIRED",
+        "Expiry template language code is required",
+        { field: "runtimeSettings.onSessionExpired.languageCode" }
+      );
+    }
+  }
 }
 
 function validateRequiredString({
@@ -547,6 +586,7 @@ function validateFlowDraft(flow) {
   }
 
   validateTrigger(flow?.trigger, errors);
+  validateRuntimeSettings(normalizeRuntimeSettings(flow?.runtimeSettings), errors);
 
   const draft = flow?.draft || {};
   if (!Array.isArray(draft.nodes)) {

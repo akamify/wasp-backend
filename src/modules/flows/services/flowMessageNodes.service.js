@@ -43,6 +43,7 @@ async function sendTextButtonsNode({
   node,
   scope,
   businessInitiated = false,
+  inboundMessage = null,
 }) {
   const config = node.config || {};
   assertFreeformSendAllowed({
@@ -56,6 +57,9 @@ async function sendTextButtonsNode({
     text: String(resolveVariables(config.text, scope)).trim(),
     buttons: normalizeReplyButtons(config.buttons, scope),
     sentBy: { kind: "system" },
+    source: "automation",
+    senderType: "automation",
+    triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
   });
 }
 
@@ -79,6 +83,7 @@ async function sendListNode({
   node,
   scope,
   businessInitiated = false,
+  inboundMessage = null,
 }) {
   const config = node.config || {};
   assertFreeformSendAllowed({
@@ -93,6 +98,9 @@ async function sendListNode({
     buttonText: String(resolveVariables(config.buttonText, scope)).trim(),
     sections: normalizeListSections(config.sections, scope),
     sentBy: { kind: "system" },
+    source: "automation",
+    senderType: "automation",
+    triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
   });
 }
 
@@ -102,6 +110,7 @@ async function sendMediaNode({
   node,
   scope,
   businessInitiated = false,
+  inboundMessage = null,
 }) {
   const config = node.config || {};
   assertFreeformSendAllowed({
@@ -117,10 +126,19 @@ async function sendMediaNode({
     caption: String(resolveVariables(config.caption || "", scope)).trim(),
     filename: String(resolveVariables(config.filename || "", scope)).trim(),
     sentBy: { kind: "system" },
+    source: "automation",
+    senderType: "automation",
+    triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
   });
 }
 
-async function sendTemplateNode({ workspaceId, contact, node, scope }) {
+async function sendTemplateNode({
+  workspaceId,
+  contact,
+  node,
+  scope,
+  inboundMessage = null,
+}) {
   const config = node.config || {};
   const templateName = String(config.templateName || "").trim();
   const languageCode = String(config.languageCode || "").trim();
@@ -148,6 +166,9 @@ async function sendTemplateNode({ workspaceId, contact, node, scope }) {
     languageCode,
     variables,
     sentBy: { kind: "system" },
+    source: "automation",
+    senderType: "automation",
+    triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
   });
 }
 

@@ -211,8 +211,11 @@ async function processInboundMessage(normalizedMessage) {
             now,
           });
           flowLog("[FLOW_KEYWORD_RESTART]", {
+            workspaceId: String(workspaceId),
+            contactId: String(contact._id),
             oldSessionId,
             newSessionId: String(session._id),
+            flowId: String(restartMatch.flow._id),
             keyword: normalizedMessage.text || "",
           });
           automationResult = {

@@ -6,6 +6,7 @@ const { Conversation } = require("@infra/database/Conversation");
 const { Template } = require("@infra/database/Template");
 const { Flow } = require("@infra/database/Flow");
 const { Message } = require("@infra/database/Message");
+const { Workspace } = require("@infra/database/Workspace");
 
 async function findContactById({ workspaceId, contactId }) {
   return Contact.findOne({ _id: contactId, workspaceId });
@@ -212,6 +213,10 @@ async function findFlowById({ workspaceId, flowId }) {
   return Flow.findOne({ _id: flowId, workspaceId }).select("_id name");
 }
 
+async function findWorkspaceById({ workspaceId }) {
+  return Workspace.findOne({ _id: workspaceId }).select("_id name businessName");
+}
+
 async function findConversationInboundState({ workspaceId, wabaId, phone }) {
   return Conversation.findOne({ workspaceId, wabaId, phone })
     .select("lastInboundAt lastCustomerMessageAt")
@@ -232,9 +237,12 @@ async function createFailedExpiryMessage({
     contactId: contact._id,
     phone: contact.phone,
     direction: "outbound",
+    source: "automation",
+    senderType: "automation",
     type: "template",
     status: "failed",
     statusTimestamps: { failedAt: new Date() },
+    sortAt: new Date(),
     sentBy: { kind: "system" },
     text: "",
     payload: {
@@ -274,6 +282,7 @@ module.exports = {
   transitionSessionToExpired,
   findTimedOutActiveSessions,
   findFlowById,
+  findWorkspaceById,
   findConversationInboundState,
   createFailedExpiryMessage,
   deleteSession,

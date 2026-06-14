@@ -108,6 +108,7 @@ async function sendButtonsAndWait({
   scope,
   version,
   businessInitiated = false,
+  inboundMessage = null,
 }) {
   flowLog("[FLOW_VERSION_NODE_CONFIG]", {
     flowVersionId: String(session.flowVersionId),
@@ -126,6 +127,7 @@ async function sendButtonsAndWait({
       node,
       scope,
       businessInitiated,
+      inboundMessage,
     });
     const sentAt = new Date();
     const waitingSession = await moveSession({
@@ -138,7 +140,10 @@ async function sendButtonsAndWait({
           attributeKey: null,
           nodeId: node.id,
         },
-        expiresAt: sessionExpiresAt(version.runtimeSettings, sentAt),
+        expiresAt: sessionExpiresAt(version.runtimeSettings, sentAt, {
+          lastInboundAt:
+            inboundMessage?.receivedAt || contact.lastInboundAt || null,
+        }),
         lastPromptSentAt: sentAt,
         lastPromptNodeId: node.id,
         lastPromptMessageStatus: "sent",
@@ -189,7 +194,7 @@ async function executeSession({
     return { status: session?.status || "session_not_active", session };
   }
 
-  const [version, contact] = await Promise.all([
+  const [version, contact, flow, workspace] = await Promise.all([
     flowSessionRepository.findFlowVersionById({
       workspaceId,
       flowVersionId: session.flowVersionId,
@@ -198,6 +203,11 @@ async function executeSession({
       workspaceId,
       contactId: session.contactId,
     }),
+    flowSessionRepository.findFlowById({
+      workspaceId,
+      flowId: session.flowId,
+    }),
+    flowSessionRepository.findWorkspaceById({ workspaceId }),
   ]);
   if (!version || !contact) {
     session = await moveSession({
@@ -229,7 +239,10 @@ async function executeSession({
       return { status: "failed", session };
     }
 
-    const scope = buildScope(session, contact, inboundMessage);
+    const scope = buildScope(session, contact, inboundMessage, {
+      flow,
+      workspace,
+    });
     if (node.type === "start") {
       const edge = defaultEdge(version, node.id);
       if (!edge) {
@@ -238,6 +251,7 @@ async function executeSession({
           session,
           contact,
           businessInitiated,
+          inboundMessage,
         });
       }
       session = await moveSession({
@@ -255,6 +269,7 @@ async function executeSession({
           contact,
           text: resolveVariables(node.config?.text, scope),
           businessInitiated,
+          inboundMessage,
         });
       } catch (error) {
         return failPromptSend({ workspaceId, session, node, error });
@@ -278,6 +293,7 @@ async function executeSession({
         scope,
         version,
         businessInitiated,
+        inboundMessage,
       });
     }
 
@@ -289,6 +305,7 @@ async function executeSession({
           contact,
           text: resolveVariables(node.config?.question, scope),
           businessInitiated,
+          inboundMessage,
         });
       } catch (error) {
         return failPromptSend({ workspaceId, session, node, error });
@@ -305,7 +322,11 @@ async function executeSession({
           },
           expiresAt: sessionExpiresAt(
             version.runtimeSettings,
-            promptSentAt
+            promptSentAt,
+            {
+              lastInboundAt:
+                inboundMessage?.receivedAt || contact.lastInboundAt || null,
+            }
           ),
           lastPromptSentAt: promptSentAt,
           lastPromptNodeId: node.id,
@@ -325,6 +346,7 @@ async function executeSession({
           node,
           scope,
           businessInitiated,
+          inboundMessage,
         });
       } catch (error) {
         return failPromptSend({ workspaceId, session, node, error });
@@ -341,7 +363,11 @@ async function executeSession({
           },
           expiresAt: sessionExpiresAt(
             version.runtimeSettings,
-            promptSentAt
+            promptSentAt,
+            {
+              lastInboundAt:
+                inboundMessage?.receivedAt || contact.lastInboundAt || null,
+            }
           ),
           lastPromptSentAt: promptSentAt,
           lastPromptNodeId: node.id,
@@ -360,6 +386,7 @@ async function executeSession({
           node,
           scope,
           businessInitiated,
+          inboundMessage,
         });
       } catch (error) {
         return failPromptSend({ workspaceId, session, node, error });
@@ -378,7 +405,13 @@ async function executeSession({
 
     if (node.type === "template") {
       try {
-        await sendTemplateNode({ workspaceId, contact, node, scope });
+        await sendTemplateNode({
+          workspaceId,
+          contact,
+          node,
+          scope,
+          inboundMessage,
+        });
       } catch (error) {
         return failPromptSend({ workspaceId, session, node, error });
       }
@@ -493,6 +526,7 @@ async function executeSession({
             contact,
             text: endMessage,
             businessInitiated,
+            inboundMessage,
           });
         } catch (error) {
           return failPromptSend({ workspaceId, session, node, error });
@@ -544,12 +578,14 @@ async function failSession({
   session,
   contact,
   businessInitiated = false,
+  inboundMessage = null,
 }) {
   await sendText({
     workspaceId,
     contact,
     text: GENERIC_END_MESSAGE,
     businessInitiated,
+    inboundMessage,
   }).catch(() => {});
   const failed = await moveSession({
     workspaceId,
@@ -580,6 +616,7 @@ async function handleFallback({
   session,
   version,
   contact,
+  inboundMessage = null,
 }) {
   const updated = await flowSessionRepository.incrementFallbackCount({
     workspaceId,
@@ -602,13 +639,14 @@ async function handleFallback({
         businessInitiated: false,
       });
     }
-    return failSession({ workspaceId, session: updated, contact });
+    return failSession({ workspaceId, session: updated, contact, inboundMessage });
   }
   await sendText({
     workspaceId,
     contact,
     text: GENERIC_RETRY_MESSAGE,
     businessInitiated: false,
+    inboundMessage,
   });
   return { status: "waiting", session: updated };
 }
@@ -618,7 +656,7 @@ async function continueSession({
   session,
   inboundMessage,
 }) {
-  const [version, contact] = await Promise.all([
+  const [version, contact, flow, workspace] = await Promise.all([
     flowSessionRepository.findFlowVersionById({
       workspaceId,
       flowVersionId: session.flowVersionId,
@@ -627,6 +665,11 @@ async function continueSession({
       workspaceId,
       contactId: session.contactId,
     }),
+    flowSessionRepository.findFlowById({
+      workspaceId,
+      flowId: session.flowId,
+    }),
+    flowSessionRepository.findWorkspaceById({ workspaceId }),
   ]);
   if (!version || !contact) return { status: "failed", session };
 
@@ -709,13 +752,17 @@ async function continueSession({
           session,
           contact,
           node: waitingNode,
-          scope: buildScope(session, contact, inboundMessage),
+          scope: buildScope(session, contact, inboundMessage, {
+            flow,
+            workspace,
+          }),
           version,
           businessInitiated: false,
+          inboundMessage,
         });
       }
     }
-    return handleFallback({ workspaceId, session, version, contact });
+    return handleFallback({ workspaceId, session, version, contact, inboundMessage });
   }
 
   const moved = await moveSession({
@@ -726,6 +773,9 @@ async function continueSession({
       context,
       fallbackCount: 0,
       waitingFor: { type: null, attributeKey: null, nodeId: null },
+      expiresAt: sessionExpiresAt(version.runtimeSettings, new Date(), {
+        lastInboundAt: inboundMessage?.receivedAt || contact.lastInboundAt || null,
+      }),
     },
   });
   return executeSession({

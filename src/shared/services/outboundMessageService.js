@@ -80,6 +80,9 @@ async function sendTemplateMessageForUser({
   flowTokens,
   flowActionData,
   sentBy,
+  source,
+  senderType,
+  triggeredByMessageId,
 }) {
   const creds = await getCredentialsForUser(userId);
   assertTemplateBelongsToWaba(template, creds.wabaId);
@@ -151,9 +154,14 @@ async function sendTemplateMessageForUser({
     templateId: normalizedTemplate._id,
     phone: resolvedPhone,
     direction: "outbound",
+    source,
+    senderType,
+    triggeredByMessageId,
     whatsappMessageId: waMessageId,
     status: "sent",
     statusTimestamps: { acceptedAt: now, sentAt: now },
+    sentAt: now,
+    sortAt: now,
     sentBy: sentBy || { kind: "owner" },
     text: previewText,
     payload: {
@@ -239,7 +247,15 @@ async function sendTemplateMessageForUser({
   return { message, apiResponse };
 }
 
-async function sendTextMessageForUser({ userId, to, text, sentBy }) {
+async function sendTextMessageForUser({
+  userId,
+  to,
+  text,
+  sentBy,
+  source,
+  senderType,
+  triggeredByMessageId,
+}) {
   const creds = await getCredentialsForUser(userId);
   let apiResponse;
   try {
@@ -266,9 +282,14 @@ async function sendTextMessageForUser({ userId, to, text, sentBy }) {
     phoneNumberId: creds.phoneNumberId,
     phone: resolvedPhone,
     direction: "outbound",
+    source,
+    senderType,
+    triggeredByMessageId,
     whatsappMessageId: waMessageId,
     status: "sent",
     statusTimestamps: { acceptedAt: now, sentAt: now },
+    sentAt: now,
+    sortAt: now,
     sentBy: sentBy || { kind: "owner" },
     text,
     payload: { to, text },
@@ -307,6 +328,9 @@ async function sendInteractiveListMessageForUser({
   buttonText,
   sections,
   sentBy,
+  source,
+  senderType,
+  triggeredByMessageId,
 }) {
   const creds = await getCredentialsForUser(userId);
   let apiResponse;
@@ -339,9 +363,15 @@ async function sendInteractiveListMessageForUser({
     phoneNumberId: creds.phoneNumberId,
     phone: resolvedPhone,
     direction: "outbound",
+    source,
+    senderType,
+    triggeredByMessageId,
+    type: "interactive_list",
     whatsappMessageId,
     status: "sent",
     statusTimestamps: { acceptedAt: now, sentAt: now },
+    sentAt: now,
+    sortAt: now,
     sentBy: sentBy || { kind: "system" },
     text,
     payload: {
@@ -394,6 +424,9 @@ async function sendInteractiveButtonMessageForUser({
   text,
   buttons,
   sentBy,
+  source,
+  senderType,
+  triggeredByMessageId,
 }) {
   const creds = await getCredentialsForUser(userId);
   const now = new Date();
@@ -421,6 +454,9 @@ async function sendInteractiveButtonMessageForUser({
     phoneNumberId: creds.phoneNumberId,
     phone: to,
     direction: "outbound",
+    source,
+    senderType,
+    triggeredByMessageId,
     status: "processing",
     sentBy: sentBy || { kind: "system" },
     type: "interactive_buttons",
@@ -454,6 +490,8 @@ async function sendInteractiveButtonMessageForUser({
           status: "sent",
           "statusTimestamps.acceptedAt": now,
           "statusTimestamps.sentAt": now,
+          sentAt: now,
+          sortAt: now,
         },
         $unset: { error: 1 },
       },
@@ -526,6 +564,9 @@ async function sendMediaMessageForUser({
   caption,
   filename,
   sentBy,
+  source,
+  senderType,
+  triggeredByMessageId,
 }) {
   const creds = await getCredentialsForUser(userId);
   const normalizedType = String(type || "").toLowerCase();
@@ -570,9 +611,15 @@ async function sendMediaMessageForUser({
     ...(campaignId ? { campaignId } : {}),
     phone: resolvedPhone,
     direction: "outbound",
+    source,
+    senderType,
+    triggeredByMessageId,
+    type: normalizedType,
     whatsappMessageId: waMessageId,
     status: "sent",
     statusTimestamps: { acceptedAt: now, sentAt: now },
+    sentAt: now,
+    sortAt: now,
     sentBy: sentBy || { kind: "owner" },
     // Don't store bracket placeholders like "[audio]" in UI; let the UI render by payload type.
     text: caption ? String(caption).slice(0, 160) : "",

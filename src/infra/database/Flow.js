@@ -34,8 +34,8 @@ const FlowRuntimeSettingsSchema = new mongoose.Schema(
     sessionTimeoutMinutes: {
       type: Number,
       min: 1,
-      max: 10080,
-      default: 30,
+        max: 1200,
+        default: 5,
     },
     onSessionExpired: {
       action: {

@@ -291,7 +291,7 @@ async function listLogs(req, res) {
   const sortDir = String(req.query.sort || "desc").toLowerCase() === "asc" ? 1 : -1;
 
   const [items, total] = await Promise.all([
-    Message.find(filter).sort({ createdAt: sortDir, _id: sortDir }).skip(skip).limit(limit),
+    Message.find(filter).sort({ sortAt: sortDir, createdAt: sortDir, _id: sortDir }).skip(skip).limit(limit),
     Message.countDocuments(filter),
   ]);
 
@@ -309,7 +309,7 @@ async function messagesByPhone(req, res) {
   const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 500);
 
   const messages = await Message.find({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone })
-    .sort({ createdAt: -1 })
+    .sort({ sortAt: -1, createdAt: -1, _id: -1 })
     .limit(limit);
 
   const templateIds = Array.from(

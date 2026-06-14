@@ -20,15 +20,23 @@ function getPath(source, path) {
     .reduce((value, key) => value?.[key], source);
 }
 
+function logMissingVariable(path) {
+  process.stdout.write(
+    `[FLOW_VARIABLE_MISSING] ${JSON.stringify({ path: String(path || "") })}\n`
+  );
+}
+
 function resolveValue(value, scope) {
   if (typeof value !== "string") return value;
   const exact = value.match(/^\s*\{\{\s*([^}]+)\s*\}\}\s*$/);
   if (exact) {
     const resolved = getPath(scope, exact[1].trim());
-    return resolved === undefined ? "" : resolved;
+    if (resolved == null) logMissingVariable(exact[1].trim());
+    return resolved == null ? "" : resolved;
   }
   return value.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, path) => {
     const resolved = getPath(scope, path.trim());
+    if (resolved == null) logMissingVariable(path.trim());
     return resolved == null ? "" : String(resolved);
   });
 }
@@ -100,9 +108,11 @@ function nodeById(version, nodeId) {
   );
 }
 
-function buildScope(session, contact, inboundMessage) {
+function buildScope(session, contact, inboundMessage, dependencies = {}) {
+  const attributes = asPlainAttributes(contact.attributes);
   return {
     context: session.context || {},
+    attributes,
     contact: {
       id: String(contact._id),
       phone: contact.phone,
@@ -110,7 +120,18 @@ function buildScope(session, contact, inboundMessage) {
       email: contact.email || "",
       company: contact.company || "",
       tags: contact.tags || [],
-      attributes: asPlainAttributes(contact.attributes),
+      attributes,
+    },
+    workspace: {
+      id: String(dependencies.workspace?._id || session.workspaceId || ""),
+      name:
+        dependencies.workspace?.businessName ||
+        dependencies.workspace?.name ||
+        "",
+    },
+    flow: {
+      id: String(dependencies.flow?._id || session.flowId || ""),
+      name: dependencies.flow?.name || "",
     },
     inbound: {
       text: inboundMessage?.text || "",
@@ -125,6 +146,7 @@ async function sendText({
   contact,
   text,
   businessInitiated = false,
+  inboundMessage = null,
 }) {
   const normalized = String(text || "").trim();
   if (!normalized) return;
@@ -138,6 +160,9 @@ async function sendText({
     to: contact.phone,
     text: normalized,
     sentBy: { kind: "system" },
+    source: "automation",
+    senderType: "automation",
+    triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
   });
 }
 

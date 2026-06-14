@@ -539,13 +539,38 @@ async function receive(req, res) {
             }
             : {}),
           ...(Array.isArray(m.contacts) ? { contacts: m.contacts } : {}),
+          ...(m.interactive
+            ? {
+              interactive: {
+                type: m.interactive.type || null,
+                ...(m.interactive.button_reply
+                  ? { button_reply: m.interactive.button_reply }
+                  : {}),
+                ...(m.interactive.list_reply
+                  ? { list_reply: m.interactive.list_reply }
+                  : {}),
+              },
+            }
+            : {}),
         };
 
         // Avoid bracket placeholders like "[audio]" in UI; prefer empty text for media types.
         const mediaTypes = new Set(["image", "video", "audio", "document", "contacts", "location"]);
+        const buttonReply = m.interactive?.button_reply;
+        const listReply = m.interactive?.list_reply;
+        const normalizedType = buttonReply
+          ? "button_reply"
+          : listReply
+            ? "list_reply"
+            : type;
         const text = isDeletedOrUnsupported
           ? "[deleted]"
-          : m.text?.body || (type && !mediaTypes.has(type) ? `[${type}]` : "");
+          : m.text?.body ||
+            buttonReply?.title ||
+            listReply?.title ||
+            (type && type !== "interactive" && !mediaTypes.has(type)
+              ? `[${type}]`
+              : "");
 
         try {
           const duplicateCheck = await Message.findOne({
@@ -573,8 +598,13 @@ async function receive(req, res) {
                 phoneNumberId: phoneNumberId || null,
                 phone: from,
                 direction: "inbound",
+                senderType: "user",
+                source: "whatsapp",
+                type: normalizedType,
                 status: "received",
                 "statusTimestamps.receivedAt": ts,
+                receivedAt: ts,
+                sortAt: ts,
                 sentBy: { kind: "system" },
                 text,
                 payload,
@@ -591,7 +621,7 @@ async function receive(req, res) {
             phone: from,
             lastMessageAt: ts,
             lastInboundAt: ts,
-            lastMessagePreview: text.slice(0, 160),
+            lastMessagePreview: (text || "Unsupported message type").slice(0, 160),
             incrementUnread: true,
           });
 

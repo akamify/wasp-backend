@@ -42,7 +42,13 @@ function previewFromMessage(message, fallback = "") {
   const templateName = payload.template?.name || message.display?.templateName;
   if (templateName) return `Template: ${String(templateName).trim()}`.slice(0, 160);
 
-  const text = String(message.text || message.display?.body || fallback || "").trim();
+  const interactiveTitle =
+    payload.interactive?.button_reply?.title ||
+    payload.interactive?.list_reply?.title ||
+    "";
+  const text = String(
+    interactiveTitle || message.text || message.display?.body || fallback || ""
+  ).trim();
   if (text && !/^\[(image|video|document|contacts?)\]$/i.test(text)) return text.slice(0, 160);
 
   if (payload.image?.id || payload.image?.link) return "Image";
@@ -102,7 +108,22 @@ async function listConversations(req, res) {
   if (phones.length) {
     const latestRows = await Message.aggregate([
       { $match: { workspaceId: conversations[0].workspaceId, wabaId: scope.wabaId, phone: { $in: phones } } },
-      { $sort: { createdAt: -1, _id: -1 } },
+      {
+        $addFields: {
+          effectiveSortAt: {
+            $ifNull: [
+              "$sortAt",
+              {
+                $ifNull: [
+                  "$receivedAt",
+                  { $ifNull: ["$sentAt", "$createdAt"] },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      { $sort: { effectiveSortAt: -1, createdAt: -1, _id: -1 } },
       {
         $group: {
           _id: "$phone",
@@ -113,6 +134,7 @@ async function listConversations(req, res) {
               payload: "$payload",
               display: "$display",
               createdAt: "$createdAt",
+              sortAt: "$effectiveSortAt",
             },
           },
         },
@@ -126,7 +148,7 @@ async function listConversations(req, res) {
         if (!latest) return item;
         return {
           ...item,
-          lastMessageAt: latest.createdAt || item.lastMessageAt,
+          lastMessageAt: latest.sortAt || latest.createdAt || item.lastMessageAt,
           lastMessagePreview: previewFromMessage(latest, item.lastMessagePreview),
         };
       })

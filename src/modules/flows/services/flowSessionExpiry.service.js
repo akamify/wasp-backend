@@ -94,6 +94,10 @@ async function sendExpiryTemplate({
         languageCode: config.languageCode,
       },
     });
+    flowLog("[FLOW_EXPIRY_NOTIFICATION_SKIPPED]", {
+      sessionId: String(session._id),
+      reason: "template_missing_or_not_approved",
+    });
     return { status: "skipped_template_missing" };
   }
 
@@ -110,6 +114,8 @@ async function sendExpiryTemplate({
       languageCode: config.languageCode,
       variables,
       sentBy: { kind: "system" },
+      source: "automation",
+      senderType: "automation",
     });
     await writeNotificationEvent({
       session,
@@ -121,6 +127,10 @@ async function sendExpiryTemplate({
           ? String(result.message._id)
           : null,
       },
+    });
+    flowLog("[FLOW_EXPIRY_TEMPLATE_SENT]", {
+      sessionId: String(session._id),
+      templateName: config.templateName,
     });
     return { status: "sent_template" };
   } catch (error) {
@@ -139,6 +149,11 @@ async function sendExpiryTemplate({
       eventType: "session_expiry_notification_failed",
       data: { type: "template", ...failure },
     });
+    flowLog("[FLOW_EXPIRY_TEMPLATE_FAILED]", {
+      sessionId: String(session._id),
+      templateName: config.templateName,
+      reason: failure.message,
+    });
     return { status: "failed_template", error: failure };
   }
 }
@@ -146,7 +161,13 @@ async function sendExpiryTemplate({
 async function notifyExpiredSession({ session, version, contact, flow }) {
   const settings = normalizeRuntimeSettings(version?.runtimeSettings);
   const config = settings.onSessionExpired;
-  if (config.action === "none") return { status: "skipped_none" };
+  if (config.action === "none") {
+    flowLog("[FLOW_EXPIRY_NOTIFICATION_SKIPPED]", {
+      sessionId: String(session._id),
+      reason: "action_none",
+    });
+    return { status: "skipped_none" };
+  }
 
   if (config.action === "template") {
     if (!config.templateName) {
@@ -154,6 +175,10 @@ async function notifyExpiredSession({ session, version, contact, flow }) {
         sessionId: String(session._id),
         flowId: String(session.flowId),
         templateName: "",
+      });
+      flowLog("[FLOW_EXPIRY_NOTIFICATION_SKIPPED]", {
+        sessionId: String(session._id),
+        reason: "template_not_configured",
       });
       return { status: "skipped_template_missing" };
     }
@@ -201,6 +226,10 @@ async function notifyExpiredSession({ session, version, contact, flow }) {
       eventType: "session_expiry_notification_skipped",
       data: { reason: "outside_customer_window" },
     });
+    flowLog("[FLOW_EXPIRY_NOTIFICATION_SKIPPED]", {
+      sessionId: String(session._id),
+      reason: "outside_customer_window",
+    });
     return { status: "skipped_outside_customer_window" };
   }
 
@@ -210,13 +239,21 @@ async function notifyExpiredSession({ session, version, contact, flow }) {
       expiryScope({ session, contact, flow })
     )
   ).trim();
-  if (!text) return { status: "skipped_empty_text" };
+  if (!text) {
+    flowLog("[FLOW_EXPIRY_NOTIFICATION_SKIPPED]", {
+      sessionId: String(session._id),
+      reason: "empty_text",
+    });
+    return { status: "skipped_empty_text" };
+  }
   try {
     const result = await sendTextMessageForUser({
       userId: session.workspaceId,
       to: contact.phone,
       text,
       sentBy: { kind: "system" },
+      source: "automation",
+      senderType: "automation",
     });
     await writeNotificationEvent({
       session,
@@ -227,6 +264,9 @@ async function notifyExpiredSession({ session, version, contact, flow }) {
           ? String(result.message._id)
           : null,
       },
+    });
+    flowLog("[FLOW_EXPIRY_TEXT_SENT]", {
+      sessionId: String(session._id),
     });
     return { status: "sent_text" };
   } catch (error) {
@@ -257,6 +297,12 @@ async function sweepExpiredSessions({
     });
     if (!expired) continue;
     expiredCount += 1;
+    flowLog("[FLOW_SESSION_EXPIRED]", {
+      sessionId: String(expired._id),
+      workspaceId: String(expired.workspaceId),
+      flowId: String(expired.flowId),
+      reason: "timeout",
+    });
     const [version, contact, flow] = await Promise.all([
       flowSessionRepository.findFlowVersionById({
         workspaceId: expired.workspaceId,

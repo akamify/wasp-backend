@@ -14,12 +14,24 @@ const triggerSchema = Joi.object({
   .optional();
 
 const runtimeSettingsSchema = Joi.object({
-  sessionTimeoutMinutes: Joi.number().integer().min(1).max(10080).optional(),
+  sessionTimeoutMinutes: Joi.number().integer().min(1).max(1200).required(),
   onSessionExpired: Joi.object({
     action: Joi.string().valid("none", "text", "template").optional(),
-    textMessage: Joi.string().trim().max(4096).allow("").optional(),
-    templateName: Joi.string().trim().max(512).allow("").optional(),
-    languageCode: Joi.string().trim().max(32).allow("").optional(),
+    textMessage: Joi.string().trim().max(4096).allow("").when("action", {
+      is: "text",
+      then: Joi.string().trim().min(1).required(),
+      otherwise: Joi.optional(),
+    }),
+    templateName: Joi.string().trim().max(512).allow("").when("action", {
+      is: "template",
+      then: Joi.string().trim().min(1).required(),
+      otherwise: Joi.optional(),
+    }),
+    languageCode: Joi.string().trim().max(32).allow("").when("action", {
+      is: "template",
+      then: Joi.string().trim().min(1).required(),
+      otherwise: Joi.optional(),
+    }),
     variables: Joi.array().items(Joi.string().max(4096)).optional(),
   }).optional(),
   allowKeywordRestartWhenWaiting: Joi.boolean().optional(),

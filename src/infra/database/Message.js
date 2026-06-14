@@ -31,6 +31,23 @@ const MessageSchema = new mongoose.Schema(
 
     phone: { type: String, required: true, index: true },
     direction: { type: String, enum: ["outbound", "inbound"], required: true },
+    senderType: {
+      type: String,
+      enum: ["user", "business", "automation", "agent", "system"],
+      default: null,
+      index: true,
+    },
+    source: {
+      type: String,
+      enum: ["whatsapp", "automation", "campaign", "api", "manual"],
+      default: null,
+      index: true,
+    },
+    receivedAt: { type: Date, default: null },
+    sentAt: { type: Date, default: null },
+    sortAt: { type: Date, default: null, index: true },
+    replyToMessageId: { type: String, trim: true, default: null },
+    triggeredByMessageId: { type: String, trim: true, default: null, index: true },
 
     whatsappMessageId: { type: String, index: true, default: undefined },
 
@@ -79,6 +96,42 @@ const MessageSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+MessageSchema.pre("validate", function normalizeMessageTimeline(next) {
+  const inbound = this.direction === "inbound";
+  this.receivedAt =
+    this.receivedAt ||
+    (inbound ? this.statusTimestamps?.receivedAt || this.createdAt : null);
+  this.sentAt =
+    this.sentAt ||
+    (!inbound ? this.statusTimestamps?.sentAt || this.createdAt : null);
+  this.sortAt =
+    this.sortAt ||
+    (inbound ? this.receivedAt : this.sentAt) ||
+    this.createdAt ||
+    new Date();
+  this.senderType =
+    this.senderType ||
+    (inbound
+      ? "user"
+      : this.sentBy?.kind === "system"
+        ? "automation"
+        : this.sentBy?.kind === "api"
+          ? "business"
+          : "agent");
+  this.source =
+    this.source ||
+    (inbound
+      ? "whatsapp"
+      : this.campaignId
+        ? "campaign"
+        : this.sentBy?.kind === "system"
+          ? "automation"
+          : this.sentBy?.kind === "api"
+            ? "api"
+            : "manual");
+  next();
+});
+
 // Only enforce uniqueness when Meta message ID is actually present.
 MessageSchema.index(
   { workspaceId: 1, wabaId: 1, whatsappMessageId: 1 },
@@ -89,6 +142,7 @@ MessageSchema.index(
     },
   }
 );
+MessageSchema.index({ workspaceId: 1, wabaId: 1, phone: 1, sortAt: 1, createdAt: 1 });
 MessageSchema.index(
   { campaignRunId: 1, contactId: 1 },
   {
