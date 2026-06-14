@@ -6,8 +6,11 @@ const {
   normalizeRuntimeSettings,
 } = require("@modules/flows/constants/flowRuntimeSettings");
 const {
-  resolveVariables,
+  buildScope,
 } = require("@modules/flows/services/flowRuntime.utils");
+const {
+  resolveTemplateRuntimeValues,
+} = require("@modules/flows/services/flowMessageNodes.service");
 const {
   sendTextMessageForUser,
   sendTemplateMessageForUser,
@@ -28,23 +31,6 @@ function serializeFailure(error) {
       error?.metaDebug?.meta ||
       error?.response?.data?.error ||
       null,
-  };
-}
-
-function expiryScope({ session, contact, flow }) {
-  return {
-    context: session.context || {},
-    contact: {
-      id: String(contact._id),
-      phone: contact.phone,
-      name: contact.name || "",
-      email: contact.email || "",
-      company: contact.company || "",
-    },
-    flow: {
-      id: String(flow?._id || session.flowId),
-      name: flow?.name || "",
-    },
   };
 }
 
@@ -101,10 +87,17 @@ async function sendExpiryTemplate({
     return { status: "skipped_template_missing" };
   }
 
-  const scope = expiryScope({ session, contact, flow });
-  const variables = config.variables.map((value) =>
-    String(resolveVariables(value, scope))
-  );
+  const scope = buildScope(session, contact, null, {
+    flow,
+    workspace: null,
+    node: { id: "session_expiry_template" },
+  });
+  const resolvedTemplate = resolveTemplateRuntimeValues({
+    config,
+    scope,
+    node: { id: "session_expiry_template" },
+    templateName: config.templateName,
+  });
   try {
     const result = await sendTemplateMessageForUser({
       userId: session.workspaceId,
@@ -112,7 +105,9 @@ async function sendExpiryTemplate({
       template,
       to: contact.phone,
       languageCode: config.languageCode,
-      variables,
+      variables: resolvedTemplate.variables,
+      headerVariables: resolvedTemplate.headerVariables,
+      buttonValues: resolvedTemplate.buttonValues,
       sentBy: { kind: "system" },
       source: "automation",
       senderType: "automation",
@@ -233,12 +228,7 @@ async function notifyExpiredSession({ session, version, contact, flow }) {
     return { status: "skipped_outside_customer_window" };
   }
 
-  const text = String(
-    resolveVariables(
-      config.textMessage,
-      expiryScope({ session, contact, flow })
-    )
-  ).trim();
+  const text = String(config.textMessage || "").trim();
   if (!text) {
     flowLog("[FLOW_EXPIRY_NOTIFICATION_SKIPPED]", {
       sessionId: String(session._id),

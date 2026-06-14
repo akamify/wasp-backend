@@ -127,6 +127,24 @@ async function startFlow(req, res) {
   );
 }
 
+async function testApiRequest(req, res) {
+  res.json(
+    await flowsService.testApiRequest({
+      workspaceId: req.workspace.id,
+      payload: req.body,
+    })
+  );
+}
+
+async function testMediaNode(req, res) {
+  res.json(
+    await flowsService.testMediaNode({
+      workspaceId: req.workspace.id,
+      payload: req.body,
+    })
+  );
+}
+
 module.exports = {
   createFlow,
   listFlows,
@@ -141,4 +159,6 @@ module.exports = {
   resumeFlow,
   archiveFlow,
   startFlow,
+  testApiRequest,
+  testMediaNode,
 };

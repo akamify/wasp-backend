@@ -6,6 +6,12 @@ const {
   applyPublishDefaults,
 } = require("@modules/flows/services/flowValidation.service");
 const {
+  testApiRequestNode,
+} = require("@modules/flows/services/flowApiRequest.service");
+const {
+  testMediaNodeSource,
+} = require("@modules/flows/services/flowMessageNodes.service");
+const {
   manualStart,
 } = require("@modules/flows/services/flowSession.service");
 const {
@@ -14,6 +20,9 @@ const {
 const {
   normalizeRuntimeSettings,
 } = require("@modules/flows/constants/flowRuntimeSettings");
+const {
+  computeFlowDraftHash,
+} = require("@modules/flows/services/flowDraftHash.service");
 
 function assertValidFlowId(flowId) {
   if (!mongoose.Types.ObjectId.isValid(String(flowId || ""))) {
@@ -46,6 +55,45 @@ function parsePaging(query) {
   const page = Math.max(Number(query.page || 1), 1);
   const limit = Math.min(Math.max(Number(query.limit || 25), 1), 100);
   return { page, limit, skip: (page - 1) * limit };
+}
+
+async function addApprovedTemplateErrors({ workspaceId, flow, validation }) {
+  const templateChecks = (flow?.draft?.nodes || [])
+    .filter((node) => node?.type === "template")
+    .map((node) => ({
+      nodeId: node.id,
+      templateName: String(node.config?.templateName || "").trim(),
+      languageCode: String(node.config?.languageCode || "").trim(),
+    }));
+  const expiry = flow?.runtimeSettings?.onSessionExpired;
+  if (expiry?.action === "template") {
+    templateChecks.push({
+      nodeId: null,
+      templateName: String(expiry.templateName || "").trim(),
+      languageCode: String(expiry.languageCode || "").trim(),
+    });
+  }
+
+  for (const check of templateChecks) {
+    if (!check.templateName || !check.languageCode) continue;
+    const approved = await flowsRepository.findApprovedTemplate({
+      workspaceId,
+      name: check.templateName,
+      languageCode: check.languageCode,
+    });
+    if (!approved) {
+      validation.errors.push({
+        code: "TEMPLATE_NOT_APPROVED",
+        message: `Template '${check.templateName}' (${check.languageCode}) is not approved or active`,
+        ...(check.nodeId ? { nodeId: check.nodeId } : {}),
+        field: check.nodeId
+          ? "config.templateName"
+          : "runtimeSettings.onSessionExpired.templateName",
+      });
+    }
+  }
+  validation.valid = validation.errors.length === 0;
+  return validation;
 }
 
 async function requireMutableFlow({ workspaceId, flowId }) {
@@ -124,7 +172,7 @@ async function assertNoTriggerConflict({ workspaceId, flowId, trigger }) {
 }
 
 async function createFlow({ workspaceId, actorId, payload }) {
-  const flow = await flowsRepository.createFlow({
+  let flow = await flowsRepository.createFlow({
     workspaceId,
     name: payload.name,
     description: payload.description || "",
@@ -139,6 +187,15 @@ async function createFlow({ workspaceId, actorId, payload }) {
     },
     createdBy: actorId || null,
     updatedBy: actorId || null,
+  });
+  flow = await flowsRepository.updateFlowById({
+    workspaceId,
+    flowId: flow._id,
+    updates: {
+      draftHash: computeFlowDraftHash(flow),
+      lastValidationStatus: "stale",
+      lastValidatedDraftHash: null,
+    },
   });
   return { success: true, flow };
 }
@@ -172,12 +229,22 @@ async function getFlow({ workspaceId, flowId }) {
 }
 
 async function updateFlowMetadata({ workspaceId, flowId, actorId, payload }) {
-  await requireMutableFlow({ workspaceId, flowId });
+  const existing = await requireMutableFlow({ workspaceId, flowId });
+  const nextState = {
+    ...existing.toObject(),
+    ...payload,
+  };
   const flow = await flowsRepository.updateFlowById({
     workspaceId,
     flowId,
     updates: {
       ...payload,
+      draftHash: computeFlowDraftHash(nextState),
+      lastValidationStatus: "stale",
+      lastValidatedDraftHash: null,
+      lastValidatedAt: null,
+      lastValidationErrors: [],
+      lastValidationWarnings: [],
       updatedBy: actorId || null,
     },
   });
@@ -187,20 +254,35 @@ async function updateFlowMetadata({ workspaceId, flowId, actorId, payload }) {
 
 async function saveDraft({ workspaceId, flowId, actorId, payload }) {
   const existing = await requireMutableFlow({ workspaceId, flowId });
+  const trigger = normalizeTrigger(payload.trigger);
+  const draft = {
+    nodes: payload.nodes,
+    edges: payload.edges,
+    fallbackNodeId: payload.fallbackNodeId || null,
+    handoverNodeId: payload.handoverNodeId || null,
+  };
+  const runtimeSettings = normalizeRuntimeSettings(
+    payload.runtimeSettings || existing.runtimeSettings
+  );
+  const draftHash = computeFlowDraftHash({
+    ...existing.toObject(),
+    trigger,
+    draft,
+    runtimeSettings,
+  });
   const flow = await flowsRepository.updateFlowById({
     workspaceId,
     flowId,
     updates: {
-      trigger: normalizeTrigger(payload.trigger),
-      draft: {
-        nodes: payload.nodes,
-        edges: payload.edges,
-        fallbackNodeId: payload.fallbackNodeId || null,
-        handoverNodeId: payload.handoverNodeId || null,
-      },
-      runtimeSettings: normalizeRuntimeSettings(
-        payload.runtimeSettings || existing.runtimeSettings
-      ),
+      trigger,
+      draft,
+      runtimeSettings,
+      draftHash,
+      lastValidationStatus: "stale",
+      lastValidatedDraftHash: null,
+      lastValidatedAt: null,
+      lastValidationErrors: [],
+      lastValidationWarnings: [],
       updatedBy: actorId || null,
     },
   });
@@ -237,7 +319,25 @@ async function validateDraft({ workspaceId, flowId }) {
   assertValidFlowId(flowId);
   const flow = await flowsRepository.findFlowById({ workspaceId, flowId });
   if (!flow) throw new HttpError(404, "Flow not found");
-  return validateFlowDraft(flow);
+  const draftHash = computeFlowDraftHash(flow);
+  const validation = await addApprovedTemplateErrors({
+    workspaceId,
+    flow,
+    validation: validateFlowDraft(flow),
+  });
+  await flowsRepository.updateFlowById({
+    workspaceId,
+    flowId,
+    updates: {
+      draftHash,
+      lastValidationStatus: validation.valid ? "passed" : "failed",
+      lastValidatedDraftHash: validation.valid ? draftHash : null,
+      lastValidatedAt: new Date(),
+      lastValidationErrors: validation.errors,
+      lastValidationWarnings: validation.warnings,
+    },
+  });
+  return { ...validation, draftHash };
 }
 
 async function publishFlow({ workspaceId, flowId, actorId }) {
@@ -248,8 +348,38 @@ async function publishFlow({ workspaceId, flowId, actorId }) {
     throw new HttpError(409, "Archived flow cannot be published");
   }
 
-  const validation = validateFlowDraft(flow);
+  const draftHash = computeFlowDraftHash(flow);
+  if (
+    flow.lastValidationStatus !== "passed" ||
+    !flow.lastValidatedDraftHash ||
+    flow.lastValidatedDraftHash !== draftHash ||
+    flow.draftHash !== draftHash
+  ) {
+    throw new HttpError(
+      400,
+      "Please save and validate the latest draft before publishing.",
+      { code: "FLOW_VALIDATION_REQUIRED" }
+    );
+  }
+
+  const validation = await addApprovedTemplateErrors({
+    workspaceId,
+    flow,
+    validation: validateFlowDraft(flow),
+  });
   if (!validation.valid) {
+    await flowsRepository.updateFlowById({
+      workspaceId,
+      flowId,
+      updates: {
+        draftHash,
+        lastValidationStatus: "failed",
+        lastValidatedDraftHash: null,
+        lastValidatedAt: new Date(),
+        lastValidationErrors: validation.errors,
+        lastValidationWarnings: validation.warnings,
+      },
+    });
     throw new HttpError(400, "Flow draft validation failed", validation);
   }
 
@@ -292,6 +422,7 @@ async function publishFlow({ workspaceId, flowId, actorId }) {
       workspaceId,
       flowId,
       expectedStatuses: ["draft", "active", "paused"],
+      expectedDraftHash: draftHash,
       updates: {
         status: "active",
         activeVersionId: version._id,
@@ -415,6 +546,30 @@ async function startFlow({ workspaceId, flowId, payload }) {
   return { success: true, session: runtime.session || session, runtimeStatus: runtime.status };
 }
 
+async function testApiRequest({ workspaceId, payload }) {
+  return testApiRequestNode({
+    workspaceId,
+    flowId: payload.flowId || null,
+    nodeId: payload.nodeId || null,
+    config: payload.config,
+    sampleContext: payload.sampleContext || {},
+    sampleContact: payload.sampleContact || {},
+    sampleAttributes: payload.sampleAttributes || {},
+  });
+}
+
+async function testMediaNode({ workspaceId, payload }) {
+  return testMediaNodeSource({
+    workspaceId,
+    flowId: payload.flowId || null,
+    nodeId: payload.nodeId || null,
+    config: payload.config,
+    sampleContext: payload.sampleContext || {},
+    sampleContact: payload.sampleContact || {},
+    sampleAttributes: payload.sampleAttributes || {},
+  });
+}
+
 module.exports = {
   createFlow,
   listFlows,
@@ -429,4 +584,6 @@ module.exports = {
   resumeFlow,
   archiveFlow,
   startFlow,
+  testApiRequest,
+  testMediaNode,
 };

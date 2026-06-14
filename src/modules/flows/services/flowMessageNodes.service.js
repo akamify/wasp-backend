@@ -12,28 +12,33 @@ const {
 const {
   assertFreeformSendAllowed,
 } = require("@shared/services/whatsappCustomerWindow");
+const mediaAssetRepository = require("@modules/media/repositories/mediaAsset.repository");
+const {
+  maskedUrlLog,
+  validatePublicMediaUrl,
+} = require("@shared/utils/mediaValidation");
 
-function normalizeListSections(sections, scope) {
+function plainText(value) {
+  return String(value || "").trim();
+}
+
+function normalizeListSections(sections) {
   return (sections || []).map((section) => ({
-    title: String(resolveVariables(section?.title || "", scope)).trim(),
+    title: plainText(section?.title),
     rows: (section?.rows || []).map((row) => ({
-      id: String(row?.id || "").trim(),
-      title: String(resolveVariables(row?.title || "", scope)).trim(),
-      ...(String(resolveVariables(row?.description || "", scope)).trim()
-        ? {
-            description: String(
-              resolveVariables(row.description, scope)
-            ).trim(),
-          }
+      id: plainText(row?.id),
+      title: plainText(row?.title),
+      ...(plainText(row?.description)
+        ? { description: plainText(row.description) }
         : {}),
     })),
   }));
 }
 
-function normalizeReplyButtons(buttons, scope) {
+function normalizeReplyButtons(buttons) {
   const normalized = (buttons || []).slice(0, 3).map((button) => ({
-    id: String(button?.id || "").trim(),
-    title: String(resolveVariables(button?.title || "", scope)).trim(),
+    id: plainText(button?.id),
+    title: plainText(button?.title),
   }));
   const seen = new Set();
   for (const button of normalized) {
@@ -48,16 +53,129 @@ function normalizeReplyButtons(buttons, scope) {
   return normalized;
 }
 
-function resolveMappedTemplateVariables(config, scope) {
+function isEmptyValue(value) {
+  return value === null || value === undefined || value === "";
+}
+
+function valueFromTemplateMapping(mapping, scope) {
+  const sourceType = String(mapping?.sourceType || mapping?.type || "").trim();
+  const sourceKey = String(mapping?.sourceKey || "").trim();
+  let value;
+
+  if (sourceType === "static" || sourceType === "literal") {
+    value = mapping?.value ?? mapping?.staticValue ?? mapping?.sourceKey ?? "";
+  } else if (sourceType === "contact_field") {
+    value = sourceKey ? scope.contact?.[sourceKey] : "";
+  } else if (sourceType === "contact_attribute") {
+    value = sourceKey ? scope.attributes?.[sourceKey] : "";
+  } else if (sourceType === "api_context" || sourceType === "context") {
+    value = sourceKey ? scope.context?.[sourceKey] : "";
+  } else if (sourceType === "workspace_field" || sourceType === "workspace") {
+    value = sourceKey ? scope.workspace?.[sourceKey] : "";
+  } else {
+    value = mapping?.value ?? "";
+  }
+
+  const fallback = mapping?.fallback ?? mapping?.fallbackValue ?? "";
+  const usedFallback = isEmptyValue(value) && !isEmptyValue(fallback);
+  return {
+    value: String(usedFallback ? fallback : value ?? ""),
+    sourceType,
+    usedFallback,
+    hasValue: !isEmptyValue(value),
+  };
+}
+
+function logTemplateVariableResolved({
+  node,
+  templateName,
+  componentType,
+  index,
+  sourceType,
+  hasValue,
+  usedFallback,
+}) {
+  process.stdout.write(
+    `[FLOW_TEMPLATE_VARIABLE_RESOLVED] ${JSON.stringify({
+      nodeId: node?.id || null,
+      templateName,
+      componentType,
+      index,
+      sourceType,
+      hasValue,
+      usedFallback,
+    })}\n`
+  );
+}
+
+function normalizeTemplateComponents(config) {
+  if (Array.isArray(config.templateConfig?.components)) {
+    return config.templateConfig.components;
+  }
+  if (Array.isArray(config.components)) return config.components;
+  return [];
+}
+
+function resolveTemplateRuntimeValues({ config, scope, node, templateName }) {
+  const variables = [];
+  const headerVariables = [];
+  const buttonValues = [];
+  const components = normalizeTemplateComponents(config);
+
+  for (const component of components) {
+    const componentType = String(component?.type || "").toLowerCase();
+    const mappings = Array.isArray(component?.variables)
+      ? component.variables
+      : [];
+    for (const mapping of mappings) {
+      const result = valueFromTemplateMapping(mapping, scope);
+      const index = Math.max(1, Number(mapping?.index || 1));
+      logTemplateVariableResolved({
+        node,
+        templateName,
+        componentType,
+        index,
+        sourceType: result.sourceType,
+        hasValue: result.hasValue,
+        usedFallback: result.usedFallback,
+      });
+      if (componentType === "header") {
+        headerVariables[index - 1] = result.value;
+      } else if (
+        componentType === "button" ||
+        componentType === "button_url" ||
+        componentType === "buttons"
+      ) {
+        const buttonIndex = Math.max(0, Number(mapping?.buttonIndex || 0));
+        buttonValues[buttonIndex] = result.value;
+      } else {
+        variables[index - 1] = result.value;
+      }
+    }
+  }
+
+  if (variables.length || headerVariables.length || buttonValues.length) {
+    return {
+      variables: variables.map((value) => String(value || "")),
+      headerVariables: headerVariables.map((value) => String(value || "")),
+      buttonValues: buttonValues.map((value) => String(value || "")),
+    };
+  }
+
   const mappings = Array.isArray(config.variableMappings)
     ? config.variableMappings
     : [];
   if (!mappings.length) {
-    return (config.variables || []).map((value) =>
-      String(resolveVariables(value, scope))
-    );
+    return {
+      variables: (config.variables || []).map((value) =>
+        String(resolveVariables(value, scope))
+      ),
+      headerVariables: [],
+      buttonValues: [],
+    };
   }
-  return mappings
+  return {
+    variables: mappings
     .slice()
     .sort((a, b) => Number(a?.index || 0) - Number(b?.index || 0))
     .map((mapping) => {
@@ -71,7 +189,10 @@ function resolveMappedTemplateVariables(config, scope) {
         : fallback;
       const resolved = resolveVariables(expression, scope);
       return String(resolved || fallback || "");
-    });
+    }),
+    headerVariables: [],
+    buttonValues: [],
+  };
 }
 
 async function sendTextButtonsNode({
@@ -92,8 +213,8 @@ async function sendTextButtonsNode({
     workspaceId,
     contactId: contact._id,
     to: contact.phone,
-    text: String(resolveVariables(config.text, scope)).trim(),
-    buttons: normalizeReplyButtons(config.buttons, scope),
+    text: plainText(config.text),
+    buttons: normalizeReplyButtons(config.buttons),
     source: "automation",
     nodeId: node.id,
     triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
@@ -112,25 +233,93 @@ async function sendTextButtonsNode({
   return result;
 }
 
-function resolveHttpUrl(value, scope) {
-  const resolved = String(resolveVariables(value, scope)).trim();
-  let parsed;
-  try {
-    parsed = new URL(resolved);
-  } catch {
-    throw new HttpError(400, "Resolved media URL is invalid");
+function flowLog(label, data) {
+  process.stdout.write(`${label} ${JSON.stringify(data)}\n`);
+}
+
+async function resolveMediaSource({ workspaceId, contact, session, node }) {
+  const config = node.config || {};
+  const sourceType = String(config.sourceType || (config.mediaAssetId ? "upload" : "url")).trim();
+  const mediaType = String(config.mediaType || "").trim().toLowerCase();
+  let resolvedUrl = "";
+  let asset = null;
+
+  if (sourceType === "upload") {
+    const mediaAssetId = plainText(config.mediaAssetId);
+    if (!mediaAssetId) {
+      throw new HttpError(400, "Media asset is required", {
+        code: "MEDIA_ASSET_NOT_FOUND",
+      });
+    }
+    asset = await mediaAssetRepository.findMediaAssetById({
+      workspaceId,
+      mediaAssetId,
+    });
+    if (!asset) {
+      throw new HttpError(404, "Media asset not found", {
+        code: "MEDIA_ASSET_NOT_FOUND",
+      });
+    }
+    if (asset.mediaType !== mediaType) {
+      throw new HttpError(400, "Media asset type does not match node media type", {
+        code: "MEDIA_TYPE_NOT_SUPPORTED",
+      });
+    }
+    resolvedUrl = asset.publicUrl;
+  } else if (sourceType === "url") {
+    resolvedUrl = config.url || config.mediaUrl;
+  } else if (sourceType === "api_context") {
+    const key = plainText(config.sourceKey);
+    resolvedUrl = key ? session?.context?.[key] : "";
+    if (!resolvedUrl) {
+      flowLog("[FLOW_MEDIA_DYNAMIC_SOURCE_MISSING]", {
+        sessionId: session?._id ? String(session._id) : null,
+        nodeId: node.id,
+        mediaType,
+        sourceType,
+        sourceKey: key,
+      });
+      throw new HttpError(400, "Dynamic media source is missing", {
+        code: "FLOW_MEDIA_DYNAMIC_SOURCE_MISSING",
+      });
+    }
+  } else if (sourceType === "contact_attribute") {
+    const key = plainText(config.sourceKey);
+    resolvedUrl = key ? contact?.attributes?.[key] : "";
+    if (!resolvedUrl) {
+      throw new HttpError(400, "Contact attribute media source is missing", {
+        code: "FLOW_MEDIA_DYNAMIC_SOURCE_MISSING",
+      });
+    }
+  } else {
+    throw new HttpError(400, "Unsupported media source type", {
+      code: "MEDIA_SOURCE_TYPE_INVALID",
+    });
   }
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new HttpError(400, "Media URL must use http or https");
-  }
-  return parsed.toString();
+
+  const safeUrl = validatePublicMediaUrl(resolvedUrl);
+  flowLog("[FLOW_MEDIA_SOURCE_RESOLVED]", {
+    sessionId: session?._id ? String(session._id) : null,
+    nodeId: node.id,
+    mediaType,
+    sourceType,
+    hasUrl: Boolean(safeUrl),
+    mediaAssetId: asset?._id ? String(asset._id) : null,
+    url: maskedUrlLog(safeUrl),
+  });
+  return {
+    mediaType,
+    sourceType,
+    url: safeUrl,
+    asset,
+  };
 }
 
 async function sendListNode({
   workspaceId,
   contact,
+  session,
   node,
-  scope,
   businessInitiated = false,
   inboundMessage = null,
 }) {
@@ -143,9 +332,9 @@ async function sendListNode({
   await sendInteractiveListMessageForUser({
     userId: workspaceId,
     to: contact.phone,
-    text: String(resolveVariables(config.text, scope)).trim(),
-    buttonText: String(resolveVariables(config.buttonText, scope)).trim(),
-    sections: normalizeListSections(config.sections, scope),
+    text: plainText(config.text),
+    buttonText: plainText(config.buttonText),
+    sections: normalizeListSections(config.sections),
     sentBy: { kind: "system" },
     source: "automation",
     senderType: "automation",
@@ -156,8 +345,8 @@ async function sendListNode({
 async function sendMediaNode({
   workspaceId,
   contact,
+  session,
   node,
-  scope,
   businessInitiated = false,
   inboundMessage = null,
 }) {
@@ -167,18 +356,31 @@ async function sendMediaNode({
     sendType: `media_${config.mediaType || "unknown"}`,
     businessInitiated,
   });
+  const source = await resolveMediaSource({ workspaceId, contact, session, node });
+  flowLog("[FLOW_MEDIA_SEND_START]", {
+    sessionId: session?._id ? String(session._id) : null,
+    nodeId: node.id,
+    mediaType: source.mediaType,
+    sourceType: source.sourceType,
+  });
   await sendMediaMessageForUser({
     userId: workspaceId,
     to: contact.phone,
-    type: config.mediaType,
-    link: resolveHttpUrl(config.mediaUrl, scope),
-    caption: String(resolveVariables(config.caption || "", scope)).trim(),
-    filename: String(resolveVariables(config.filename || "", scope)).trim(),
+    type: source.mediaType,
+    link: source.url,
+    caption: plainText(config.caption),
+    filename: plainText(config.filename) || source.asset?.originalName || "",
     sentBy: { kind: "system" },
     source: "automation",
     senderType: "automation",
     triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
   });
+  flowLog("[FLOW_MEDIA_SEND_SUCCESS]", {
+    sessionId: session?._id ? String(session._id) : null,
+    nodeId: node.id,
+    mediaType: source.mediaType,
+  });
+  return source;
 }
 
 async function sendTemplateNode({
@@ -204,12 +406,19 @@ async function sendTemplateNode({
     );
   }
 
-  const variables = resolveMappedTemplateVariables(config, scope);
+  const resolvedTemplate = resolveTemplateRuntimeValues({
+    config,
+    scope,
+    node,
+    templateName,
+  });
   process.stdout.write(
     `[FLOW_TEMPLATE_VARIABLES_RESOLVED] ${JSON.stringify({
       nodeId: node.id,
       templateName,
-      variablesCount: variables.length,
+      variablesCount: resolvedTemplate.variables.length,
+      headerVariablesCount: resolvedTemplate.headerVariables.length,
+      buttonValuesCount: resolvedTemplate.buttonValues.length,
     })}\n`
   );
   await sendTemplateMessageForUser({
@@ -218,7 +427,9 @@ async function sendTemplateNode({
     template,
     to: contact.phone,
     languageCode,
-    variables,
+    variables: resolvedTemplate.variables,
+    headerVariables: resolvedTemplate.headerVariables,
+    buttonValues: resolvedTemplate.buttonValues,
     sentBy: { kind: "system" },
     source: "automation",
     senderType: "automation",
@@ -226,9 +437,67 @@ async function sendTemplateNode({
   });
 }
 
+async function testMediaNodeSource({
+  workspaceId,
+  nodeId,
+  config,
+  sampleContext = {},
+  sampleContact = {},
+  sampleAttributes = {},
+}) {
+  const node = {
+    id: nodeId || "test_media_node",
+    type: "media",
+    config: config || {},
+  };
+  const session = {
+    _id: null,
+    context: sampleContext || {},
+  };
+  const contact = {
+    ...(sampleContact || {}),
+    attributes: sampleAttributes || sampleContact?.attributes || {},
+  };
+
+  try {
+    const source = await resolveMediaSource({
+      workspaceId,
+      contact,
+      session,
+      node,
+    });
+    return {
+      ok: true,
+      mediaType: source.mediaType,
+      sourceType: source.sourceType,
+      resolvedUrl: source.url,
+      fileInfo: {
+        mimeType: source.asset?.mimeType || null,
+        sizeBytes: source.asset?.sizeBytes || null,
+        filename:
+          source.asset?.originalName ||
+          plainText(config?.filename) ||
+          null,
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      code:
+        error?.details?.code ||
+        error?.code ||
+        "MEDIA_VALIDATION_FAILED",
+      message: String(error?.message || "Media validation failed"),
+    };
+  }
+}
+
 module.exports = {
   sendTextButtonsNode,
   sendListNode,
   sendMediaNode,
   sendTemplateNode,
+  resolveMediaSource,
+  resolveTemplateRuntimeValues,
+  testMediaNodeSource,
 };

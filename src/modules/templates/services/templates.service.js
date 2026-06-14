@@ -55,6 +55,53 @@ function connectionMetadata(connection, staleTemplateCount = 0, templateCount = 
   };
 }
 
+function placeholderIndexes(text) {
+  const indexes = new Set();
+  for (const match of String(text || "").matchAll(/\{\{(\d+)\}\}/g)) {
+    const index = Number(match[1]);
+    if (Number.isFinite(index) && index > 0) indexes.add(index);
+  }
+  return Array.from(indexes).sort((a, b) => a - b);
+}
+
+function buildVariableSchema(components = []) {
+  const schema = [];
+  for (const component of components || []) {
+    const type = String(component?.type || "").toLowerCase();
+    if (type === "header") {
+      placeholderIndexes(component?.text).forEach((index) =>
+        schema.push({ component: "header", index })
+      );
+    }
+    if (type === "body") {
+      placeholderIndexes(component?.text).forEach((index) =>
+        schema.push({ component: "body", index })
+      );
+    }
+    if (type === "buttons") {
+      (component?.buttons || []).forEach((button, buttonIndex) => {
+        placeholderIndexes(button?.url).forEach((index) =>
+          schema.push({ component: "button", index, buttonIndex })
+        );
+      });
+    }
+  }
+  return schema;
+}
+
+function serializeApprovedTemplate(template) {
+  const doc = template?.toObject ? template.toObject() : template;
+  return {
+    id: String(doc._id || doc.id || ""),
+    name: doc.name,
+    languageCode: doc.languageCode || doc.language || "en",
+    category: doc.category,
+    status: doc.status,
+    components: doc.components || [],
+    variableSchema: buildVariableSchema(doc.components || []),
+  };
+}
+
 function isMetaTemplateNotFound(err) {
   const metaError = err?.metaDebug?.meta || err?.metaDebug?.raw?.error || err?.response?.data?.error || {};
   const code = Number(metaError?.code);
@@ -176,6 +223,23 @@ async function listTemplates(req) {
     success: true,
     templates,
     metadata: connectionMetadata(connection, staleTemplateCount, templates.length),
+  };
+}
+
+async function listApprovedTemplates(req) {
+  const connection = await resolveActiveConnection(req.workspace.id);
+  if (!connection) {
+    return { success: true, templates: [], metadata: connectionMetadata(null) };
+  }
+  const templates = await templatesRepository.listTemplates({
+    workspaceId: req.workspace.id,
+    wabaId: connection.wabaId,
+    status: "approved",
+  });
+  return {
+    success: true,
+    templates: templates.map(serializeApprovedTemplate),
+    metadata: connectionMetadata(connection, 0, templates.length),
   };
 }
 
@@ -413,6 +477,7 @@ module.exports = {
   createTemplate,
   deleteTemplate,
   getTemplate,
+  listApprovedTemplates,
   listTemplates,
   submitForApproval,
   syncMetaTemplates,

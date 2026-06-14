@@ -60,6 +60,7 @@ const FlowRuntimeSettingsSchema = new mongoose.Schema(
       trim: true,
       default: "Please choose one of the available options.",
     },
+    staticVariables: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
   },
   { _id: false }
 );
@@ -88,6 +89,22 @@ const FlowSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "FlowVersion",
       default: null,
+    },
+    draftHash: { type: String, default: null },
+    lastValidatedDraftHash: { type: String, default: null },
+    lastValidationStatus: {
+      type: String,
+      enum: ["stale", "passed", "failed"],
+      default: "stale",
+    },
+    lastValidatedAt: { type: Date, default: null },
+    lastValidationErrors: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
+    },
+    lastValidationWarnings: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
     },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },

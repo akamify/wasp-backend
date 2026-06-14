@@ -1,6 +1,5 @@
 const flowSessionRepository = require("@modules/flows/repositories/flowSession.repository");
 const {
-  resolveVariables,
   defaultEdge,
   edgeForHandle,
   nodeById,
@@ -327,6 +326,7 @@ async function executeSession({
       flow,
       workspace,
       node,
+      static: version.runtimeSettings?.staticVariables || {},
     });
     if (node.type === "start") {
       const edge = defaultEdge(version, node.id);
@@ -352,7 +352,7 @@ async function executeSession({
         await sendText({
           workspaceId,
           contact,
-          text: resolveVariables(node.config?.text, scope),
+          text: node.config?.text,
           businessInitiated,
           inboundMessage,
         });
@@ -388,7 +388,7 @@ async function executeSession({
         await sendText({
           workspaceId,
           contact,
-          text: resolveVariables(node.config?.question, scope),
+          text: node.config?.question,
           businessInitiated,
           inboundMessage,
         });
@@ -482,20 +482,63 @@ async function executeSession({
     }
 
     if (node.type === "media") {
+      let mediaSource;
       try {
-        await sendMediaNode({
+        mediaSource = await sendMediaNode({
           workspaceId,
           contact,
+          session,
           node,
-          scope,
           businessInitiated,
           inboundMessage,
         });
       } catch (error) {
+        const failure = sendFailureData(error);
+        flowLog("[FLOW_MEDIA_SEND_FAILED]", {
+          sessionId: String(session._id),
+          nodeId: node.id,
+          mediaType: node.config?.mediaType || null,
+          reason: failure.reason,
+          metaError: failure.metaError,
+          walletError: failure.walletError,
+        });
+        await writeEvent({
+          workspaceId,
+          session,
+          eventType: "media_failed",
+          nodeId: node.id,
+          data: failure,
+        });
+        const failureEdge = edgeForHandle(version, node.id, "failure");
+        if (failureEdge) {
+          session = await moveSession({
+            workspaceId,
+            session,
+            nodeId: failureEdge.target,
+            updates: {
+              context: {
+                ...(session.context || {}),
+                lastMediaError: failure.reason,
+              },
+            },
+          });
+          continue;
+        }
         return failPromptSend({ workspaceId, session, node, error });
       }
-      const edge = defaultEdge(version, node.id);
-      if (node.config?.autoContinue === true && edge) {
+      await writeEvent({
+        workspaceId,
+        session,
+        eventType: "media_sent",
+        nodeId: node.id,
+        data: {
+          mediaType: mediaSource?.mediaType || node.config?.mediaType || null,
+          sourceType: mediaSource?.sourceType || node.config?.sourceType || null,
+        },
+      });
+      const successEdge = edgeForHandle(version, node.id, "success");
+      const edge = successEdge || (node.config?.autoContinue === true ? defaultEdge(version, node.id) : null);
+      if (edge) {
         session = await moveSession({
           workspaceId,
           session,
@@ -619,9 +662,7 @@ async function executeSession({
     }
 
     if (node.type === "end") {
-      const endMessage = String(
-        resolveVariables(node.config?.message || "", scope)
-      ).trim();
+      const endMessage = String(node.config?.message || "").trim();
       if (endMessage) {
         try {
           await sendText({
@@ -894,6 +935,7 @@ async function continueSession({
             flow,
             workspace,
             node: waitingNode,
+            static: version.runtimeSettings?.staticVariables || {},
           }),
           version,
           businessInitiated: false,
@@ -938,5 +980,4 @@ async function continueSession({
 module.exports = {
   executeSession,
   continueSession,
-  resolveVariables,
 };

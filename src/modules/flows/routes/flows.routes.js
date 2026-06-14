@@ -22,6 +22,20 @@ router.get(
   validate(flowsValidation.listFlowsQuerySchema, "query"),
   asyncHandler(flowsController.listFlows)
 );
+router.post(
+  "/test-api-request",
+  auth,
+  requireWorkspace,
+  validate(flowsValidation.testApiRequestSchema),
+  asyncHandler(flowsController.testApiRequest)
+);
+router.post(
+  "/test-media-node",
+  auth,
+  requireWorkspace,
+  validate(flowsValidation.testMediaNodeSchema),
+  asyncHandler(flowsController.testMediaNode)
+);
 router.get(
   "/:flowId",
   auth,

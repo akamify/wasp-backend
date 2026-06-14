@@ -7,6 +7,7 @@ const VALID_TRIGGER_TYPES = new Set([
 const {
   normalizeRuntimeSettings,
 } = require("@modules/flows/constants/flowRuntimeSettings");
+const { validatePublicMediaUrl } = require("@shared/utils/mediaValidation");
 const VALID_MATCH_MODES = new Set(["exact", "contains", "regex"]);
 const VALID_NODE_TYPES = new Set([
   "start",
@@ -30,6 +31,18 @@ const VALID_HTTP_METHODS = new Set([
   "PATCH",
   "DELETE",
 ]);
+const VALID_RESPONSE_MAPPING_TYPES = new Set(["string", "number", "boolean", "url", "json"]);
+const VALID_MEDIA_TYPES = new Set(["image", "video", "document", "audio"]);
+const VALID_MEDIA_SOURCE_TYPES = new Set(["upload", "url", "api_context", "contact_attribute"]);
+const TEMPLATE_TOKEN_PATTERN = /\{\{\s*[^}]+\s*\}\}/;
+const SENSITIVE_TEMPLATE_KEY_PATTERN = /(token|secret|password|apikey|api_key|authorization)/i;
+const FORBIDDEN_API_HEADERS = new Set([
+  "host",
+  "content-length",
+  "connection",
+  "transfer-encoding",
+]);
+const SENSITIVE_API_CONTEXT_KEY_PATTERN = /(token|secret|password|apikey|api_key|authorization)/i;
 
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
@@ -55,10 +68,26 @@ function validateRuntimeSettings(runtimeSettings, errors) {
     );
   }
   const expiry = runtimeSettings?.onSessionExpired || {};
+  if (TEMPLATE_TOKEN_PATTERN.test(String(runtimeSettings?.invalidReplyMessage || ""))) {
+    addIssue(
+      errors,
+      "VARIABLES_ONLY_ALLOWED_IN_TEMPLATE",
+      "Variables are only supported in WhatsApp Template Message nodes",
+      { field: "runtimeSettings.invalidReplyMessage" }
+    );
+  }
   if (expiry.action === "text" && !isNonEmptyString(expiry.textMessage)) {
     addIssue(errors, "EXPIRY_TEXT_REQUIRED", "Expiry text message is required", {
       field: "runtimeSettings.onSessionExpired.textMessage",
     });
+  }
+  if (expiry.action === "text" && TEMPLATE_TOKEN_PATTERN.test(String(expiry.textMessage || ""))) {
+    addIssue(
+      errors,
+      "VARIABLES_ONLY_ALLOWED_IN_TEMPLATE",
+      "Variables are only supported in WhatsApp Template Message nodes",
+      { field: "runtimeSettings.onSessionExpired.textMessage" }
+    );
   }
   if (expiry.action === "template") {
     if (!isNonEmptyString(expiry.templateName)) {
@@ -77,6 +106,13 @@ function validateRuntimeSettings(runtimeSettings, errors) {
         { field: "runtimeSettings.onSessionExpired.languageCode" }
       );
     }
+    validateTemplateMappings(
+      {
+        id: "session_expiry_template",
+        config: expiry,
+      },
+      errors
+    );
   }
 }
 
@@ -90,6 +126,104 @@ function validateRequiredString({
 }) {
   if (!isNonEmptyString(value)) {
     addIssue(errors, code, message, { nodeId, field });
+  }
+}
+
+function isValidContextKey(value) {
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(String(value || ""));
+}
+
+function isVariableSafeUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return false;
+  const sample = raw.replace(/\{\{\s*[^}]+\s*\}\}/g, "sample");
+  try {
+    const parsed = new URL(sample);
+    return ["http:", "https:"].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function isValidJsonString(value) {
+  if (value === undefined || value === null || value === "") return true;
+  if (typeof value !== "string") return true;
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasTemplateToken(value) {
+  return TEMPLATE_TOKEN_PATTERN.test(String(value || ""));
+}
+
+function addTemplateOnlyVariableError(errors, nodeId, field) {
+  addIssue(
+    errors,
+    "VARIABLES_ONLY_ALLOWED_IN_TEMPLATE",
+    "Variables are only supported in WhatsApp Template Message nodes",
+    { nodeId, field }
+  );
+}
+
+function validateNoVariables(errors, nodeId, field, value) {
+  if (hasTemplateToken(value)) addTemplateOnlyVariableError(errors, nodeId, field);
+}
+
+function validateNoVariablesInList(errors, node) {
+  const config = node.config || {};
+  validateNoVariables(errors, node.id, "config.text", config.text);
+  validateNoVariables(errors, node.id, "config.buttonText", config.buttonText);
+  for (const [sectionIndex, section] of (config.sections || []).entries()) {
+    validateNoVariables(
+      errors,
+      node.id,
+      `config.sections.${sectionIndex}.title`,
+      section?.title
+    );
+    for (const [rowIndex, row] of (section?.rows || []).entries()) {
+      validateNoVariables(
+        errors,
+        node.id,
+        `config.sections.${sectionIndex}.rows.${rowIndex}.title`,
+        row?.title
+      );
+      validateNoVariables(
+        errors,
+        node.id,
+        `config.sections.${sectionIndex}.rows.${rowIndex}.description`,
+        row?.description
+      );
+    }
+  }
+}
+
+function templateMappingRows(config) {
+  const components = Array.isArray(config?.templateConfig?.components)
+    ? config.templateConfig.components
+    : Array.isArray(config?.components)
+      ? config.components
+      : [];
+  return components.flatMap((component) =>
+    Array.isArray(component?.variables) ? component.variables : []
+  );
+}
+
+function validateTemplateMappings(node, errors) {
+  const config = node?.config || {};
+  for (const mapping of templateMappingRows(config)) {
+    const sourceKey = String(mapping?.sourceKey || mapping?.value || "").trim();
+    if (sourceKey && SENSITIVE_TEMPLATE_KEY_PATTERN.test(sourceKey)) {
+      addIssue(
+        errors,
+        "SENSITIVE_VALUE_NOT_ALLOWED_IN_TEMPLATE",
+        "Sensitive token, secret, password, API key, or authorization values cannot be mapped to customer-visible template variables",
+        { nodeId: node.id, field: "config.templateConfig.components.variables.sourceKey" }
+      );
+    }
   }
 }
 
@@ -317,6 +451,7 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
   if (!VALID_NODE_TYPES.has(node?.type)) return;
 
   if (node.type === "text") {
+    validateNoVariables(errors, nodeId, "config.text", config.text);
     validateRequiredString({
       errors,
       value: config.text,
@@ -328,10 +463,20 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
   }
 
   if (node.type === "text_buttons") {
+    validateNoVariables(errors, nodeId, "config.text", config.text);
+    for (const [index, button] of (config.buttons || []).entries()) {
+      validateNoVariables(
+        errors,
+        nodeId,
+        `config.buttons.${index}.title`,
+        button?.title
+      );
+    }
     validateTextButtonsNode(node, outgoingEdges, fallbackNodeId, errors);
   }
 
   if (node.type === "ask_question") {
+    validateNoVariables(errors, nodeId, "config.question", config.question);
     validateRequiredString({
       errors,
       value: config.question,
@@ -350,15 +495,34 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
     }
   }
 
-  if (node.type === "list") validateListNode(node, errors);
+  if (node.type === "list") {
+    validateNoVariablesInList(errors, node);
+    validateListNode(node, errors);
+  }
 
   if (node.type === "media") {
-    if (!["image", "video", "document", "audio"].includes(config.mediaType)) {
+    const sourceType = String(
+      config.sourceType || (config.mediaAssetId ? "upload" : "url")
+    ).trim();
+    const staticUrl = config.url || config.mediaUrl;
+    validateNoVariables(errors, nodeId, "config.mediaUrl", config.mediaUrl);
+    validateNoVariables(errors, nodeId, "config.url", config.url);
+    validateNoVariables(errors, nodeId, "config.caption", config.caption);
+    validateNoVariables(errors, nodeId, "config.filename", config.filename);
+    if (!VALID_MEDIA_TYPES.has(config.mediaType)) {
       addIssue(
         errors,
         "MEDIA_TYPE_INVALID",
         "Media type must be image, video, document, or audio",
         { nodeId, field: "config.mediaType" }
+      );
+    }
+    if (!VALID_MEDIA_SOURCE_TYPES.has(sourceType)) {
+      addIssue(
+        errors,
+        "MEDIA_SOURCE_TYPE_INVALID",
+        "Media source type must be upload, url, api_context, or contact_attribute",
+        { nodeId, field: "config.sourceType" }
       );
     }
     validateRequiredString({
@@ -369,14 +533,60 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
       nodeId,
       field: "config.mediaType",
     });
-    validateRequiredString({
-      errors,
-      value: config.mediaUrl,
-      code: "MEDIA_URL_REQUIRED",
-      message: "Media node requires config.mediaUrl",
-      nodeId,
-      field: "config.mediaUrl",
-    });
+    if (sourceType === "upload") {
+      validateRequiredString({
+        errors,
+        value: config.mediaAssetId,
+        code: "MEDIA_ASSET_REQUIRED",
+        message: "Upload media source requires a media asset",
+        nodeId,
+        field: "config.mediaAssetId",
+      });
+    }
+    if (sourceType === "url") {
+      validateRequiredString({
+        errors,
+        value: staticUrl,
+        code: "MEDIA_URL_REQUIRED",
+        message: "Static URL media source requires a public media URL",
+        nodeId,
+        field: "config.url",
+      });
+      if (isNonEmptyString(staticUrl)) {
+        try {
+          validatePublicMediaUrl(staticUrl);
+        } catch (error) {
+          addIssue(
+            errors,
+            error?.details?.code || "MEDIA_URL_INVALID",
+            error?.message || "Media URL is not allowed",
+            { nodeId, field: "config.url" }
+          );
+        }
+      }
+    }
+    if (sourceType === "api_context" || sourceType === "contact_attribute") {
+      validateRequiredString({
+        errors,
+        value: config.sourceKey,
+        code: "MEDIA_SOURCE_KEY_REQUIRED",
+        message: "Dynamic media source requires a source key",
+        nodeId,
+        field: "config.sourceKey",
+      });
+    }
+    if (
+      !outgoingEdges.some(
+        (edge) => String(edge.sourceHandle || "").trim().toLowerCase() === "failure"
+      )
+    ) {
+      addIssue(
+        warnings,
+        "MEDIA_FAILURE_EDGE_RECOMMENDED",
+        "Add a failure edge so the flow can continue if media cannot be sent",
+        { nodeId, field: "edges" }
+      );
+    }
   }
 
   if (node.type === "template") {
@@ -408,6 +618,7 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
         { nodeId, field: "config.variables" }
       );
     }
+    validateTemplateMappings(node, errors);
   }
 
   if (
@@ -457,6 +668,7 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
   }
 
   if (node.type === "request_intervention") {
+    validateNoVariables(errors, nodeId, "config.message", config.message);
     if (
       config.message !== undefined &&
       config.message !== null &&
@@ -483,6 +695,10 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
     }
   }
 
+  if (node.type === "end") {
+    validateNoVariables(errors, nodeId, "config.message", config.message);
+  }
+
   if (node.type === "api_request") {
     const method = String(config.method || "").toUpperCase();
     if (!VALID_HTTP_METHODS.has(method)) {
@@ -501,6 +717,14 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
       nodeId,
       field: "config.url",
     });
+    if (isNonEmptyString(config.url) && !isVariableSafeUrl(config.url)) {
+      addIssue(
+        errors,
+        "API_URL_INVALID",
+        "API request URL must be a valid http/https URL. Variable placeholders are allowed inside the URL.",
+        { nodeId, field: "config.url" }
+      );
+    }
     if (
       config.timeoutMs !== undefined &&
       (!Number.isInteger(config.timeoutMs) ||
@@ -526,6 +750,30 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
         "API request headers must be an object",
         { nodeId, field: "config.headers" }
       );
+    } else if (config.headers && typeof config.headers === "object") {
+      for (const headerName of Object.keys(config.headers)) {
+        if (FORBIDDEN_API_HEADERS.has(String(headerName || "").trim().toLowerCase())) {
+          addIssue(
+            errors,
+            "API_HEADER_NOT_ALLOWED",
+            `API request header '${headerName}' is not allowed`,
+            { nodeId, field: "config.headers" }
+          );
+        }
+      }
+    }
+    if (
+      config.queryParams !== undefined &&
+      (!config.queryParams ||
+        typeof config.queryParams !== "object" ||
+        Array.isArray(config.queryParams))
+    ) {
+      addIssue(
+        errors,
+        "API_QUERY_PARAMS_INVALID",
+        "API request queryParams must be an object",
+        { nodeId, field: "config.queryParams" }
+      );
     }
     if (
       config.responseMapping !== undefined &&
@@ -538,6 +786,52 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
         "API_RESPONSE_MAPPING_INVALID",
         "API responseMapping must be an object",
         { nodeId, field: "config.responseMapping" }
+      );
+    } else if (config.responseMapping && typeof config.responseMapping === "object") {
+      for (const [contextKey, mapping] of Object.entries(config.responseMapping)) {
+        if (!isValidContextKey(contextKey)) {
+          addIssue(
+            errors,
+            "API_RESPONSE_MAPPING_KEY_INVALID",
+            `Response mapping key '${contextKey}' is not a valid context key`,
+            { nodeId, field: "config.responseMapping" }
+          );
+        }
+        if (SENSITIVE_API_CONTEXT_KEY_PATTERN.test(String(contextKey || ""))) {
+          addIssue(
+            errors,
+            "API_RESPONSE_MAPPING_KEY_SENSITIVE",
+            `Response mapping key '${contextKey}' is sensitive and cannot be stored in flow context`,
+            { nodeId, field: "config.responseMapping" }
+          );
+        }
+        if (typeof mapping === "object" && mapping !== null && !Array.isArray(mapping)) {
+          if (!isNonEmptyString(mapping.path)) {
+            addIssue(
+              errors,
+              "API_RESPONSE_MAPPING_PATH_REQUIRED",
+              `Response mapping '${contextKey}' requires a path`,
+              { nodeId, field: "config.responseMapping.path" }
+            );
+          }
+          if (mapping.type && !VALID_RESPONSE_MAPPING_TYPES.has(mapping.type)) {
+            addIssue(
+              errors,
+              "API_RESPONSE_MAPPING_TYPE_INVALID",
+              `Response mapping '${contextKey}' has an invalid type`,
+              { nodeId, field: "config.responseMapping.type" }
+            );
+          }
+        }
+      }
+    }
+
+    if (["POST", "PUT", "PATCH"].includes(method) && !isValidJsonString(config.body)) {
+      addIssue(
+        errors,
+        "API_BODY_JSON_INVALID",
+        "API request body must be valid JSON for POST, PUT, and PATCH",
+        { nodeId, field: "config.body" }
       );
     }
 

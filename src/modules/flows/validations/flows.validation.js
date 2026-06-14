@@ -33,10 +33,17 @@ const runtimeSettingsSchema = Joi.object({
       otherwise: Joi.optional(),
     }),
     variables: Joi.array().items(Joi.string().max(4096)).optional(),
+    templateConfig: Joi.object({
+      components: Joi.array().items(Joi.object().unknown(true)).optional(),
+    }).unknown(true).optional(),
   }).optional(),
   allowKeywordRestartWhenWaiting: Joi.boolean().optional(),
   maxInvalidReplies: Joi.number().integer().min(1).max(10).optional(),
   invalidReplyMessage: Joi.string().trim().max(1000).allow("").optional(),
+  staticVariables: Joi.object().pattern(
+    Joi.string().trim().min(1).max(100),
+    Joi.string().allow("").max(4096)
+  ).optional(),
 }).optional();
 
 const createFlowSchema = Joi.object({
@@ -72,10 +79,30 @@ const startFlowSchema = Joi.object({
   force: Joi.boolean().default(false),
 });
 
+const testApiRequestSchema = Joi.object({
+  flowId: Joi.string().trim().allow("", null).optional(),
+  nodeId: Joi.string().trim().allow("", null).optional(),
+  config: Joi.object().unknown(true).required(),
+  sampleContext: Joi.object().unknown(true).default({}),
+  sampleContact: Joi.object().unknown(true).default({}),
+  sampleAttributes: Joi.object().unknown(true).default({}),
+});
+
+const testMediaNodeSchema = Joi.object({
+  flowId: Joi.string().trim().allow("", null).optional(),
+  nodeId: Joi.string().trim().allow("", null).optional(),
+  config: Joi.object().unknown(true).required(),
+  sampleContext: Joi.object().unknown(true).default({}),
+  sampleContact: Joi.object().unknown(true).default({}),
+  sampleAttributes: Joi.object().unknown(true).default({}),
+});
+
 module.exports = {
   createFlowSchema,
   updateFlowMetadataSchema,
   saveDraftSchema,
   listFlowsQuerySchema,
   startFlowSchema,
+  testApiRequestSchema,
+  testMediaNodeSchema,
 };

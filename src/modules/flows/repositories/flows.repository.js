@@ -1,5 +1,6 @@
 const { Flow } = require("@infra/database/Flow");
 const { FlowVersion } = require("@infra/database/FlowVersion");
+const { Template } = require("@infra/database/Template");
 
 async function createFlow(data) {
   return Flow.create(data);
@@ -106,15 +107,18 @@ async function updateFlowStatus({
   workspaceId,
   flowId,
   expectedStatuses,
+  expectedDraftHash,
   updates,
 }) {
+  const filter = {
+    _id: flowId,
+    workspaceId,
+    deletedAt: null,
+    status: { $in: expectedStatuses },
+  };
+  if (expectedDraftHash) filter.draftHash = expectedDraftHash;
   return Flow.findOneAndUpdate(
-    {
-      _id: flowId,
-      workspaceId,
-      deletedAt: null,
-      status: { $in: expectedStatuses },
-    },
+    filter,
     { $set: updates },
     { new: true, runValidators: true }
   );
@@ -125,6 +129,19 @@ async function listFlowVersions({ workspaceId, flowId }) {
     versionNumber: -1,
     createdAt: -1,
   });
+}
+
+async function findApprovedTemplate({ workspaceId, name, languageCode }) {
+  return Template.findOne({
+    workspaceId,
+    name,
+    languageCode,
+    status: "approved",
+    isActive: { $ne: false },
+    deletedAt: null,
+  })
+    .select("_id")
+    .lean();
 }
 
 module.exports = {
@@ -142,4 +159,5 @@ module.exports = {
   deleteFlowVersion,
   updateFlowStatus,
   listFlowVersions,
+  findApprovedTemplate,
 };

@@ -9,6 +9,10 @@ async function listTemplates(req, res) {
   res.json(await templatesService.listTemplates(req));
 }
 
+async function listApprovedTemplates(req, res) {
+  res.json(await templatesService.listApprovedTemplates(req));
+}
+
 async function getTemplate(req, res) {
   res.json(await templatesService.getTemplate(req));
 }
@@ -35,6 +39,7 @@ async function syncMetaTemplates(req, res) {
 
 module.exports = {
   createTemplate,
+  listApprovedTemplates,
   listTemplates,
   getTemplate,
   updateTemplate,

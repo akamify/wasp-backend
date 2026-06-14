@@ -7,10 +7,12 @@ const DEFAULT_FLOW_RUNTIME_SETTINGS = Object.freeze({
     templateName: "",
     languageCode: "en",
     variables: Object.freeze([]),
+    templateConfig: Object.freeze({ components: Object.freeze([]) }),
   }),
   allowKeywordRestartWhenWaiting: true,
   maxInvalidReplies: 2,
   invalidReplyMessage: "Please choose one of the available options.",
+  staticVariables: Object.freeze({}),
 });
 
 function normalizeRuntimeSettings(value) {
@@ -43,6 +45,12 @@ function normalizeRuntimeSettings(value) {
       variables: Array.isArray(expiry.variables)
         ? expiry.variables.map((item) => String(item))
         : [],
+      templateConfig:
+        expiry.templateConfig &&
+        typeof expiry.templateConfig === "object" &&
+        !Array.isArray(expiry.templateConfig)
+          ? expiry.templateConfig
+          : { components: [] },
     },
     allowKeywordRestartWhenWaiting:
       settings.allowKeywordRestartWhenWaiting !== false,
@@ -56,6 +64,17 @@ function normalizeRuntimeSettings(value) {
       settings.invalidReplyMessage ||
         DEFAULT_FLOW_RUNTIME_SETTINGS.invalidReplyMessage
     ).trim(),
+    staticVariables:
+      settings.staticVariables &&
+      typeof settings.staticVariables === "object" &&
+      !Array.isArray(settings.staticVariables)
+        ? Object.fromEntries(
+            Object.entries(settings.staticVariables).map(([key, value]) => [
+              String(key || "").trim(),
+              String(value ?? ""),
+            ]).filter(([key]) => key)
+          )
+        : {},
   };
 }
 

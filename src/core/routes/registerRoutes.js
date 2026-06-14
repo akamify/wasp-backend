@@ -44,6 +44,7 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/credentials`, require("@core/routes/credentialRoutes"));
   app.use(`${basePath}/templates`, require("@core/routes/templateRoutes"));
   app.use(`${basePath}/messages`, require("@core/routes/messageRoutes"));
+  app.use(`${basePath}/media`, require("@modules/media/routes/media.routes"));
   app.use(`${basePath}/analytics`, require("@core/routes/analyticsRoutes"));
   app.use(`${basePath}/reports`, require("@core/routes/reportsRoutes"));
   app.use(`${basePath}/links`, require("@core/routes/linkRoutes"));

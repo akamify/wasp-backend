@@ -74,10 +74,10 @@ async function requestHandover({
   session,
   contact,
   node,
-  scope,
+  businessInitiated = false,
 }) {
   const config = node.config || {};
-  const message = resolveVariables(config.message, scope);
+  const message = config.message;
   if (String(message || "").trim()) {
     await sendText({
       workspaceId,
