@@ -10,6 +10,12 @@ const { HttpError } = require("@shared/utils/httpError");
 const { publishWorkspaceEvent } = require("@shared/services/realtimeService");
 const { getCrmLeadAssignmentQueue } = require("@infra/queues/crmLeadAssignment.queue");
 const { Workspace } = require("@infra/database/Workspace");
+const {
+  normalizeWhatsAppWebhookMessages,
+} = require("@shared/services/whatsappWebhookNormalizer");
+const {
+  processInboundMessage,
+} = require("@modules/flows/services/flowInbound.service");
 
 const WEBHOOK_DEBUG_LIMIT = 40;
 const webhookDebugEventsByWorkspace = new Map();
@@ -451,15 +457,15 @@ async function receive(req, res) {
       }
 
       const messages = Array.isArray(value?.messages) ? value.messages : [];
-      const webhookContacts = Array.isArray(value?.contacts) ? value.contacts : [];
-      const nameByWaId = new Map(
-        webhookContacts
-          .map((contact) => {
-            const waId = normalizePhone(contact?.wa_id);
-            const profileName = String(contact?.profile?.name || "").trim();
-            return waId && profileName ? [waId, profileName] : null;
-          })
-          .filter(Boolean)
+      const normalizedFlowMessages = normalizeWhatsAppWebhookMessages({
+        value,
+        workspaceId: workspaceIdRaw,
+      });
+      const normalizedFlowMessageById = new Map(
+        normalizedFlowMessages.map((message) => [
+          message.whatsappMessageId,
+          message,
+        ])
       );
       if (messages.length) {
         pushWebhookDebugEvent(workspaceIdRaw, {
@@ -482,6 +488,23 @@ async function receive(req, res) {
         const waId = m.id;
         const from = normalizePhone(m.from);
         if (!waId || !from) continue;
+
+        const normalizedFlowMessage = normalizedFlowMessageById.get(
+          String(waId)
+        );
+        if (normalizedFlowMessage) {
+          try {
+            await processInboundMessage(normalizedFlowMessage);
+          } catch (flowInboundError) {
+            console.warn("[webhook] flow inbound persistence failed", {
+              workspaceId: workspaceIdRaw,
+              wamidMasked: maskWamid(waId),
+              error:
+                flowInboundError?.message ||
+                "Unknown flow inbound persistence error",
+            });
+          }
+        }
 
         const ts = asDateFromSeconds(m.timestamp);
         const resolvedWabaId = wabaIdFromEntry || tenant?.wabaId || tenant?.businessAccountIdPlain || "";
@@ -594,7 +617,6 @@ async function receive(req, res) {
             direction: "inbound",
             preview: text.slice(0, 160),
             occurredAt: ts,
-            name: nameByWaId.get(from) || undefined,
           });
           console.info("[webhook] inbound message saved", {
             workspaceId: workspaceIdRaw,

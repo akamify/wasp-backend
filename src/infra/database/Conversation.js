@@ -15,6 +15,13 @@ const ConversationSchema = new mongoose.Schema(
     lastInboundAt: { type: Date, index: true, default: null },
     lastMessagePreview: { type: String },
     unreadCount: { type: Number, default: 0 },
+    automationPausedAt: { type: Date, default: null, index: true },
+    automationPauseReason: { type: String, trim: true, default: null },
+    automationPausedByFlowSessionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FlowSession",
+      default: null,
+    },
 
     // CRM ownership + locking + SLA/unread (additive; preserves existing inbox behavior).
     assignmentVersion: { type: Number, default: 0 },

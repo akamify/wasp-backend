@@ -184,10 +184,54 @@ async function touchContactFromMessage({ userId, wabaId, phoneNumberId, phone, d
   });
 }
 
+async function resolveInboundContact({
+  workspaceId,
+  wabaId,
+  phoneNumberId,
+  phone,
+  profileName,
+  occurredAt,
+  preview,
+}) {
+  const normalizedPhone = assertNormalizedPhone(phone);
+  let contact = await upsertContactForUser({
+    userId: workspaceId,
+    wabaId: wabaId || null,
+    phoneNumberId,
+    phone: normalizedPhone,
+    patch: {
+      lastMessagePreview: preview || "",
+      lastInboundAt: occurredAt || new Date(),
+      source: "inbound",
+    },
+    createIfMissing: true,
+  });
+
+  const normalizedProfileName = String(profileName || "").trim();
+  if (normalizedProfileName && !String(contact?.name || "").trim()) {
+    contact = await Contact.findOneAndUpdate(
+      {
+        _id: contact._id,
+        workspaceId,
+        $or: [
+          { name: { $exists: false } },
+          { name: null },
+          { name: "" },
+        ],
+      },
+      { $set: { name: normalizedProfileName } },
+      { new: true, runValidators: true }
+    ) || contact;
+  }
+
+  return contact;
+}
+
 module.exports = {
   normalizePhone,
   assertNormalizedPhone,
   upsertContactForUser,
   upsertContactMetadataForUser,
   touchContactFromMessage,
+  resolveInboundContact,
 };

@@ -26,7 +26,7 @@ async function findTenantByPhoneNumberId(phoneNumberId) {
 
   // Stable fast path for multi-tenant routing.
   const byPlain = await WhatsAppCredentials.findOne({ phoneNumberIdPlain: normalized, isActive: { $ne: false } }).select(
-    "workspaceId phoneNumberIdHash phoneNumberIdPlain"
+    "workspaceId phoneNumberIdHash phoneNumberIdPlain wabaId businessAccountIdPlain"
   );
   if (byPlain) return byPlain;
 
@@ -35,7 +35,7 @@ async function findTenantByPhoneNumberId(phoneNumberId) {
   try {
     const phoneNumberIdHash = hashForLookup(normalized);
     byHash = await WhatsAppCredentials.findOne({ phoneNumberIdHash, isActive: { $ne: false } }).select(
-      "workspaceId phoneNumberIdHash phoneNumberIdPlain"
+      "workspaceId phoneNumberIdHash phoneNumberIdPlain wabaId businessAccountIdPlain"
     );
   } catch {
     byHash = null;
@@ -46,7 +46,9 @@ async function findTenantByPhoneNumberId(phoneNumberId) {
   // NOTE: We intentionally do NOT filter by isValid here.
   // Webhooks should still route to the right workspace even if the connection is mid-setup
   // or a validation flag drifted.
-  const docs = await WhatsAppCredentials.find({ isActive: { $ne: false } }).select("workspaceId +phoneNumberIdEnc");
+  const docs = await WhatsAppCredentials.find({ isActive: { $ne: false } }).select(
+    "workspaceId wabaId businessAccountIdPlain +phoneNumberIdEnc"
+  );
   for (const doc of docs) {
     try {
       const raw = decryptString(doc.phoneNumberIdEnc);

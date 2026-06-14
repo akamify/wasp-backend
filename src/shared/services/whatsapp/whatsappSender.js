@@ -641,6 +641,47 @@ async function sendTextMessage({
   }
 }
 
+async function sendInteractiveListMessage({
+  accessToken,
+  phoneNumberId,
+  to,
+  text,
+  buttonText,
+  sections,
+  graphApiVersion,
+}) {
+  const baseURL = graphBaseUrl(graphApiVersion);
+  const client = axios.create({ baseURL, timeout: 20000 });
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text },
+      action: {
+        button: buttonText,
+        sections,
+      },
+    },
+  };
+
+  try {
+    const res = await client.post(`/${phoneNumberId}/messages`, payload, {
+      headers: authHeaders(accessToken),
+    });
+    return res.data;
+  } catch (err) {
+    throw Object.assign(new Error("Meta send interactive list failed"), {
+      metaDebug: toMetaErrorInfo(err, "send_interactive_list", {
+        method: "POST",
+        url: `/${phoneNumberId}/messages`,
+        body: payload,
+      }),
+    });
+  }
+}
+
 async function sendMediaMessage({
   accessToken,
   phoneNumberId,
@@ -758,6 +799,7 @@ module.exports = {
   fetchWabaName,
   sendTemplateMessage,
   sendTextMessage,
+  sendInteractiveListMessage,
   sendMediaMessage,
   markMessageAsRead,
   deleteMessageTemplate,

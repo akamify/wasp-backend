@@ -1,7 +1,12 @@
 const { Message } = require("@infra/database/Message");
 const { Conversation } = require("@infra/database/Conversation");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
-const { sendTemplateMessage, sendTextMessage, sendMediaMessage } = require("@shared/utils/whatsappSender");
+const {
+  sendTemplateMessage,
+  sendTextMessage,
+  sendInteractiveListMessage,
+  sendMediaMessage,
+} = require("@shared/utils/whatsappSender");
 const { touchConversation } = require("@shared/services/conversationService");
 const { touchContactFromMessage } = require("@shared/services/contactService");
 const { Campaign } = require("@infra/database/Campaign");
@@ -274,6 +279,94 @@ async function sendTextMessageForUser({ userId, to, text, sentBy }) {
   return { message, apiResponse };
 }
 
+async function sendInteractiveListMessageForUser({
+  userId,
+  to,
+  text,
+  buttonText,
+  sections,
+  sentBy,
+}) {
+  const creds = await getCredentialsForUser(userId);
+  let apiResponse;
+  try {
+    apiResponse = await sendInteractiveListMessage({
+      accessToken: creds.accessToken,
+      phoneNumberId: creds.phoneNumberId,
+      to,
+      text,
+      buttonText,
+      sections,
+      graphApiVersion: creds.graphApiVersion,
+    });
+  } catch (err) {
+    throwIfPhoneNotRegistered(err);
+    throw err;
+  }
+
+  const whatsappMessageId = Array.isArray(apiResponse?.messages)
+    ? apiResponse.messages[0]?.id
+    : undefined;
+  const waId = Array.isArray(apiResponse?.contacts)
+    ? apiResponse.contacts[0]?.wa_id
+    : undefined;
+  const resolvedPhone = waId ? String(waId) : to;
+  const now = new Date();
+  const message = await Message.create({
+    workspaceId: userId,
+    wabaId: creds.wabaId,
+    phoneNumberId: creds.phoneNumberId,
+    phone: resolvedPhone,
+    direction: "outbound",
+    whatsappMessageId,
+    status: "sent",
+    statusTimestamps: { acceptedAt: now, sentAt: now },
+    sentBy: sentBy || { kind: "system" },
+    text,
+    payload: {
+      to,
+      type: "interactive",
+      interactive: {
+        type: "list",
+        body: { text },
+        action: { button: buttonText, sections },
+      },
+    },
+  });
+
+  const conversation = await touchConversation({
+    userId,
+    wabaId: creds.wabaId,
+    phoneNumberId: creds.phoneNumberId,
+    phone: resolvedPhone,
+    lastMessageAt: now,
+    lastMessagePreview: text,
+    incrementUnread: false,
+  });
+  await touchContactFromMessage({
+    userId,
+    wabaId: creds.wabaId,
+    phoneNumberId: creds.phoneNumberId,
+    phone: resolvedPhone,
+    direction: "outbound",
+    preview: text,
+    occurredAt: now,
+  });
+  if (conversation) {
+    await Message.updateOne(
+      { _id: message._id },
+      {
+        $set: {
+          lastAssignedEmployeeId: conversation.assignedEmployeeId || null,
+          lastAssignedAt: conversation.assignedAt || null,
+          leadStatusSnapshot: conversation.leadStatus || null,
+        },
+      }
+    ).catch(() => {});
+  }
+  return { message, apiResponse };
+}
+
 async function sendMediaMessageForUser({
   userId,
   campaignId,
@@ -388,5 +481,10 @@ async function sendMediaMessageForUser({
   return { message, apiResponse };
 }
 
-module.exports = { sendTemplateMessageForUser, sendTextMessageForUser, sendMediaMessageForUser };
+module.exports = {
+  sendTemplateMessageForUser,
+  sendTextMessageForUser,
+  sendInteractiveListMessageForUser,
+  sendMediaMessageForUser,
+};
 
