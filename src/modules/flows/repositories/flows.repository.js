@@ -38,7 +38,7 @@ async function updateFlowById({ workspaceId, flowId, updates }) {
   return Flow.findOneAndUpdate(
     { _id: flowId, workspaceId, deletedAt: null, status: { $ne: "archived" } },
     { $set: updates },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 
@@ -53,7 +53,7 @@ async function softDeleteFlow({ workspaceId, flowId, actorId, deletedAt }) {
         updatedBy: actorId || null,
       },
     },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 
@@ -95,7 +95,7 @@ async function activateFlowVersion({ workspaceId, flowId, versionId }) {
   return FlowVersion.findOneAndUpdate(
     { _id: versionId, workspaceId, flowId },
     { $set: { status: "active" } },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 
@@ -120,7 +120,7 @@ async function updateFlowStatus({
   return Flow.findOneAndUpdate(
     filter,
     { $set: updates },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 

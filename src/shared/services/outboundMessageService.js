@@ -100,9 +100,10 @@ async function sendTemplateMessageForUser({
   source,
   senderType,
   triggeredByMessageId,
+  flowSessionId,
+  flowId,
+  nodeId,
 }) {
-  const creds = await getCredentialsForUser(userId);
-  assertTemplateBelongsToWaba(template, creds.wabaId);
   const resolvedLanguageCode = String(languageCode || template?.languageCode || template?.language || "").trim();
   const templateLanguageCode = String(template?.languageCode || template?.language || "").trim();
   if (!templateLanguageCode || resolvedLanguageCode !== templateLanguageCode) {
@@ -126,6 +127,9 @@ async function sendTemplateMessageForUser({
     headerVariables,
     otpCode,
   });
+
+  const creds = await getCredentialsForUser(userId);
+  assertTemplateBelongsToWaba(template, creds.wabaId);
 
   let apiResponse;
   try {
@@ -174,6 +178,9 @@ async function sendTemplateMessageForUser({
     source,
     senderType,
     triggeredByMessageId,
+    ...(flowSessionId ? { flowSessionId } : {}),
+    ...(flowId ? { flowId } : {}),
+    ...(nodeId ? { nodeId } : {}),
     whatsappMessageId: waMessageId,
     status: "sent",
     statusTimestamps: { acceptedAt: now, sentAt: now },
@@ -181,6 +188,9 @@ async function sendTemplateMessageForUser({
     sortAt: now,
     sentBy: sentBy || { kind: "owner" },
     text: previewText,
+    displayText: previewText,
+    previewText,
+    type: "template",
     payload: {
       to,
       template: {
@@ -203,7 +213,7 @@ async function sendTemplateMessageForUser({
     ? await Message.findOneAndUpdate(
         { _id: messageId, workspaceId: userId },
         { $set: messageData, $unset: { error: 1 } },
-        { new: true }
+        { returnDocument: "after" }
       )
     : await Message.create(messageData);
   if (!message) throw new Error("Outbound message reservation not found");
@@ -266,12 +276,16 @@ async function sendTemplateMessageForUser({
 
 async function sendTextMessageForUser({
   userId,
+  contactId,
   to,
   text,
   sentBy,
   source,
   senderType,
   triggeredByMessageId,
+  flowSessionId,
+  flowId,
+  nodeId,
 }) {
   const creds = await getCredentialsForUser(userId);
   let apiResponse;
@@ -297,11 +311,15 @@ async function sendTextMessageForUser({
     workspaceId: userId,
     wabaId: creds.wabaId,
     phoneNumberId: creds.phoneNumberId,
+    ...(contactId ? { contactId } : {}),
     phone: resolvedPhone,
     direction: "outbound",
     source,
     senderType,
     triggeredByMessageId,
+    ...(flowSessionId ? { flowSessionId } : {}),
+    ...(flowId ? { flowId } : {}),
+    ...(nodeId ? { nodeId } : {}),
     whatsappMessageId: waMessageId,
     status: "sent",
     statusTimestamps: { acceptedAt: now, sentAt: now },
@@ -309,6 +327,9 @@ async function sendTextMessageForUser({
     sortAt: now,
     sentBy: sentBy || { kind: "owner" },
     text,
+    displayText: text,
+    previewText: text,
+    type: "text",
     payload: { to, text },
   });
 
@@ -340,6 +361,7 @@ async function sendTextMessageForUser({
 
 async function sendInteractiveListMessageForUser({
   userId,
+  contactId,
   to,
   text,
   buttonText,
@@ -348,6 +370,9 @@ async function sendInteractiveListMessageForUser({
   source,
   senderType,
   triggeredByMessageId,
+  flowSessionId,
+  flowId,
+  nodeId,
 }) {
   const creds = await getCredentialsForUser(userId);
   let apiResponse;
@@ -378,11 +403,15 @@ async function sendInteractiveListMessageForUser({
     workspaceId: userId,
     wabaId: creds.wabaId,
     phoneNumberId: creds.phoneNumberId,
+    ...(contactId ? { contactId } : {}),
     phone: resolvedPhone,
     direction: "outbound",
     source,
     senderType,
     triggeredByMessageId,
+    ...(flowSessionId ? { flowSessionId } : {}),
+    ...(flowId ? { flowId } : {}),
+    ...(nodeId ? { nodeId } : {}),
     type: "interactive_list",
     whatsappMessageId,
     status: "sent",
@@ -391,6 +420,13 @@ async function sendInteractiveListMessageForUser({
     sortAt: now,
     sentBy: sentBy || { kind: "system" },
     text,
+    displayText: text,
+    previewText: text,
+    interactive: {
+      type: "list",
+      buttonText,
+      sections,
+    },
     payload: {
       to,
       type: "interactive",
@@ -401,11 +437,6 @@ async function sendInteractiveListMessageForUser({
       },
     },
   });
-  const mediaPreview =
-    normalizedType === "document"
-      ? String(filename || "Document")
-      : normalizedType.charAt(0).toUpperCase() + normalizedType.slice(1);
-
   const conversation = await touchConversation({
     userId,
     wabaId: creds.wabaId,
@@ -449,9 +480,10 @@ async function sendInteractiveButtonMessageForUser({
   source,
   senderType,
   triggeredByMessageId,
+  flowSessionId,
+  flowId,
+  nodeId,
 }) {
-  const creds = await getCredentialsForUser(userId);
-  const now = new Date();
   const normalizedButtons = (buttons || []).map((button) => ({
     id: String(button?.id || "").trim(),
     title: String(button?.title || "").trim(),
@@ -470,6 +502,8 @@ async function sendInteractiveButtonMessageForUser({
       },
     },
   };
+  const creds = await getCredentialsForUser(userId);
+  const now = new Date();
   const message = await Message.create({
     workspaceId: userId,
     wabaId: creds.wabaId,
@@ -480,11 +514,20 @@ async function sendInteractiveButtonMessageForUser({
     source,
     senderType,
     triggeredByMessageId,
+    ...(flowSessionId ? { flowSessionId } : {}),
+    ...(flowId ? { flowId } : {}),
+    ...(nodeId ? { nodeId } : {}),
     status: "processing",
     sentBy: sentBy || { kind: "system" },
     type: "interactive_buttons",
     text,
+    displayText: text,
+    previewText: text,
     buttons: normalizedButtons,
+    interactive: {
+      type: "button",
+      buttons: normalizedButtons,
+    },
     payload,
   });
 
@@ -518,7 +561,7 @@ async function sendInteractiveButtonMessageForUser({
         },
         $unset: { error: 1 },
       },
-      { new: true }
+      { returnDocument: "after" }
     );
 
     const conversation = await touchConversation({
@@ -592,9 +635,6 @@ async function sendInteractiveButtonsMessage({
   businessInitiated = false,
 }) {
   void conversationId;
-  void flowSessionId;
-  void flowId;
-  void nodeId;
   void businessInitiated;
   const bodyText = String(text || "").trim();
   const normalizedButtons = (buttons || [])
@@ -630,9 +670,14 @@ async function sendInteractiveButtonsMessage({
       source,
       senderType: source === "automation" ? "automation" : "business",
       triggeredByMessageId,
+      flowSessionId,
+      flowId,
+      nodeId,
     });
     return {
+      ok: true,
       success: true,
+      status: result.status || "sent",
       providerMessageId: result.message?.whatsappMessageId || null,
       outboundMessageId: result.message?._id ? String(result.message._id) : null,
       message: result.message,
@@ -658,6 +703,7 @@ async function sendInteractiveButtonsMessage({
 async function sendMediaMessageForUser({
   userId,
   campaignId,
+  contactId,
   to,
   type,
   mediaId,
@@ -668,9 +714,12 @@ async function sendMediaMessageForUser({
   source,
   senderType,
   triggeredByMessageId,
+  flowSessionId,
+  flowId,
+  nodeId,
 }) {
-  const creds = await getCredentialsForUser(userId);
   const normalizedType = String(type || "").toLowerCase();
+  const creds = await getCredentialsForUser(userId);
   let apiResponse;
   try {
     apiResponse = await sendMediaMessage({
@@ -704,17 +753,25 @@ async function sendMediaMessageForUser({
       ? { document: { id: mediaId || null, link: link || null, caption: caption || "", filename: filename || null } }
       : {}),
   };
+  const mediaPreview =
+    normalizedType === "document"
+      ? String(filename || "Document")
+      : normalizedType.charAt(0).toUpperCase() + normalizedType.slice(1);
 
   const message = await Message.create({
     workspaceId: userId,
     wabaId: creds.wabaId,
     phoneNumberId: creds.phoneNumberId,
     ...(campaignId ? { campaignId } : {}),
+    ...(contactId ? { contactId } : {}),
     phone: resolvedPhone,
     direction: "outbound",
     source,
     senderType,
     triggeredByMessageId,
+    ...(flowSessionId ? { flowSessionId } : {}),
+    ...(flowId ? { flowId } : {}),
+    ...(nodeId ? { nodeId } : {}),
     type: normalizedType,
     whatsappMessageId: waMessageId,
     status: "sent",
@@ -724,6 +781,8 @@ async function sendMediaMessageForUser({
     sentBy: sentBy || { kind: "owner" },
     // Don't store bracket placeholders like "[audio]" in UI; let the UI render by payload type.
     text: caption ? String(caption).slice(0, 160) : "",
+    displayText: caption ? String(caption).slice(0, 160) : mediaPreview,
+    previewText: caption ? String(caption).slice(0, 160) : mediaPreview,
     payload,
   });
 

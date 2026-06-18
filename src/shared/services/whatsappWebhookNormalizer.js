@@ -49,6 +49,20 @@ function normalizeListReply(message) {
   };
 }
 
+function normalizeMessageContext(message) {
+  const context = message?.context;
+  if (!context) return null;
+  const id = String(context?.id || "").trim();
+  const from = normalizePhone(context?.from);
+  if (!id && !from) return null;
+  return {
+    id,
+    from,
+    forwarded: Boolean(context?.forwarded),
+    frequentlyForwarded: Boolean(context?.frequently_forwarded),
+  };
+}
+
 function normalizeWhatsAppWebhookMessages({ value, workspaceId = null }) {
   const phoneNumberId = String(
     value?.metadata?.phone_number_id || ""
@@ -85,6 +99,7 @@ function normalizeWhatsAppWebhookMessages({ value, workspaceId = null }) {
           type === "button_reply" ? normalizeButtonReply(message) : null,
         listReply:
           type === "list_reply" ? normalizeListReply(message) : null,
+        context: normalizeMessageContext(message),
         rawPayload: message,
         profileName: profileNameByPhone.get(from) || null,
         receivedAt: receivedAtFromTimestamp(message?.timestamp),

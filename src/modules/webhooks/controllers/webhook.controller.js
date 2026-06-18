@@ -523,6 +523,16 @@ async function receive(req, res) {
             m.errors.some((err) => /deleted|unsupported/i.test(`${err?.title || ""} ${err?.message || ""} ${err?.details || ""}`)));
         const payload = {
           type,
+          ...(m.context
+            ? {
+              context: {
+                id: m.context.id || null,
+                from: m.context.from || null,
+                forwarded: Boolean(m.context.forwarded),
+                frequently_forwarded: Boolean(m.context.frequently_forwarded),
+              },
+            }
+            : {}),
           ...(isDeletedOrUnsupported ? { deleted: true, errors: Array.isArray(m.errors) ? m.errors : [] } : {}),
           ...(m.text?.body ? { text: { body: String(m.text.body) } } : {}),
           ...(m.image?.id ? { image: { id: String(m.image.id), mime_type: m.image.mime_type || null, sha256: m.image.sha256 || null } } : {}),
@@ -605,6 +615,7 @@ async function receive(req, res) {
                 "statusTimestamps.receivedAt": ts,
                 receivedAt: ts,
                 sortAt: ts,
+                replyToMessageId: m.context?.id ? String(m.context.id) : null,
                 sentBy: { kind: "system" },
                 text,
                 payload,

@@ -5,6 +5,7 @@ const VALID_TRIGGER_TYPES = new Set([
   "manual",
 ]);
 const {
+  DEFAULT_FLOW_RUNTIME_SETTINGS,
   normalizeRuntimeSettings,
 } = require("@modules/flows/constants/flowRuntimeSettings");
 const { validatePublicMediaUrl } = require("@shared/utils/mediaValidation");
@@ -64,7 +65,10 @@ function addIssue(target, code, message, options = {}) {
 }
 
 function validateRuntimeSettings(runtimeSettings, errors) {
-  const timeout = Number(runtimeSettings?.sessionTimeoutMinutes);
+  const timeout = Number(
+    runtimeSettings?.sessionTimeoutMinutes ??
+      DEFAULT_FLOW_RUNTIME_SETTINGS.sessionTimeoutMinutes
+  );
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 600) {
     addIssue(
       errors,
@@ -73,8 +77,9 @@ function validateRuntimeSettings(runtimeSettings, errors) {
       { field: "runtimeSettings.sessionTimeoutMinutes" }
     );
   }
+  const normalizedSettings = normalizeRuntimeSettings(runtimeSettings);
   const expiry = runtimeSettings?.onSessionExpired || {};
-  if (TEMPLATE_TOKEN_PATTERN.test(String(runtimeSettings?.invalidReplyMessage || ""))) {
+  if (TEMPLATE_TOKEN_PATTERN.test(String(normalizedSettings.invalidReplyMessage || ""))) {
     addIssue(
       errors,
       "VARIABLES_ONLY_ALLOWED_IN_TEMPLATE",
@@ -894,7 +899,7 @@ function validateFlowDraft(flow) {
   }
 
   validateTrigger(flow?.trigger, errors);
-  validateRuntimeSettings(normalizeRuntimeSettings(flow?.runtimeSettings), errors);
+  validateRuntimeSettings(flow?.runtimeSettings, errors);
 
   const draft = flow?.draft || {};
   if (!Array.isArray(draft.nodes)) {

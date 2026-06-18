@@ -207,6 +207,7 @@ async function sendButtonsAndWait({
     const result = await sendTextButtonsNode({
       workspaceId,
       contact,
+      session,
       node,
       scope,
       businessInitiated,
@@ -352,6 +353,8 @@ async function executeSession({
         await sendText({
           workspaceId,
           contact,
+          session,
+          node,
           text: node.config?.text,
           businessInitiated,
           inboundMessage,
@@ -388,6 +391,8 @@ async function executeSession({
         await sendText({
           workspaceId,
           contact,
+          session,
+          node,
           text: node.config?.question,
           businessInitiated,
           inboundMessage,
@@ -437,6 +442,7 @@ async function executeSession({
         await sendListNode({
           workspaceId,
           contact,
+          session,
           node,
           scope,
           businessInitiated,
@@ -554,6 +560,7 @@ async function executeSession({
         await sendTemplateNode({
           workspaceId,
           contact,
+          session,
           node,
           scope,
           inboundMessage,
@@ -668,6 +675,8 @@ async function executeSession({
           await sendText({
             workspaceId,
             contact,
+            session,
+            node,
             text: endMessage,
             businessInitiated,
             inboundMessage,
@@ -714,6 +723,13 @@ async function completeSession({ workspaceId, session, node }) {
     eventType: "flow_completed",
     nodeId: node.id,
   });
+  flowLog("[FLOW_SESSION_COMPLETED]", {
+    sessionId: String(completed._id),
+    flowId: String(completed.flowId),
+    completedAt: completed.completedAt,
+    finalNodeId: node.id,
+    waitingForCleared: !completed.waitingFor?.type,
+  });
   return { status: "completed", session: completed };
 }
 
@@ -727,6 +743,8 @@ async function failSession({
   await sendText({
     workspaceId,
     contact,
+    session,
+    node: { id: session.currentNodeId },
     text: GENERIC_END_MESSAGE,
     businessInitiated,
     inboundMessage,
@@ -790,6 +808,8 @@ async function handleFallback({
   await sendText({
     workspaceId,
     contact,
+    session,
+    node: { id: session.currentNodeId },
     text: settings.invalidReplyMessage || GENERIC_RETRY_MESSAGE,
     businessInitiated: false,
     inboundMessage,

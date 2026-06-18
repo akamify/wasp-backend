@@ -82,6 +82,8 @@ async function requestHandover({
     await sendText({
       workspaceId,
       contact,
+      session,
+      node,
       text: message,
       businessInitiated,
     });

@@ -198,6 +198,7 @@ function resolveTemplateRuntimeValues({ config, scope, node, templateName }) {
 async function sendTextButtonsNode({
   workspaceId,
   contact,
+  session,
   node,
   scope,
   businessInitiated = false,
@@ -216,6 +217,8 @@ async function sendTextButtonsNode({
     text: plainText(config.text),
     buttons: normalizeReplyButtons(config.buttons),
     source: "automation",
+    flowSessionId: session?._id || null,
+    flowId: session?.flowId || null,
     nodeId: node.id,
     triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
     businessInitiated,
@@ -331,6 +334,7 @@ async function sendListNode({
   });
   await sendInteractiveListMessageForUser({
     userId: workspaceId,
+    contactId: contact._id,
     to: contact.phone,
     text: plainText(config.text),
     buttonText: plainText(config.buttonText),
@@ -339,6 +343,9 @@ async function sendListNode({
     source: "automation",
     senderType: "automation",
     triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
+    flowSessionId: session?._id || null,
+    flowId: session?.flowId || null,
+    nodeId: node.id,
   });
 }
 
@@ -365,6 +372,7 @@ async function sendMediaNode({
   });
   await sendMediaMessageForUser({
     userId: workspaceId,
+    contactId: contact._id,
     to: contact.phone,
     type: source.mediaType,
     link: source.url,
@@ -374,6 +382,9 @@ async function sendMediaNode({
     source: "automation",
     senderType: "automation",
     triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
+    flowSessionId: session?._id || null,
+    flowId: session?.flowId || null,
+    nodeId: node.id,
   });
   flowLog("[FLOW_MEDIA_SEND_SUCCESS]", {
     sessionId: session?._id ? String(session._id) : null,
@@ -386,6 +397,7 @@ async function sendMediaNode({
 async function sendTemplateNode({
   workspaceId,
   contact,
+  session,
   node,
   scope,
   inboundMessage = null,
@@ -434,6 +446,9 @@ async function sendTemplateNode({
     source: "automation",
     senderType: "automation",
     triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
+    flowSessionId: session?._id || null,
+    flowId: session?.flowId || null,
+    nodeId: node.id,
   });
 }
 

@@ -79,7 +79,22 @@ const MessageSchema = new mongoose.Schema(
     leadStatusSnapshot: { type: String, default: null },
 
     text: { type: String },
+    displayText: { type: String, trim: true, default: null },
+    previewText: { type: String, trim: true, default: null },
     type: { type: String, trim: true, default: null },
+    buttonReply: {
+      id: { type: String, trim: true, default: null },
+      title: { type: String, trim: true, default: null },
+    },
+    listReply: {
+      id: { type: String, trim: true, default: null },
+      title: { type: String, trim: true, default: null },
+      description: { type: String, trim: true, default: null },
+    },
+    interactive: { type: mongoose.Schema.Types.Mixed, default: null },
+    flowSessionId: { type: mongoose.Schema.Types.ObjectId, ref: "FlowSession", default: null, index: true },
+    flowId: { type: mongoose.Schema.Types.ObjectId, ref: "Flow", default: null, index: true },
+    nodeId: { type: String, trim: true, default: null },
     buttons: {
       type: [
         {

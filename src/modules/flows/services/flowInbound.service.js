@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { Message } = require("@infra/database/Message");
 const {
   findTenantByPhoneNumberId,
 } = require("@shared/services/credentialsService");
@@ -62,6 +63,95 @@ function serializeError(error) {
     name: String(error?.name || "Error"),
     message: String(error?.message || "Inbound message processing failed"),
   };
+}
+
+async function persistInboundDisplayMessage({
+  workspaceId,
+  wabaId,
+  phoneNumberId,
+  from,
+  normalizedMessage,
+  contact,
+}) {
+  const type = String(normalizedMessage?.type || "unknown");
+  const buttonReply = normalizedMessage?.buttonReply || null;
+  const listReply = normalizedMessage?.listReply || null;
+  const displayText =
+    normalizedMessage?.text ||
+    buttonReply?.title ||
+    listReply?.title ||
+    "";
+  const replyToMessageId = String(normalizedMessage?.context?.id || "").trim();
+  const receivedAt = normalizedMessage?.receivedAt || new Date();
+  const interactive = buttonReply
+    ? {
+        type: "button_reply",
+        id: buttonReply.id || null,
+        title: buttonReply.title || null,
+      }
+    : listReply
+      ? {
+          type: "list_reply",
+          id: listReply.id || null,
+          title: listReply.title || null,
+          description: listReply.description || null,
+        }
+      : null;
+  await Message.findOneAndUpdate(
+    {
+      workspaceId,
+      ...(wabaId ? { wabaId } : {}),
+      whatsappMessageId: normalizedMessage.whatsappMessageId,
+    },
+    {
+      $set: {
+        workspaceId,
+        wabaId: wabaId || null,
+        phoneNumberId: phoneNumberId || null,
+        contactId: contact?._id || null,
+        phone: from,
+        direction: "inbound",
+        senderType: "user",
+        source: "whatsapp",
+        type,
+        status: "received",
+        "statusTimestamps.receivedAt": receivedAt,
+        receivedAt,
+        sortAt: receivedAt,
+        sentBy: { kind: "system" },
+        replyToMessageId: replyToMessageId || null,
+        text: displayText,
+        displayText,
+        previewText: displayText,
+        ...(buttonReply
+          ? {
+              buttonReply: {
+                id: buttonReply.id || null,
+                title: buttonReply.title || null,
+              },
+            }
+          : {}),
+        ...(listReply
+          ? {
+              listReply: {
+                id: listReply.id || null,
+                title: listReply.title || null,
+                description: listReply.description || null,
+              },
+            }
+          : {}),
+        ...(interactive ? { interactive } : {}),
+        payload: normalizedMessage.rawPayload || null,
+      },
+      $setOnInsert: { createdAt: receivedAt },
+    },
+    { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
+  ).catch((error) => {
+    console.warn("[flow-inbound] display message persistence failed", {
+      workspaceId: String(workspaceId || ""),
+      reason: error?.message || "unknown",
+    });
+  });
 }
 
 async function resolveMessageContext(normalizedMessage) {
@@ -153,6 +243,14 @@ async function processInboundMessage(normalizedMessage) {
         normalizedMessage.buttonReply?.title ||
         normalizedMessage.listReply?.title ||
         "",
+    });
+    await persistInboundDisplayMessage({
+      workspaceId,
+      wabaId: context.wabaId,
+      phoneNumberId: String(normalizedMessage?.phoneNumberId || "").trim(),
+      from,
+      normalizedMessage,
+      contact,
     });
     flowLog("[FLOW_INBOUND_NORMALIZED]", {
       workspaceId: String(workspaceId),

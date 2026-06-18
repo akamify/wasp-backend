@@ -53,7 +53,7 @@ async function updateSession({ workspaceId, sessionId, updates }) {
   return FlowSession.findOneAndUpdate(
     { _id: sessionId, workspaceId },
     { $set: updates },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 
@@ -64,7 +64,7 @@ async function incrementFallbackCount({ workspaceId, sessionId, now }) {
       $inc: { fallbackCount: 1 },
       $set: { lastMessageAt: now },
     },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 
@@ -72,7 +72,7 @@ async function addContactTags({ workspaceId, contactId, tags }) {
   return Contact.findOneAndUpdate(
     { _id: contactId, workspaceId },
     { $addToSet: { tags: { $each: tags } } },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 
@@ -80,7 +80,7 @@ async function removeContactTags({ workspaceId, contactId, tags }) {
   return Contact.findOneAndUpdate(
     { _id: contactId, workspaceId },
     { $pull: { tags: { $in: tags } } },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 
@@ -98,7 +98,7 @@ async function mergeContactAttributes({
   return Contact.findOneAndUpdate(
     { _id: contactId, workspaceId },
     { $set: updates },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 
@@ -118,7 +118,7 @@ async function pauseConversationAutomation({
         automationPausedByFlowSessionId: sessionId,
       },
     },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 
@@ -165,7 +165,7 @@ async function expireSession({ workspaceId, sessionId, completedAt }) {
         lockedBy: null,
       },
     },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 

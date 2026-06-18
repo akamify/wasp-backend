@@ -156,6 +156,8 @@ function buildScope(session, contact, inboundMessage, dependencies = {}) {
 async function sendText({
   workspaceId,
   contact,
+  session = null,
+  node = null,
   text,
   businessInitiated = false,
   inboundMessage = null,
@@ -169,12 +171,16 @@ async function sendText({
   });
   await sendTextMessageForUser({
     userId: workspaceId,
+    contactId: contact._id,
     to: contact.phone,
     text: normalized,
     sentBy: { kind: "system" },
     source: "automation",
     senderType: "automation",
     triggeredByMessageId: inboundMessage?.whatsappMessageId || null,
+    flowSessionId: session?._id || null,
+    flowId: session?.flowId || null,
+    nodeId: node?.id || null,
   });
 }
 

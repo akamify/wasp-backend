@@ -20,7 +20,7 @@ async function markInboundMessageProcessed({
         error: null,
       },
     },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 
@@ -39,7 +39,7 @@ async function markInboundMessageFailed({
         error,
       },
     },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
 }
 
