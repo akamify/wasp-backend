@@ -149,7 +149,7 @@ async function createDocsFeedback(req, res) {
     visitorId: payload.visitorId,
     ipAddress: getClientIp(req),
     userAgent: String(req.headers["user-agent"] || "").slice(0, 1000),
-    source: "docs",
+    source: "docs-web",
   });
 
   return res.status(201).json({

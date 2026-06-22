@@ -9,13 +9,13 @@ const DocFeedbackSchema = new mongoose.Schema(
     visitorId: { type: String, default: "", trim: true },
     ipAddress: { type: String, default: "", trim: true },
     userAgent: { type: String, default: "", trim: true },
-    source: { type: String, default: "docs", trim: true },
+    source: { type: String, default: "docs-web", trim: true },
   },
-  { timestamps: true, collection: "doc_feedbacks" }
+  { timestamps: true, versionKey: false }
 );
 
-DocFeedbackSchema.index({ visitorId: 1, slug: 1 });
-DocFeedbackSchema.index({ createdAt: -1 });
+DocFeedbackSchema.index({ slug: 1, createdAt: -1 });
+DocFeedbackSchema.index({ visitorId: 1, slug: 1, createdAt: -1 });
 
 const DocFeedback = mongoose.models.DocFeedback || mongoose.model("DocFeedback", DocFeedbackSchema);
 
