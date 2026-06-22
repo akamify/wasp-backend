@@ -17,6 +17,7 @@ async function start() {
   createSocketServer(httpServer);
   httpServer.listen(port, () => {
     // eslint-disable-next-line no-console
+    console.log(`API server listening on port ${port}`);
   });
 }
 
@@ -31,13 +32,11 @@ installProcessLifecycle({
   },
 });
 
-start().catch(() => {
+start().catch((err) => {
+  // eslint-disable-next-line no-console
+  console.error("[api-server] startup failed", {
+    message: err?.message || String(err),
+    stack: err?.stack || null,
+  });
   process.exit(1);
 });
-
-const __consoleNoop = () => {};
-console.log = __consoleNoop;
-console.info = __consoleNoop;
-console.warn = __consoleNoop;
-console.error = __consoleNoop;
-console.debug = __consoleNoop;

@@ -141,9 +141,3 @@ app.use(notFound);
 app.use(errorHandler);
 
 module.exports = app;
-const __consoleNoop = () => {};
-console.log = __consoleNoop;
-console.info = __consoleNoop;
-console.warn = __consoleNoop;
-console.error = __consoleNoop;
-console.debug = __consoleNoop;
