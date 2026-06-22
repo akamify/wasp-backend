@@ -58,6 +58,32 @@ function parsePaging(query) {
   return { page, limit, skip: (page - 1) * limit };
 }
 
+function sanitizeDraftSpecialNodeIds(draft) {
+  const nodes = Array.isArray(draft?.nodes) ? draft.nodes : [];
+  const edges = Array.isArray(draft?.edges) ? draft.edges : [];
+  const nodeIds = new Set(
+    nodes
+      .map((node) => String(node?.id || "").trim())
+      .filter(Boolean)
+  );
+  const fallbackNodeId = String(draft?.fallbackNodeId || "").trim();
+  const handoverNodeId = String(draft?.handoverNodeId || "").trim();
+
+  return {
+    nodes,
+    edges,
+    fallbackNodeId: fallbackNodeId && nodeIds.has(fallbackNodeId) ? fallbackNodeId : null,
+    handoverNodeId: handoverNodeId && nodeIds.has(handoverNodeId) ? handoverNodeId : null,
+  };
+}
+
+function draftSpecialNodeIdsChanged(before, after) {
+  return (
+    String(before?.fallbackNodeId || "") !== String(after?.fallbackNodeId || "") ||
+    String(before?.handoverNodeId || "") !== String(after?.handoverNodeId || "")
+  );
+}
+
 async function addApprovedTemplateErrors({ workspaceId, flow, validation }) {
   const templateChecks = (flow?.draft?.nodes || [])
     .filter((node) => node?.type === "template")
@@ -294,12 +320,12 @@ async function updateFlowMetadata({ workspaceId, flowId, actorId, payload }) {
 async function saveDraft({ workspaceId, flowId, actorId, payload }) {
   const existing = await requireMutableFlow({ workspaceId, flowId });
   const trigger = normalizeTrigger(payload.trigger);
-  const draft = {
+  const draft = sanitizeDraftSpecialNodeIds({
     nodes: payload.nodes,
     edges: payload.edges,
     fallbackNodeId: payload.fallbackNodeId || null,
     handoverNodeId: payload.handoverNodeId || null,
-  };
+  });
   const runtimeSettings = normalizeRuntimeSettings(
     payload.runtimeSettings || existing.runtimeSettings
   );
@@ -358,17 +384,24 @@ async function validateDraft({ workspaceId, flowId }) {
   assertValidFlowId(flowId);
   const flow = await flowsRepository.findFlowById({ workspaceId, flowId });
   if (!flow) throw new HttpError(404, "Flow not found");
-  const draftHash = computeFlowDraftHash(flow);
+  const flowState = flow.toObject ? flow.toObject() : flow;
+  const sanitizedDraft = sanitizeDraftSpecialNodeIds(flowState.draft);
+  const shouldUpdateDraft = draftSpecialNodeIdsChanged(flowState.draft, sanitizedDraft);
+  if (shouldUpdateDraft) {
+    flowState.draft = sanitizedDraft;
+  }
+  const draftHash = computeFlowDraftHash(flowState);
   let validation = await addApprovedTemplateErrors({
     workspaceId,
-    flow,
-    validation: validateFlowDraft(flow),
+    flow: flowState,
+    validation: validateFlowDraft(flowState),
   });
-  validation = await addMediaAssetErrors({ workspaceId, flow, validation });
+  validation = await addMediaAssetErrors({ workspaceId, flow: flowState, validation });
   await flowsRepository.updateFlowById({
     workspaceId,
     flowId,
     updates: {
+      ...(shouldUpdateDraft ? { draft: sanitizedDraft } : {}),
       draftHash,
       lastValidationStatus: validation.valid ? "passed" : "failed",
       lastValidatedDraftHash: validation.valid ? draftHash : null,
@@ -388,7 +421,13 @@ async function publishFlow({ workspaceId, flowId, actorId }) {
     throw new HttpError(409, "Archived flow cannot be published");
   }
 
-  const draftHash = computeFlowDraftHash(flow);
+  const flowState = flow.toObject ? flow.toObject() : flow;
+  const sanitizedDraft = sanitizeDraftSpecialNodeIds(flowState.draft);
+  const shouldUpdateDraft = draftSpecialNodeIdsChanged(flowState.draft, sanitizedDraft);
+  if (shouldUpdateDraft) {
+    flowState.draft = sanitizedDraft;
+  }
+  const draftHash = computeFlowDraftHash(flowState);
   if (
     flow.lastValidationStatus !== "passed" ||
     !flow.lastValidatedDraftHash ||
@@ -404,10 +443,10 @@ async function publishFlow({ workspaceId, flowId, actorId }) {
 
   let validation = await addApprovedTemplateErrors({
     workspaceId,
-    flow,
-    validation: validateFlowDraft(flow),
+    flow: flowState,
+    validation: validateFlowDraft(flowState),
   });
-  validation = await addMediaAssetErrors({ workspaceId, flow, validation });
+  validation = await addMediaAssetErrors({ workspaceId, flow: flowState, validation });
   if (!validation.valid) {
     await flowsRepository.updateFlowById({
       workspaceId,
@@ -427,14 +466,14 @@ async function publishFlow({ workspaceId, flowId, actorId }) {
   await assertNoTriggerConflict({
     workspaceId,
     flowId,
-    trigger: flow.trigger,
+    trigger: flowState.trigger,
   });
 
   const latestVersion = await flowsRepository.findLatestFlowVersion({
     workspaceId,
     flowId,
   });
-  const snapshot = applyPublishDefaults(flow.draft);
+  const snapshot = applyPublishDefaults(flowState.draft);
   let version;
 
   try {
@@ -443,8 +482,8 @@ async function publishFlow({ workspaceId, flowId, actorId }) {
       flowId,
       versionNumber: Number(latestVersion?.versionNumber || 0) + 1,
       status: "active",
-      trigger: flow.trigger.toObject ? flow.trigger.toObject() : flow.trigger,
-      runtimeSettings: normalizeRuntimeSettings(flow.runtimeSettings),
+      trigger: flowState.trigger,
+      runtimeSettings: normalizeRuntimeSettings(flowState.runtimeSettings),
       nodes: snapshot.nodes,
       edges: snapshot.edges,
       fallbackNodeId: snapshot.fallbackNodeId,
@@ -465,6 +504,7 @@ async function publishFlow({ workspaceId, flowId, actorId }) {
       expectedStatuses: ["draft", "active", "paused"],
       expectedDraftHash: draftHash,
       updates: {
+        ...(shouldUpdateDraft ? { draft: sanitizedDraft } : {}),
         status: "active",
         activeVersionId: version._id,
         archivedAt: null,
