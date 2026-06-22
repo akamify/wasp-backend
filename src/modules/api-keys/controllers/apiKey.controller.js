@@ -1,6 +1,7 @@
 const apiKeyService = require("@modules/api-keys/services/apiKey.service");
 const otpService = require("@modules/api-keys/services/apiKeyOtp.service");
 const permissionService = require("@modules/api-keys/services/apiKeyPermission.service");
+const externalWebhookService = require("@modules/external-chat/services/externalWebhook.service");
 
 async function listApiKeys(req, res) {
   res.json(await apiKeyService.listMyApiKeys({ userId: req.user.id, workspaceId: req.workspace.id }));
@@ -20,6 +21,49 @@ async function regenerateApiKey(req, res) {
 
 async function deleteApiKey(req, res) {
   res.json(await apiKeyService.deleteApiKey({ userId: req.user.id, keyId: req.params.id }));
+}
+
+async function listExternalChatWebhooks(req, res) {
+  const items = await externalWebhookService.listWebhooks({ workspaceId: req.workspace.id, apiKeyId: null });
+  res.json({ success: true, message: "WEBHOOKS_LISTED", data: { items, events: externalWebhookService.EXTERNAL_CHAT_WEBHOOK_EVENTS } });
+}
+
+async function createExternalChatWebhook(req, res) {
+  const webhook = await externalWebhookService.createWebhook({
+    workspaceId: req.workspace.id,
+    apiKeyId: null,
+    url: req.body.url,
+    events: req.body.events,
+  });
+  res.json({ success: true, message: "WEBHOOK_CREATED", data: { webhook } });
+}
+
+async function updateExternalChatWebhook(req, res) {
+  const webhook = await externalWebhookService.updateWebhook({
+    workspaceId: req.workspace.id,
+    apiKeyId: null,
+    webhookId: req.params.id,
+    patch: req.body,
+  });
+  res.json({ success: true, message: "WEBHOOK_UPDATED", data: { webhook } });
+}
+
+async function deleteExternalChatWebhook(req, res) {
+  await externalWebhookService.deleteWebhook({
+    workspaceId: req.workspace.id,
+    apiKeyId: null,
+    webhookId: req.params.id,
+  });
+  res.json({ success: true, message: "WEBHOOK_DELETED", data: {} });
+}
+
+async function rotateExternalChatWebhookSecret(req, res) {
+  const webhook = await externalWebhookService.rotateWebhookSecret({
+    workspaceId: req.workspace.id,
+    apiKeyId: null,
+    webhookId: req.params.id,
+  });
+  res.json({ success: true, message: "WEBHOOK_SECRET_ROTATED", data: { webhook } });
 }
 
 async function sendChatAccessOtp(req, res) {
@@ -115,6 +159,11 @@ module.exports = {
   generateApiKey,
   regenerateApiKey,
   deleteApiKey,
+  listExternalChatWebhooks,
+  createExternalChatWebhook,
+  updateExternalChatWebhook,
+  deleteExternalChatWebhook,
+  rotateExternalChatWebhookSecret,
   sendChatAccessOtp,
   verifyChatAccessOtp,
   disableChatAccess,

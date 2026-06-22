@@ -20,6 +20,7 @@ async function requireExternalChatAccess(req, res, next) {
   if (!req.auth?.isApiKey) return deny(req, next, "api_key_missing");
   // Chat entitlement is controlled by workspace feature toggle only.
   if (!req.workspace?.features?.externalChatApiAccess) return deny(req, next, "external_chat_feature_disabled");
+  if (!req.auth?.permissions?.chatAccess) return deny(req, next, "chat_access_disabled");
   return next();
 }
 

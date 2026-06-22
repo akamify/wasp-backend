@@ -14,6 +14,14 @@ const {
   uploadMedia,
   sendText,
   sendMedia,
+  listContacts,
+  getContact,
+  updateContact,
+  listWebhooks,
+  createWebhook,
+  updateWebhook,
+  deleteWebhook,
+  rotateWebhookSecret,
   issueRealtimeToken,
   streamRealtime,
 } = require("@modules/external-chat/controllers/externalChat.controller");
@@ -39,6 +47,30 @@ const upload = buildMemoryUpload({
 });
 
 const requireExternalAuthChain = [externalChatApiKeyAuth, requireExternalChatWorkspace, requireExternalChatAccess];
+const contactPayloadSchema = Joi.object({
+  name: Joi.string().trim().max(120).allow("").optional(),
+  email: Joi.string().trim().email().max(160).allow("").optional(),
+  company: Joi.string().trim().max(160).allow("").optional(),
+  tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
+  attributes: Joi.object().max(50).optional(),
+}).optional();
+const webhookPayloadSchema = Joi.object({
+  url: Joi.string().uri({ scheme: ["http", "https"] }).max(2000).required(),
+  events: Joi.array()
+    .items(Joi.string().valid("message.created", "message.status_updated", "conversation.updated", "contact.updated"))
+    .min(1)
+    .max(4)
+    .optional(),
+});
+const webhookUpdateSchema = Joi.object({
+  url: Joi.string().uri({ scheme: ["http", "https"] }).max(2000).optional(),
+  events: Joi.array()
+    .items(Joi.string().valid("message.created", "message.status_updated", "conversation.updated", "contact.updated"))
+    .min(1)
+    .max(4)
+    .optional(),
+  enabled: Joi.boolean().optional(),
+}).min(1);
 
 router.get("/conversations", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(listConversations));
 router.get(
@@ -48,6 +80,21 @@ router.get(
   asyncHandler(listConversationMessages)
 );
 router.post("/conversations/:phone/read", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(readConversation));
+router.get("/contacts", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(listContacts));
+router.get("/contacts/:phone", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(getContact));
+router.patch(
+  "/contacts/:phone",
+  ...requireExternalAuthChain,
+  rateLimiters.externalChatRead,
+  validate(contactPayloadSchema.required()),
+  asyncHandler(updateContact)
+);
+
+router.get("/webhooks", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(listWebhooks));
+router.post("/webhooks", ...requireExternalAuthChain, rateLimiters.externalChatRead, validate(webhookPayloadSchema), asyncHandler(createWebhook));
+router.patch("/webhooks/:id", ...requireExternalAuthChain, rateLimiters.externalChatRead, validate(webhookUpdateSchema), asyncHandler(updateWebhook));
+router.delete("/webhooks/:id", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(deleteWebhook));
+router.post("/webhooks/:id/rotate-secret", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(rotateWebhookSecret));
 
 router.post(
   "/media",
@@ -65,6 +112,7 @@ router.post(
     Joi.object({
       to: Joi.string().min(8).max(20).required(),
       text: Joi.string().trim().min(1).max(4096).required(),
+      contact: contactPayloadSchema,
     })
   ),
   asyncHandler(sendText)
@@ -82,6 +130,7 @@ router.post(
       link: Joi.string().uri().optional(),
       caption: Joi.string().allow("").max(1024).optional(),
       filename: Joi.string().allow("").max(200).optional(),
+      contact: contactPayloadSchema,
     }).or("mediaId", "link")
   ),
   asyncHandler(sendMedia)

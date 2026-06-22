@@ -1,4 +1,5 @@
 const { EventEmitter } = require("events");
+const { enqueueExternalWebhookEvent } = require("@modules/external-chat/services/externalWebhook.service");
 
 const bus = new EventEmitter();
 bus.setMaxListeners(1000);
@@ -14,6 +15,7 @@ function publishWorkspaceEvent(workspaceId, event) {
     at: new Date().toISOString(),
     ...event,
   });
+  enqueueExternalWebhookEvent(workspaceId, event).catch(() => {});
 }
 
 function subscribeWorkspaceEvents(workspaceId, handler) {

@@ -21,6 +21,30 @@ router.post("/generate", requireWorkspace, requireApiKeysAccess, validate(Joi.ob
 router.post("/regenerate", requireWorkspace, requireApiKeysAccess, validate(Joi.object({ keyId: Joi.string().optional(), name: Joi.string().trim().max(80).optional() })), asyncHandler(c.regenerateApiKey));
 router.delete("/:id", requireWorkspace, requireApiKeysAccess, asyncHandler(c.deleteApiKey));
 
+const webhookPayloadSchema = Joi.object({
+  url: Joi.string().uri({ scheme: ["http", "https"] }).max(2000).required(),
+  events: Joi.array()
+    .items(Joi.string().valid("message.created", "message.status_updated", "conversation.updated", "contact.updated"))
+    .min(1)
+    .max(4)
+    .optional(),
+});
+const webhookUpdateSchema = Joi.object({
+  url: Joi.string().uri({ scheme: ["http", "https"] }).max(2000).optional(),
+  events: Joi.array()
+    .items(Joi.string().valid("message.created", "message.status_updated", "conversation.updated", "contact.updated"))
+    .min(1)
+    .max(4)
+    .optional(),
+  enabled: Joi.boolean().optional(),
+}).min(1);
+
+router.get("/external-chat/webhooks", requireWorkspace, requireApiKeysAccess, asyncHandler(c.listExternalChatWebhooks));
+router.post("/external-chat/webhooks", requireWorkspace, requireApiKeysAccess, validate(webhookPayloadSchema), asyncHandler(c.createExternalChatWebhook));
+router.patch("/external-chat/webhooks/:id", requireWorkspace, requireApiKeysAccess, validate(webhookUpdateSchema), asyncHandler(c.updateExternalChatWebhook));
+router.delete("/external-chat/webhooks/:id", requireWorkspace, requireApiKeysAccess, asyncHandler(c.deleteExternalChatWebhook));
+router.post("/external-chat/webhooks/:id/rotate-secret", requireWorkspace, requireApiKeysAccess, asyncHandler(c.rotateExternalChatWebhookSecret));
+
 router.post("/admin/users/:id/chat-access/send-otp", requireAdmin, rateLimiters.otp, asyncHandler(c.sendChatAccessOtp));
 router.get("/admin/users/:id", requireAdmin, asyncHandler(c.listUserApiKeys));
 router.post("/admin/users/:id/chat-access/verify-otp", requireAdmin, rateLimiters.otp, validate(Joi.object({ otp: Joi.string().pattern(/^\d{6}$/).required() })), asyncHandler(c.verifyChatAccessOtp));

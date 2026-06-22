@@ -6,20 +6,23 @@ const { randomUUID } = require("crypto");
 const { HttpError } = require("@shared/utils/httpError");
 const { Conversation } = require("@infra/database/Conversation");
 const { Message } = require("@infra/database/Message");
-const { assertNormalizedPhone, normalizePhone } = require("@shared/services/contactService");
+const { Contact } = require("@infra/database/Contact");
+const { assertNormalizedPhone, normalizePhone, upsertContactMetadataForUser } = require("@shared/services/contactService");
 const { markConversationRead } = require("@shared/services/conversationService");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { markMessageAsRead } = require("@shared/utils/whatsappSender");
 const { sendTextMessageForUser, sendMediaMessageForUser } = require("@shared/services/outboundMessageService");
 const { isCustomerServiceWindowOpen } = require("@shared/services/pricingService");
-const { subscribeWorkspaceEvents } = require("@shared/services/realtimeService");
+const { publishWorkspaceEvent, subscribeWorkspaceEvents } = require("@shared/services/realtimeService");
 const { writeAuditLog } = require("@shared/services/auditLog.service");
 const { jwtSecret } = require("@core/config/env");
 const { toExternalConversationDto } = require("@modules/external-chat/dto/externalConversation.dto");
 const { toExternalMessageDto } = require("@modules/external-chat/dto/externalMessage.dto");
+const { toExternalContactDto } = require("@modules/external-chat/dto/externalContact.dto");
 const { externalReadyPayload, externalPingPayload } = require("@modules/external-chat/dto/externalRealtime.dto");
 const { resolveExternalChatAccessState } = require("@modules/external-chat/services/externalChatAccess.service");
 const { mapExternalRealtimeEvent } = require("@modules/external-chat/services/externalRealtimeMap.service");
+const externalWebhookService = require("@modules/external-chat/services/externalWebhook.service");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 
 function ok(res, message, data) {
@@ -159,6 +162,30 @@ function closedWindowError() {
   });
 }
 
+async function mergeExternalContactMetadata({ req, phone, contactPatch }) {
+  if (!contactPatch || typeof contactPatch !== "object") return null;
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const contact = await upsertContactMetadataForUser({
+    userId: req.workspace.id,
+    wabaId: scope.wabaId,
+    phoneNumberId: scope.phoneNumberId || null,
+    phone,
+    patch: {
+      ...contactPatch,
+      source: "outbound",
+    },
+    createIfMissing: true,
+  });
+  if (contact?._id) {
+    publishWorkspaceEvent(req.workspace.id, {
+      type: "contact.updated",
+      contactId: String(contact._id),
+      phone,
+    });
+  }
+  return contact;
+}
+
 async function sendText(req, res) {
   const normalizedPhone = assertNormalizedPhone(req.body.to);
   const text = String(req.body.text || "").trim();
@@ -168,6 +195,7 @@ async function sendText(req, res) {
   if (!windowOpen) throw closedWindowError();
 
   try {
+    const contact = await mergeExternalContactMetadata({ req, phone: normalizedPhone, contactPatch: req.body.contact });
     const result = await sendTextMessageForUser({
       userId: req.workspace.id,
       to: normalizedPhone,
@@ -187,8 +215,16 @@ async function sendText(req, res) {
       },
     });
 
+    publishWorkspaceEvent(req.workspace.id, {
+      type: "message_outbound",
+      phone: result?.message?.phone || normalizedPhone,
+      whatsappMessageId: result?.message?.whatsappMessageId || null,
+      messageId: result?.message?._id ? String(result.message._id) : null,
+    });
+
     return ok(res, "MESSAGE_SENT", {
       message: toExternalMessageDto(result.message),
+      contact: toExternalContactDto(contact),
     });
   } catch (err) {
     if (err?.statusCode) throw err;
@@ -203,6 +239,7 @@ async function sendMedia(req, res) {
   if (!windowOpen) throw closedWindowError();
 
   try {
+    const contact = await mergeExternalContactMetadata({ req, phone: normalizedPhone, contactPatch: req.body.contact });
     const result = await sendMediaMessageForUser({
       userId: req.workspace.id,
       to: normalizedPhone,
@@ -226,13 +263,115 @@ async function sendMedia(req, res) {
       },
     });
 
+    publishWorkspaceEvent(req.workspace.id, {
+      type: "message_outbound",
+      phone: result?.message?.phone || normalizedPhone,
+      whatsappMessageId: result?.message?.whatsappMessageId || null,
+      messageId: result?.message?._id ? String(result.message._id) : null,
+    });
+
     return ok(res, "MEDIA_SENT", {
       message: toExternalMessageDto(result.message),
+      contact: toExternalContactDto(contact),
     });
   } catch (err) {
     if (err?.statusCode) throw err;
     throw new HttpError(err?.response?.status || 502, "Failed to send media message", { code: "MEDIA_SEND_FAILED" });
   }
+}
+
+async function listContacts(req, res) {
+  const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
+  const search = String(req.query.search || "").trim();
+  const tag = String(req.query.tag || "").trim();
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const filter = { workspaceId: req.workspace.id, wabaId: scope.wabaId };
+  if (tag) filter.tags = tag;
+  if (search) {
+    const safe = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    filter.$or = [
+      { phone: { $regex: safe, $options: "i" } },
+      { name: { $regex: safe, $options: "i" } },
+      { email: { $regex: safe, $options: "i" } },
+      { company: { $regex: safe, $options: "i" } },
+    ];
+  }
+
+  const contacts = await Contact.find(filter).sort({ updatedAt: -1 }).limit(limit);
+  return ok(res, "CONTACTS_LISTED", {
+    items: contacts.map(toExternalContactDto),
+    pagination: {
+      limit,
+      total: contacts.length,
+      hasNextPage: contacts.length >= limit,
+    },
+  });
+}
+
+async function getContact(req, res) {
+  const phone = assertNormalizedPhone(req.params.phone);
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const contact = await Contact.findOne({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone });
+  if (!contact) throw new HttpError(404, "Contact not found", { code: "CONTACT_NOT_FOUND" });
+  return ok(res, "CONTACT_LOADED", { contact: toExternalContactDto(contact) });
+}
+
+async function updateContact(req, res) {
+  const phone = assertNormalizedPhone(req.params.phone);
+  const contact = await mergeExternalContactMetadata({ req, phone, contactPatch: req.body });
+  return ok(res, "CONTACT_UPDATED", { contact: toExternalContactDto(contact) });
+}
+
+async function listWebhooks(req, res) {
+  const items = await externalWebhookService.listWebhooks({
+    workspaceId: req.workspace.id,
+    apiKeyId: req.auth?.apiKeyId || null,
+  });
+  return ok(res, "WEBHOOKS_LISTED", { items, events: externalWebhookService.EXTERNAL_CHAT_WEBHOOK_EVENTS });
+}
+
+async function createWebhook(req, res) {
+  const webhook = await externalWebhookService.createWebhook({
+    workspaceId: req.workspace.id,
+    apiKeyId: req.auth?.apiKeyId || null,
+    url: req.body.url,
+    events: req.body.events,
+  });
+  await writeAuditLog(req, {
+    action: "external_chat.webhook_created",
+    resourceType: "external_chat_webhook",
+    resourceId: webhook.id,
+    metadata: { workspaceId: req.workspace.id, apiKeyId: req.auth?.apiKeyId || null },
+  });
+  return ok(res, "WEBHOOK_CREATED", { webhook });
+}
+
+async function updateWebhook(req, res) {
+  const webhook = await externalWebhookService.updateWebhook({
+    workspaceId: req.workspace.id,
+    apiKeyId: req.auth?.apiKeyId || null,
+    webhookId: req.params.id,
+    patch: req.body,
+  });
+  return ok(res, "WEBHOOK_UPDATED", { webhook });
+}
+
+async function deleteWebhook(req, res) {
+  await externalWebhookService.deleteWebhook({
+    workspaceId: req.workspace.id,
+    apiKeyId: req.auth?.apiKeyId || null,
+    webhookId: req.params.id,
+  });
+  return ok(res, "WEBHOOK_DELETED", {});
+}
+
+async function rotateWebhookSecret(req, res) {
+  const webhook = await externalWebhookService.rotateWebhookSecret({
+    workspaceId: req.workspace.id,
+    apiKeyId: req.auth?.apiKeyId || null,
+    webhookId: req.params.id,
+  });
+  return ok(res, "WEBHOOK_SECRET_ROTATED", { webhook });
 }
 
 async function issueRealtimeToken(req, res) {
@@ -357,6 +496,14 @@ module.exports = {
   uploadMedia,
   sendText,
   sendMedia,
+  listContacts,
+  getContact,
+  updateContact,
+  listWebhooks,
+  createWebhook,
+  updateWebhook,
+  deleteWebhook,
+  rotateWebhookSecret,
   issueRealtimeToken,
   streamRealtime,
 };
