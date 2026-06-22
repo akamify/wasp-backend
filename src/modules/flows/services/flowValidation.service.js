@@ -307,7 +307,7 @@ function validateTrigger(trigger, errors) {
   }
 }
 
-function validateTextButtonsNode(node, outgoingEdges, fallbackNodeId, errors) {
+function validateTextButtonsNode(node, outgoingEdges, errors) {
   const config = node.config || {};
   validateRequiredString({
     errors,
@@ -364,7 +364,6 @@ function validateTextButtonsNode(node, outgoingEdges, fallbackNodeId, errors) {
 
     if (
       buttonId &&
-      !fallbackNodeId &&
       !outgoingEdges.some(
         (edge) => String(edge.sourceHandle || "").trim() === buttonId
       )
@@ -379,7 +378,7 @@ function validateTextButtonsNode(node, outgoingEdges, fallbackNodeId, errors) {
   }
 }
 
-function validateListNode(node, errors) {
+function validateListNode(node, outgoingEdges, errors) {
   const config = node.config || {};
   validateRequiredString({
     errors,
@@ -444,6 +443,19 @@ function validateListNode(node, errors) {
           { nodeId: node.id, field: "config.sections.rows.title" }
         );
       }
+      if (
+        rowId &&
+        !outgoingEdges.some(
+          (edge) => String(edge.sourceHandle || "").trim() === rowId
+        )
+      ) {
+        addIssue(
+          errors,
+          "LIST_ROW_EDGE_REQUIRED",
+          `List row '${rowId}' requires a matching outgoing edge`,
+          { nodeId: node.id, field: "config.sections.rows" }
+        );
+      }
     }
   }
 
@@ -483,7 +495,7 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
         button?.title
       );
     }
-    validateTextButtonsNode(node, outgoingEdges, fallbackNodeId, errors);
+    validateTextButtonsNode(node, outgoingEdges, errors);
   }
 
   if (node.type === "ask_question") {
@@ -508,7 +520,7 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
 
   if (node.type === "list") {
     validateNoVariablesInList(errors, node);
-    validateListNode(node, errors);
+    validateListNode(node, outgoingEdges, errors);
   }
 
   if (node.type === "media") {
