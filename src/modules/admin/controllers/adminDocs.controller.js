@@ -19,6 +19,7 @@ const docSchema = Joi.object({
   content: Joi.string().allow("").default(""),
   keywords: Joi.alternatives().try(Joi.array().items(Joi.string().trim().max(80)), Joi.string().allow("")),
   category: Joi.string().trim().allow("").default("general"),
+  categoryRenameFrom: Joi.string().trim().allow("").default(""),
   order: Joi.number().min(0).default(0),
   status: Joi.string().valid("draft", "published").default("draft"),
   sidebar: Joi.object({
@@ -294,16 +295,18 @@ async function adminDocsGet(req, res) {
   return res.json({ success: true, doc: normalizeDocFromPage(page) });
 }
 
-async function assertAvailableDocSortOrder({ category, itemOrder, excludeId }) {
+async function assertAvailableDocSortOrder({ category, itemOrder, excludeId, renameFrom }) {
   const pages = await DocPage.find({}).select("_id slug title data");
   const normalizedCategory = normalizeCategoryName(category);
+  const targetCategories = new Set([normalizedCategory]);
+  if (renameFrom) targetCategories.add(normalizeCategoryName(renameFrom));
   const normalizedItemOrder = Number(itemOrder || 0);
   const conflict = pages
     .filter(isDocPage)
     .map((page) => ({ page, doc: normalizeDocFromPage(page) }))
     .find(({ page, doc }) => {
       if (excludeId && String(page._id) === String(excludeId)) return false;
-      return getDocCategory(doc) === normalizedCategory && getDocItemOrder(doc) === normalizedItemOrder;
+      return targetCategories.has(getDocCategory(doc)) && getDocItemOrder(doc) === normalizedItemOrder;
     });
 
   if (conflict) {
@@ -314,20 +317,38 @@ async function assertAvailableDocSortOrder({ category, itemOrder, excludeId }) {
   }
 }
 
-async function assertAvailableCategorySortOrder({ category, sectionOrder }) {
+async function assertAvailableCategorySortOrder({ category, sectionOrder, renameFrom }) {
   const pages = await DocPage.find({}).select("_id slug title data");
   const normalizedCategory = normalizeCategoryName(category);
+  const allowedCategories = new Set([normalizedCategory]);
+  if (renameFrom) allowedCategories.add(normalizeCategoryName(renameFrom));
   const normalizedSectionOrder = Number(sectionOrder || 0);
   const conflict = pages
     .filter(isDocPage)
     .map((page) => normalizeDocFromPage(page))
-    .find((doc) => getDocCategory(doc) !== normalizedCategory && getDocSectionOrder(doc) === normalizedSectionOrder);
+    .find((doc) => !allowedCategories.has(getDocCategory(doc)) && getDocSectionOrder(doc) === normalizedSectionOrder);
 
   if (conflict) {
     throw new HttpError(
       409,
       `Category sort order ${normalizedSectionOrder} is already used by ${getDocCategory(conflict)}.`
     );
+  }
+}
+
+async function assertAvailableCategoryName({ category, renameFrom }) {
+  const normalizedCategory = normalizeCategoryName(category);
+  const normalizedRenameFrom = normalizeCategoryName(renameFrom);
+  if (!renameFrom || normalizedCategory === normalizedRenameFrom) return;
+
+  const pages = await DocPage.find({}).select("_id slug title data");
+  const conflict = pages
+    .filter(isDocPage)
+    .map((page) => normalizeDocFromPage(page))
+    .find((doc) => getDocCategory(doc) === normalizedCategory);
+
+  if (conflict) {
+    throw new HttpError(409, `Category "${normalizedCategory}" already exists.`);
   }
 }
 
@@ -341,6 +362,26 @@ async function syncCategorySectionOrder({ category, sectionOrder }) {
     {
       $set: {
         "data.sidebar.sectionOrder": Number(sectionOrder || 0),
+      },
+    }
+  );
+}
+
+async function syncCategoryIdentity({ fromCategory, toCategory, sectionOrder }) {
+  const normalizedFrom = normalizeCategoryName(fromCategory);
+  const normalizedTo = normalizeCategoryName(toCategory);
+  const normalizedSectionOrder = Number(sectionOrder || 0);
+
+  await DocPage.updateMany(
+    {
+      "data.__type": "doc",
+      $or: [{ "data.category": normalizedFrom }, { "data.sidebar.section": normalizedFrom }, { "data.category": normalizedTo }, { "data.sidebar.section": normalizedTo }],
+    },
+    {
+      $set: {
+        "data.category": normalizedTo,
+        "data.sidebar.section": normalizedTo,
+        "data.sidebar.sectionOrder": normalizedSectionOrder,
       },
     }
   );
@@ -375,6 +416,7 @@ async function adminDocsCreate(req, res) {
     },
     __type: "doc",
   };
+  delete data.categoryRenameFrom;
 
   const page = await DocPage.create({
     slug,
@@ -402,10 +444,12 @@ async function adminDocsUpdate(req, res) {
     if (conflict) throw new HttpError(409, "Doc slug already exists");
   }
   const category = normalizeCategoryName(payload?.sidebar?.section || payload.category || "general");
+  const categoryRenameFrom = String(payload.categoryRenameFrom || "").trim();
   const sectionOrder = Number(payload?.sidebar?.sectionOrder || 0);
   const itemOrder = Number(payload?.sidebar?.itemOrder ?? payload.order ?? 0);
-  await assertAvailableCategorySortOrder({ category, sectionOrder });
-  await assertAvailableDocSortOrder({ category, itemOrder, excludeId: existing._id });
+  await assertAvailableCategoryName({ category, renameFrom: categoryRenameFrom });
+  await assertAvailableCategorySortOrder({ category, sectionOrder, renameFrom: categoryRenameFrom });
+  await assertAvailableDocSortOrder({ category, itemOrder, excludeId: existing._id, renameFrom: categoryRenameFrom });
 
   existing.slug = nextSlug;
   existing.title = payload.title;
@@ -424,9 +468,14 @@ async function adminDocsUpdate(req, res) {
     },
     __type: "doc",
   };
+  delete existing.data.categoryRenameFrom;
   existing.updatedByAdminId = String(req.user?.id || "");
   await existing.save();
-  await syncCategorySectionOrder({ category, sectionOrder });
+  if (categoryRenameFrom && normalizeCategoryName(categoryRenameFrom) !== category) {
+    await syncCategoryIdentity({ fromCategory: categoryRenameFrom, toCategory: category, sectionOrder });
+  } else {
+    await syncCategorySectionOrder({ category, sectionOrder });
+  }
 
   return res.json({ success: true, doc: normalizeDocFromPage(existing) });
 }
