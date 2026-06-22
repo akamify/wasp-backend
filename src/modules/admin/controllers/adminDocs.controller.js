@@ -34,6 +34,26 @@ const docSchema = Joi.object({
   }).default(),
 });
 
+function normalizeCategoryName(value) {
+  return String(value || "general").trim() || "general";
+}
+
+function getDocCategory(doc) {
+  return normalizeCategoryName(doc?.category || doc?.sidebar?.section || "general");
+}
+
+function getDocSectionOrder(doc) {
+  const value = Number(doc?.sidebar?.sectionOrder);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function getDocItemOrder(doc) {
+  const itemOrder = Number(doc?.sidebar?.itemOrder);
+  if (Number.isFinite(itemOrder)) return itemOrder;
+  const order = Number(doc?.order);
+  return Number.isFinite(order) ? order : 0;
+}
+
 function normalizeDocSlugCandidate(rawSlug, data) {
   const raw = String(rawSlug || "").trim().toLowerCase();
   const mappedRaw = raw.startsWith(DOC_PREFIX)
@@ -177,7 +197,12 @@ function normalizeDocFromPage(page) {
     content: normalizedContent,
     keywords: Array.isArray(keywordsCandidate) ? keywordsCandidate : [],
     category: normalizedCategory,
-    order: Number(objects.find((obj) => typeof obj?.order === "number")?.order || 0),
+    order: getDocItemOrder({
+      order: objects.find((obj) => typeof obj?.order === "number")?.order,
+      sidebar: {
+        itemOrder: objects.find((obj) => typeof obj?.sidebar?.itemOrder === "number")?.sidebar?.itemOrder,
+      },
+    }),
     status: normalizedStatus,
     sidebar: {
       section: String(objects.find((obj) => typeof obj?.sidebar?.section === "string")?.sidebar?.section || normalizedCategory || "general"),
@@ -240,8 +265,13 @@ async function adminDocsList(req, res) {
     .filter(isDocPage)
     .map(normalizeDocFromPage)
     .sort((a, b) => {
-      const orderA = Number(a?.order || 0);
-      const orderB = Number(b?.order || 0);
+      const sectionA = getDocSectionOrder(a);
+      const sectionB = getDocSectionOrder(b);
+      if (sectionA !== sectionB) return sectionA - sectionB;
+      const categoryCompare = getDocCategory(a).localeCompare(getDocCategory(b));
+      if (categoryCompare !== 0) return categoryCompare;
+      const orderA = getDocItemOrder(a);
+      const orderB = getDocItemOrder(b);
       if (orderA !== orderB) return orderA - orderB;
       return String(a?.title || "").localeCompare(String(b?.title || ""));
     });
@@ -264,6 +294,58 @@ async function adminDocsGet(req, res) {
   return res.json({ success: true, doc: normalizeDocFromPage(page) });
 }
 
+async function assertAvailableDocSortOrder({ category, itemOrder, excludeId }) {
+  const pages = await DocPage.find({}).select("_id slug title data");
+  const normalizedCategory = normalizeCategoryName(category);
+  const normalizedItemOrder = Number(itemOrder || 0);
+  const conflict = pages
+    .filter(isDocPage)
+    .map((page) => ({ page, doc: normalizeDocFromPage(page) }))
+    .find(({ page, doc }) => {
+      if (excludeId && String(page._id) === String(excludeId)) return false;
+      return getDocCategory(doc) === normalizedCategory && getDocItemOrder(doc) === normalizedItemOrder;
+    });
+
+  if (conflict) {
+    throw new HttpError(
+      409,
+      `Sort order ${normalizedItemOrder} is already used by "${conflict.doc.title || conflict.page.title}" in ${normalizedCategory}.`
+    );
+  }
+}
+
+async function assertAvailableCategorySortOrder({ category, sectionOrder }) {
+  const pages = await DocPage.find({}).select("_id slug title data");
+  const normalizedCategory = normalizeCategoryName(category);
+  const normalizedSectionOrder = Number(sectionOrder || 0);
+  const conflict = pages
+    .filter(isDocPage)
+    .map((page) => normalizeDocFromPage(page))
+    .find((doc) => getDocCategory(doc) !== normalizedCategory && getDocSectionOrder(doc) === normalizedSectionOrder);
+
+  if (conflict) {
+    throw new HttpError(
+      409,
+      `Category sort order ${normalizedSectionOrder} is already used by ${getDocCategory(conflict)}.`
+    );
+  }
+}
+
+async function syncCategorySectionOrder({ category, sectionOrder }) {
+  const normalizedCategory = normalizeCategoryName(category);
+  await DocPage.updateMany(
+    {
+      "data.__type": "doc",
+      $or: [{ "data.category": normalizedCategory }, { "data.sidebar.section": normalizedCategory }],
+    },
+    {
+      $set: {
+        "data.sidebar.sectionOrder": Number(sectionOrder || 0),
+      },
+    }
+  );
+}
+
 async function adminDocsCreate(req, res) {
   const payload = await docSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
   const docSlug = String(payload.slug || "").trim().toLowerCase();
@@ -272,15 +354,24 @@ async function adminDocsCreate(req, res) {
 
   const exists = await DocPage.findOne({ slug }).select("_id");
   if (exists) throw new HttpError(409, "Doc slug already exists");
+  const category = normalizeCategoryName(payload?.sidebar?.section || payload.category || "general");
+  const sectionOrder = Number(payload?.sidebar?.sectionOrder || 0);
+  const itemOrder = Number(payload?.sidebar?.itemOrder ?? payload.order ?? 0);
+  await assertAvailableCategorySortOrder({ category, sectionOrder });
+  await assertAvailableDocSortOrder({ category, itemOrder });
 
   const data = {
     ...payload,
+    category,
+    order: itemOrder,
     keywords: Array.isArray(payload.keywords)
       ? payload.keywords
       : String(payload.keywords || "").split(",").map((x) => String(x).trim()).filter(Boolean),
     sidebar: {
       ...(payload.sidebar || {}),
-      section: String(payload?.sidebar?.section || payload.category || "general"),
+      section: category,
+      sectionOrder,
+      itemOrder,
     },
     __type: "doc",
   };
@@ -291,6 +382,7 @@ async function adminDocsCreate(req, res) {
     data,
     updatedByAdminId: String(req.user?.id || ""),
   });
+  await syncCategorySectionOrder({ category, sectionOrder });
 
   return res.json({ success: true, doc: normalizeDocFromPage(page) });
 }
@@ -309,22 +401,32 @@ async function adminDocsUpdate(req, res) {
     const conflict = await DocPage.findOne({ slug: nextSlug, _id: { $ne: existing._id } }).select("_id");
     if (conflict) throw new HttpError(409, "Doc slug already exists");
   }
+  const category = normalizeCategoryName(payload?.sidebar?.section || payload.category || "general");
+  const sectionOrder = Number(payload?.sidebar?.sectionOrder || 0);
+  const itemOrder = Number(payload?.sidebar?.itemOrder ?? payload.order ?? 0);
+  await assertAvailableCategorySortOrder({ category, sectionOrder });
+  await assertAvailableDocSortOrder({ category, itemOrder, excludeId: existing._id });
 
   existing.slug = nextSlug;
   existing.title = payload.title;
   existing.data = {
     ...payload,
+    category,
+    order: itemOrder,
     keywords: Array.isArray(payload.keywords)
       ? payload.keywords
       : String(payload.keywords || "").split(",").map((x) => String(x).trim()).filter(Boolean),
     sidebar: {
       ...(payload.sidebar || {}),
-      section: String(payload?.sidebar?.section || payload.category || "general"),
+      section: category,
+      sectionOrder,
+      itemOrder,
     },
     __type: "doc",
   };
   existing.updatedByAdminId = String(req.user?.id || "");
   await existing.save();
+  await syncCategorySectionOrder({ category, sectionOrder });
 
   return res.json({ success: true, doc: normalizeDocFromPage(existing) });
 }
