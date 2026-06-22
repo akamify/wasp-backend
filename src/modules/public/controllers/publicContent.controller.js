@@ -2,6 +2,7 @@ const Joi = require("joi");
 const { PublicPage } = require("@infra/database/PublicPage");
 const { SupportTicket } = require("@infra/database/SupportTicket");
 const { CareerApplication } = require("@infra/database/CareerApplication");
+const { DocFeedback } = require("@infra/database/DocFeedback");
 const { HttpError } = require("@shared/utils/httpError");
 const { sendEmail } = require("@shared/services/emailService");
 const {
@@ -125,6 +126,44 @@ const ticketSchema = Joi.object({
   message: Joi.string().trim().min(5).max(2000).required(),
 });
 
+const docFeedbackSchema = Joi.object({
+  slug: Joi.string().trim().lowercase().min(1).max(160).required(),
+  helpful: Joi.boolean().required(),
+  docTitle: Joi.string().trim().allow("").max(240).default(""),
+  pagePath: Joi.string().trim().allow("").max(1000).default(""),
+  visitorId: Joi.string().trim().allow("").max(160).default(""),
+});
+
+function getClientIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || String(req.ip || req.socket?.remoteAddress || "").trim();
+}
+
+async function createDocsFeedback(req, res) {
+  const payload = await docFeedbackSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
+  const feedback = await DocFeedback.create({
+    slug: payload.slug,
+    docTitle: payload.docTitle,
+    helpful: payload.helpful,
+    pagePath: payload.pagePath,
+    visitorId: payload.visitorId,
+    ipAddress: getClientIp(req),
+    userAgent: String(req.headers["user-agent"] || "").slice(0, 1000),
+    source: "docs",
+  });
+
+  return res.status(201).json({
+    success: true,
+    feedback: {
+      id: String(feedback._id),
+      slug: feedback.slug,
+      helpful: feedback.helpful,
+      createdAt: feedback.createdAt,
+    },
+    message: "Feedback submitted successfully.",
+  });
+}
+
 async function createSupportTicket(req, res) {
   const payload = await ticketSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
   const ticket = await SupportTicket.create({
@@ -243,5 +282,5 @@ async function getPublicPlatformBrand(req, res) {
   });
 }
 
-module.exports = { getPublicPage, createSupportTicket, applyCareer, getPublicPlatformBrand, normalizeSlug };
+module.exports = { getPublicPage, createSupportTicket, createDocsFeedback, applyCareer, getPublicPlatformBrand, normalizeSlug };
 

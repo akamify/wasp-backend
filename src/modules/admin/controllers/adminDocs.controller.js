@@ -1,6 +1,7 @@
 const Joi = require("joi");
 const mongoose = require("mongoose");
 const { DocPage } = require("@infra/database/DocPage");
+const { DocFeedback } = require("@infra/database/DocFeedback");
 const { DocSetting } = require("@infra/database/DocSetting");
 const { HttpError } = require("@shared/utils/httpError");
 const { uploadBufferToCloudinary } = require("@shared/services/cloudinaryService");
@@ -34,6 +35,22 @@ const docSchema = Joi.object({
     noIndex: Joi.boolean().default(false),
   }).default(),
 });
+
+function normalizeFeedback(doc) {
+  return {
+    id: String(doc?._id || ""),
+    slug: String(doc?.slug || ""),
+    docTitle: String(doc?.docTitle || ""),
+    helpful: !!doc?.helpful,
+    pagePath: String(doc?.pagePath || ""),
+    visitorId: String(doc?.visitorId || ""),
+    ipAddress: String(doc?.ipAddress || ""),
+    userAgent: String(doc?.userAgent || ""),
+    source: String(doc?.source || "docs"),
+    createdAt: doc?.createdAt || null,
+    updatedAt: doc?.updatedAt || null,
+  };
+}
 
 function normalizeCategoryName(value) {
   return String(value || "general").trim() || "general";
@@ -538,6 +555,40 @@ async function adminDocsBrandUploadLogo(req, res) {
   return res.json({ success: true, logoUrl });
 }
 
+async function adminDocsFeedbacks(req, res) {
+  const limit = Math.min(Math.max(Number(req.query.limit || 25), 1), 25);
+  const cursor = String(req.query.cursor || "").trim();
+  const slug = String(req.query.slug || "").trim().toLowerCase();
+  const helpful = String(req.query.helpful || "").trim().toLowerCase();
+
+  const query = {};
+  if (slug) query.slug = slug;
+  if (helpful === "true") query.helpful = true;
+  if (helpful === "false") query.helpful = false;
+  if (cursor && mongoose.Types.ObjectId.isValid(cursor)) {
+    query._id = { $lt: new mongoose.Types.ObjectId(cursor) };
+  }
+
+  const rows = await DocFeedback.find(query).sort({ _id: -1 }).limit(limit + 1);
+  const items = rows.slice(0, limit).map(normalizeFeedback);
+  const hasMore = rows.length > limit;
+
+  return res.json({
+    success: true,
+    items,
+    nextCursor: hasMore ? String(rows[limit]._id) : "",
+    hasMore,
+  });
+}
+
+async function adminDocsFeedbackGet(req, res) {
+  const id = String(req.params.id || "").trim();
+  if (!mongoose.Types.ObjectId.isValid(id)) throw new HttpError(400, "Invalid feedback id");
+  const feedback = await DocFeedback.findById(id);
+  if (!feedback) throw new HttpError(404, "Feedback not found");
+  return res.json({ success: true, feedback: normalizeFeedback(feedback) });
+}
+
 module.exports = {
   adminDocsList,
   adminDocsGet,
@@ -547,4 +598,6 @@ module.exports = {
   adminDocsBrandGet,
   adminDocsBrandUpdate,
   adminDocsBrandUploadLogo,
+  adminDocsFeedbacks,
+  adminDocsFeedbackGet,
 };

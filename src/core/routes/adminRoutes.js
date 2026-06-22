@@ -151,6 +151,8 @@ router.get("/meta/secret-fingerprint", p("/admin/settings"), asyncHandler(getMet
 router.get("/support-tickets", p("/admin/support-tickets"), asyncHandler(adminSupportTickets));
 router.patch("/support-tickets/:id/resolve", c("tickets.edit"), asyncHandler(adminResolveSupportTicket));
 router.get("/app-update", p("/admin/settings"), asyncHandler(adminAppUpdate));
+router.get("/docs-feedbacks", requireAdminPermission("page", "/admin/docs"), asyncHandler(docsController.adminDocsFeedbacks));
+router.get("/docs-feedbacks/:id", requireAdminPermission("page", "/admin/docs"), asyncHandler(docsController.adminDocsFeedbackGet));
 router.get("/docs", requireAdminPermission("page", "/admin/docs"), asyncHandler(docsController.adminDocsList));
 router.get("/docs/:id", requireAdminPermission("page", "/admin/docs"), asyncHandler(docsController.adminDocsGet));
 router.post("/docs", requireAdminPermission("component", "docs.create"), asyncHandler(docsController.adminDocsCreate));
