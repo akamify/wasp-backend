@@ -195,12 +195,16 @@ async function sendText(req, res) {
   if (!windowOpen) throw closedWindowError();
 
   try {
-    const contact = await mergeExternalContactMetadata({ req, phone: normalizedPhone, contactPatch: req.body.contact });
     const result = await sendTextMessageForUser({
       userId: req.workspace.id,
       to: normalizedPhone,
       text,
       sentBy: { kind: "api" },
+    });
+    const contact = await mergeExternalContactMetadata({
+      req,
+      phone: result?.message?.phone || normalizedPhone,
+      contactPatch: req.body.contact,
     });
 
     await writeAuditLog(req, {
@@ -239,7 +243,6 @@ async function sendMedia(req, res) {
   if (!windowOpen) throw closedWindowError();
 
   try {
-    const contact = await mergeExternalContactMetadata({ req, phone: normalizedPhone, contactPatch: req.body.contact });
     const result = await sendMediaMessageForUser({
       userId: req.workspace.id,
       to: normalizedPhone,
@@ -249,6 +252,11 @@ async function sendMedia(req, res) {
       caption: req.body.caption,
       filename: req.body.filename,
       sentBy: { kind: "api" },
+    });
+    const contact = await mergeExternalContactMetadata({
+      req,
+      phone: result?.message?.phone || normalizedPhone,
+      contactPatch: req.body.contact,
     });
 
     await writeAuditLog(req, {

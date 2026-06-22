@@ -182,6 +182,7 @@ async function deliverExternalWebhookJob(job) {
   const timestamp = String(Math.floor(Date.now() / 1000));
 
   let delivered = 0;
+  let lastError = null;
   for (const subscriber of subscribers) {
     const deliveryId = crypto.randomUUID();
     const signature = crypto
@@ -218,6 +219,7 @@ async function deliverExternalWebhookJob(job) {
         }
       );
     } catch (err) {
+      lastError = err;
       await ExternalChatWebhook.updateOne(
         { _id: subscriber._id },
         {
@@ -234,10 +236,10 @@ async function deliverExternalWebhookJob(job) {
           $inc: { failureCount: 1 },
         }
       );
-      throw err;
     }
   }
 
+  if (lastError) throw lastError;
   return { delivered };
 }
 
