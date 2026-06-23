@@ -4,12 +4,25 @@ const { HttpError } = require("@shared/utils/httpError");
 const { sendTemplateMessageForUser, sendTextMessageForUser, sendMediaMessageForUser } = require("@shared/services/outboundMessageService");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { assertNormalizedPhone, normalizePhone } = require("@shared/services/contactService");
-const { chargeForMessaging, refundMessagingCharge } = require("@modules/wallet/services/wallet.core.service");
+const {
+  chargeForMessaging,
+  refundMessagingCharge,
+  walletChargesEnabledLive,
+} = require("@modules/wallet/services/wallet.core.service");
 const { isCustomerServiceWindowOpen, templateMessageChargeAmount } = require("@shared/services/pricingService");
 const { renderTemplatePreviewParts } = require("@shared/utils/templateStructure");
 const { publishWorkspaceEvent } = require("@shared/services/realtimeService");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { getCustomerServiceWindow } = require("@modules/conversations/services/customerServiceWindow.service");
+const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
+
+function maskLogValue(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  if (text.length <= 6) return `${text.slice(0, 2)}***${text.slice(-2)}`;
+  return `${text.slice(0, 3)}***${text.slice(-3)}`;
+}
 
 function isDuplicateKeyError(err) {
   return err?.code === 11000 || err?.name === "MongoServerError";
@@ -241,13 +254,27 @@ async function sendText(req, res) {
   if (!body) throw new HttpError(400, "Text is required");
 
   try {
-    const windowOpen = await isCustomerServiceWindowOpen({ workspaceId: req.workspace.id, phone: normalizedPhone });
-    if (!windowOpen) {
+    const [serviceWindow, credentials, walletChargesEnabled] = await Promise.all([
+      getCustomerServiceWindow({ workspaceId: req.workspace.id, customerPhone: normalizedPhone }),
+      getCredentialsForUser(req.workspace.id),
+      walletChargesEnabledLive(),
+    ]);
+    const billingPlanRestrictionsEnabled = isPlanRestrictionsEnabled();
+    console.info("[whatsapp-send] manual text attempt", {
+      workspaceId: String(req.workspace.id),
+      customerPhoneMasked: maskLogValue(normalizedPhone),
+      canReply: serviceWindow.canReply,
+      customerServiceWindowExpiresAt: serviceWindow.customerServiceWindowExpiresAt,
+      walletChargesEnabled,
+      billingPlanRestrictionsEnabled,
+      phoneNumberIdMasked: maskLogValue(credentials.phoneNumberId),
+    });
+
+    if (!serviceWindow.canReply) {
       throw new HttpError(400, "Customer service window is closed. Ask the user to message first (24h window).", {
         phone: normalizedPhone,
       });
     }
-    await getCredentialsForUser(req.workspace.id);
     const result = await sendTextMessageForUser({
       userId: req.workspace.id,
       to: normalizedPhone,

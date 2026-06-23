@@ -7,6 +7,12 @@ const { getCredentialsForUser } = require("@shared/services/credentialsService")
 const { markMessageAsRead } = require("@shared/utils/whatsappSender");
 const { HttpError } = require("@shared/utils/httpError");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { windowState } = require("../services/customerServiceWindow.service");
+
+function withServiceWindow(conversation, now = new Date()) {
+  const plain = conversation?.toObject ? conversation.toObject() : conversation || {};
+  return { ...plain, ...windowState(plain, now) };
+}
 
 async function attachContacts(userId, wabaId, conversations) {
   const phones = Array.from(new Set(conversations.map((item) => item.phone).filter(Boolean)));
@@ -61,6 +67,7 @@ function previewFromMessage(message, fallback = "") {
 }
 
 function mapConversationListItemForPublic(item) {
+  const serviceWindow = windowState(item);
   const phone = String(item?.phone || "").trim();
   const contactName = String(item?.contact?.name || "").trim();
   return {
@@ -72,6 +79,7 @@ function mapConversationListItemForPublic(item) {
       at: item?.lastMessageAt || null,
     },
     unreadCount: Number(item?.unreadCount || 0),
+    ...serviceWindow,
     lead: {
       status: item?.leadStatus || "UNASSIGNED",
       assignedEmployeeId: item?.assignedEmployeeId ? String(item.assignedEmployeeId) : null,
@@ -179,6 +187,9 @@ async function listConversations(req, res) {
     });
   }
 
+  const responseNow = new Date();
+  items = items.map((item) => withServiceWindow(item, responseNow));
+
   return res.json({ success: true, conversations: items });
 }
 
@@ -198,14 +209,16 @@ async function getConversation(req, res) {
     ),
   ]);
 
+  const resolvedConversation = withServiceWindow(conversation || {
+    phone,
+    unreadCount: 0,
+    lastMessagePreview: "",
+    lastMessageAt: null,
+  });
+
   res.json({
     success: true,
-    conversation: conversation || {
-      phone,
-      unreadCount: 0,
-      lastMessagePreview: "",
-      lastMessageAt: null,
-    },
+    conversation: resolvedConversation,
     contact: contact || null,
   });
 }

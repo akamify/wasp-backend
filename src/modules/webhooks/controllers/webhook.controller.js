@@ -16,6 +16,9 @@ const {
 const {
   processInboundMessage,
 } = require("@modules/flows/services/flowInbound.service");
+const {
+  reconcileCustomerServiceWindow,
+} = require("@modules/conversations/services/customerServiceWindow.service");
 
 const WEBHOOK_DEBUG_LIMIT = 40;
 const webhookDebugEventsByWorkspace = new Map();
@@ -583,6 +586,13 @@ async function receive(req, res) {
               : "");
 
         try {
+          await reconcileCustomerServiceWindow({
+            workspaceId: workspaceIdRaw,
+            customerPhone: from,
+            inboundAt: ts,
+            sourceMessageId: waId,
+          });
+
           const duplicateCheck = await Message.findOne({
             workspaceId: workspaceIdRaw,
             ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
@@ -591,6 +601,11 @@ async function receive(req, res) {
             .select("_id")
             .lean();
           if (duplicateCheck) {
+            console.info("[service-window] duplicate reconciled", {
+              workspaceId: workspaceIdRaw,
+              customerPhoneMasked: maskId(from),
+              wamidMasked: maskWamid(waId),
+            });
             console.info("[webhook] duplicate inbound ignored", {
               workspaceId: workspaceIdRaw,
               maskedPhoneNumberId: maskId(phoneNumberId),
@@ -664,6 +679,11 @@ async function receive(req, res) {
             conversationId: convo?._id ? String(convo._id) : null,
             messageId: msgDoc?._id ? String(msgDoc._id) : null,
           });
+          console.info("[service-window] opened", {
+            workspaceId: workspaceIdRaw,
+            customerPhoneMasked: maskId(from),
+            wamidMasked: maskWamid(waId),
+          });
           publishWorkspaceEvent(workspaceIdRaw, {
             type: "message_inbound",
             phone: from,
@@ -687,6 +707,11 @@ async function receive(req, res) {
           }
         } catch (messageErr) {
           if (Number(messageErr?.code) === 11000 || /duplicate key/i.test(String(messageErr?.message || ""))) {
+            console.info("[service-window] duplicate reconciled", {
+              workspaceId: workspaceIdRaw,
+              customerPhoneMasked: maskId(from),
+              wamidMasked: maskWamid(waId),
+            });
             console.info("[webhook] duplicate inbound ignored", {
               workspaceId: workspaceIdRaw,
               maskedPhoneNumberId: maskId(phoneNumberId),

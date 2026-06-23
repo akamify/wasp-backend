@@ -1,3 +1,5 @@
+const { windowState } = require("@modules/conversations/services/customerServiceWindow.service");
+
 function toExternalConversationDto(conversationDoc) {
   if (!conversationDoc) return null;
   const c = conversationDoc.toObject ? conversationDoc.toObject() : conversationDoc;
@@ -10,6 +12,7 @@ function toExternalConversationDto(conversationDoc) {
       at: c.lastMessageAt || null,
     },
     unreadCount: Number(c.unreadCount || 0),
+    ...windowState(c),
     createdAt: c.createdAt || null,
     updatedAt: c.updatedAt || null,
   };

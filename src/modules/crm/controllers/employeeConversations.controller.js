@@ -7,6 +7,12 @@ const { markConversationEmployeeRead } = require("@shared/services/conversationS
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { markMessageAsRead } = require("@shared/utils/whatsappSender");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { windowState } = require("@modules/conversations/services/customerServiceWindow.service");
+
+function withServiceWindow(conversation, now = new Date()) {
+  const plain = conversation?.toObject ? conversation.toObject() : conversation || {};
+  return { ...plain, ...windowState(plain, now) };
+}
 
 async function attachContacts(workspaceId, wabaId, conversations) {
   const phones = Array.from(new Set(conversations.map((item) => item.phone).filter(Boolean)));
@@ -87,7 +93,8 @@ async function listEmployeeConversations(req, res) {
     );
   }
 
-  res.json({ success: true, conversations: items });
+  const responseNow = new Date();
+  res.json({ success: true, conversations: items.map((item) => withServiceWindow(item, responseNow)) });
 }
 
 async function getEmployeeConversation(req, res) {
@@ -108,7 +115,7 @@ async function getEmployeeConversation(req, res) {
 
   res.json({
     success: true,
-    conversation: conversation || { phone, unreadCount: 0, lastMessagePreview: "", lastMessageAt: null },
+    conversation: withServiceWindow(conversation),
     contact: contact || null,
   });
 }

@@ -1,4 +1,3 @@
-const { Message } = require("@infra/database/Message");
 const { Conversation } = require("@infra/database/Conversation");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 const {
@@ -20,31 +19,20 @@ async function isCustomerServiceWindowOpen({ workspaceId, phone }) {
 }
 
 async function findOpenCustomerServiceWindowPhones({ workspaceId, wabaId, phones }) {
-  const since = new Date(Date.now() - CUSTOMER_SERVICE_WINDOW_MS);
+  const now = new Date();
   const normalizedPhones = Array.from(new Set((phones || []).map((phone) => String(phone || "")).filter(Boolean)));
   if (!normalizedPhones.length) return new Set();
 
-  const [conversationRows, messageRows] = await Promise.all([
-    Conversation.find({
-      workspaceId,
-      wabaId,
-      phone: { $in: normalizedPhones },
-      lastInboundAt: { $gte: since },
-    })
-      .select("phone")
-      .lean(),
-    Message.find({
-      workspaceId,
-      wabaId,
-      phone: { $in: normalizedPhones },
-      direction: "inbound",
-      createdAt: { $gte: since },
-    })
-      .select("phone")
-      .lean(),
-  ]);
+  const conversationRows = await Conversation.find({
+    workspaceId,
+    wabaId,
+    phone: { $in: normalizedPhones },
+    customerServiceWindowExpiresAt: { $gt: now },
+  })
+    .select("phone")
+    .lean();
 
-  return new Set([...conversationRows, ...messageRows].map((row) => String(row.phone || "")));
+  return new Set(conversationRows.map((row) => String(row.phone || "")));
 }
 
 async function templateMessageChargeAmount({ workspaceId, phone, category }) {
