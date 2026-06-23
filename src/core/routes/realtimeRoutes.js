@@ -22,6 +22,7 @@ router.get("/stream", authFromQuery, requireWorkspace, (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
 
   if (typeof res.flushHeaders === "function") res.flushHeaders();
 
@@ -31,13 +32,14 @@ router.get("/stream", authFromQuery, requireWorkspace, (req, res) => {
   };
 
   writeEvent("ready", { workspaceId: req.workspace.id });
+  console.info("[realtime] client connected", { workspaceId: String(req.workspace.id) });
 
   const heartbeat = setInterval(() => {
-    res.write(": ping\n\n");
+    writeEvent("ping", { ts: new Date().toISOString() });
   }, 25000);
 
-  const unsubscribe = subscribeWorkspaceEvents(req.workspace.id, (event) => {
-    writeEvent("message", event);
+  const unsubscribe = subscribeWorkspaceEvents(req.workspace.id, (event, eventName) => {
+    writeEvent(eventName || "message", event);
   });
 
   req.on("close", () => {

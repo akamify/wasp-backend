@@ -1,4 +1,5 @@
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
+const { Message } = require("@infra/database/Message");
 const { decryptString } = require("@shared/utils/crypto");
 const { isMetaAuthorizationWarning } = require("@shared/services/whatsappConnectionMetadataService");
 const axios = require("axios");
@@ -63,7 +64,7 @@ async function metaStatus(req, res) {
   res.set("Cache-Control", "no-store");
 
   const doc = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select(
-    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid lastValidatedAt createdAt updatedAt messagingLimitTierCached messagingLimitCurrentCached messagingLimitNextCached lastLimitsUpdateAt displayPhoneNumber verifiedName qualityRating codeVerificationStatus nameStatus platformType throughput accountMode businessProfile metadataWarnings"
+    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid lastValidatedAt createdAt updatedAt messagingLimitTierCached messagingLimitCurrentCached messagingLimitNextCached lastLimitsUpdateAt displayPhoneNumber verifiedName qualityRating codeVerificationStatus nameStatus platformType throughput accountMode businessProfile metadataWarnings lastSuccessfulSendAt lastStatusWebhookAt"
   );
 
   if (!doc) {
@@ -71,6 +72,14 @@ async function metaStatus(req, res) {
       success: true,
       status: "disconnected",
       credentials: null,
+      cloudApiActive: false,
+      canSendServiceMessages: false,
+      businessVerificationPending: false,
+      paymentSetupRequiredForTemplates: false,
+      lastSuccessfulSendAt: null,
+      lastStatusWebhookAt: null,
+      setupWarnings: [],
+      blockingIssues: ["WhatsApp phone number is not connected."],
       build: { commit: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA || null },
     });
   }
@@ -129,6 +138,40 @@ async function metaStatus(req, res) {
       "Unable to fetch WhatsApp Manager profile from Meta";
   }
 
+  const [latestSuccessfulSend, latestStatusMessage] = await Promise.all([
+    Message.findOne({ workspaceId: req.workspace.id, direction: "outbound", status: { $in: ["sent", "delivered", "read"] } })
+      .sort({ sentAt: -1, createdAt: -1 })
+      .select("sentAt createdAt")
+      .lean(),
+    Message.findOne({ workspaceId: req.workspace.id, direction: "outbound", status: { $in: ["delivered", "read", "failed"] } })
+      .sort({ updatedAt: -1 })
+      .select("updatedAt")
+      .lean(),
+  ]);
+  const platformType = String(phone?.platform_type || doc.platformType || "").toUpperCase();
+  const accountMode = String(phone?.account_mode || doc.accountMode || "").toUpperCase();
+  const codeVerificationStatus = String(phone?.code_verification_status || doc.codeVerificationStatus || "").toUpperCase();
+  const lastSuccessfulSendAt = doc.lastSuccessfulSendAt || latestSuccessfulSend?.sentAt || latestSuccessfulSend?.createdAt || null;
+  const lastStatusWebhookAt = doc.lastStatusWebhookAt || latestStatusMessage?.updatedAt || null;
+  const cloudApiActive = Boolean(phoneNumberId) && platformType === "CLOUD_API" && accountMode === "LIVE";
+  const operationalEvidence = Boolean(lastSuccessfulSendAt || lastStatusWebhookAt);
+  const canSendServiceMessages = cloudApiActive && operationalEvidence;
+  const businessVerificationPending =
+    String(phone?.account_status || phone?.status || "").toLowerCase() === "pending_verification" ||
+    (cloudApiActive && Boolean(codeVerificationStatus) && codeVerificationStatus !== "VERIFIED");
+  const paymentSetupRequiredForTemplates = businessVerificationPending;
+  const setupWarnings = [];
+  const blockingIssues = [];
+  if (!phoneNumberId) blockingIssues.push("WhatsApp phone number is not connected.");
+  else if (platformType !== "CLOUD_API") blockingIssues.push("Cloud API is not registered for this phone number.");
+  else if (accountMode !== "LIVE") blockingIssues.push("WhatsApp account mode is not LIVE.");
+  if (businessVerificationPending) {
+    setupWarnings.push("Business verification is pending. Service-window replies can work, but business-initiated/template messaging and higher limits may require payment/business verification.");
+  }
+  if (codeVerificationStatus === "EXPIRED" && cloudApiActive && operationalEvidence) {
+    setupWarnings.push("Code verification metadata is expired; the operational Cloud API connection remains active.");
+  }
+
   return res.json({
     success: true,
     status: doc.isValid ? "active" : "pending",
@@ -144,6 +187,14 @@ async function metaStatus(req, res) {
     },
     phone,
     businessProfile,
+    cloudApiActive,
+    canSendServiceMessages,
+    businessVerificationPending,
+    paymentSetupRequiredForTemplates,
+    lastSuccessfulSendAt,
+    lastStatusWebhookAt,
+    setupWarnings,
+    blockingIssues,
     limits: {
       messagingLimitTier: doc.messagingLimitTierCached || apiTier || null,
       messagingLimitCurrent: Number.isFinite(doc.messagingLimitCurrentCached)

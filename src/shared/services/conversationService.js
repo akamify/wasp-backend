@@ -1,6 +1,15 @@
 const { Conversation } = require("@infra/database/Conversation");
+const mongoose = require("mongoose");
 const { normalizePhone } = require("@shared/services/contactService");
-const { publishWorkspaceEvent } = require("@shared/services/realtimeService");
+const { publishWorkspaceEvent, publishToWorkspace } = require("@shared/services/realtimeService");
+
+async function totalUnreadForWorkspace(workspaceId) {
+  const rows = await Conversation.aggregate([
+    { $match: { workspaceId: new mongoose.Types.ObjectId(String(workspaceId)) } },
+    { $group: { _id: null, total: { $sum: "$unreadCount" } } },
+  ]);
+  return Number(rows[0]?.total || 0);
+}
 
 async function touchConversation({
   userId,
@@ -10,10 +19,14 @@ async function touchConversation({
   lastMessageAt,
   lastInboundAt,
   lastMessagePreview,
+  lastMessageDirection,
+  lastMessageStatus,
   incrementUnread = false,
 }) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return null;
+  const resolvedDirection = lastMessageDirection || (incrementUnread ? "inbound" : lastMessagePreview !== undefined ? "outbound" : null);
+  const resolvedStatus = lastMessageStatus || (resolvedDirection === "inbound" ? "received" : resolvedDirection === "outbound" ? "sent" : null);
 
   const update = {
     $set: {
@@ -21,6 +34,9 @@ async function touchConversation({
       ...(lastInboundAt ? { lastInboundAt } : {}),
       ...(lastInboundAt ? { lastCustomerMessageAt: lastInboundAt } : {}),
       ...(lastMessagePreview !== undefined ? { lastMessagePreview } : {}),
+      ...(lastMessagePreview !== undefined ? { lastMessage: lastMessagePreview } : {}),
+      ...(resolvedDirection ? { lastMessageDirection: resolvedDirection } : {}),
+      ...(resolvedStatus ? { lastMessageStatus: resolvedStatus } : {}),
       normalizedPhone,
       wabaId,
       phoneNumberId: phoneNumberId || null,
@@ -44,6 +60,16 @@ async function touchConversation({
   }
 
   if (conversation?._id) {
+    publishToWorkspace(userId, "conversation:update", { conversation: conversation.toObject() });
+    if (incrementUnread) {
+      const totalUnread = await totalUnreadForWorkspace(userId);
+      publishToWorkspace(userId, "unread:update", {
+        conversationId: String(conversation._id),
+        customerPhone: normalizedPhone,
+        unreadCount: Number(conversation.unreadCount || 0),
+        totalUnread,
+      });
+    }
     publishWorkspaceEvent(userId, {
       type: "conversation.updated",
       conversationId: String(conversation._id),
@@ -60,11 +86,18 @@ async function markConversationRead({ userId, wabaId, phone }) {
 
   const conversation = await Conversation.findOneAndUpdate(
     { workspaceId: userId, wabaId, phone: normalizedPhone },
-    { $set: { unreadCount: 0, ownerUnreadCount: 0 } },
+    { $set: { unreadCount: 0, ownerUnreadCount: 0, lastReadAt: new Date() } },
     { returnDocument: "after" }
   );
 
   if (conversation?._id) {
+    publishToWorkspace(userId, "conversation:update", { conversation: conversation.toObject() });
+    publishToWorkspace(userId, "unread:update", {
+      conversationId: String(conversation._id),
+      customerPhone: normalizedPhone,
+      unreadCount: 0,
+      totalUnread: await totalUnreadForWorkspace(userId),
+    });
     publishWorkspaceEvent(userId, {
       type: "conversation.updated",
       conversationId: String(conversation._id),

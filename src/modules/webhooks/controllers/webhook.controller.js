@@ -1,13 +1,14 @@
 const { metaWebhookVerifyToken } = require("@core/config/env");
 const { findTenantByPhoneNumberId, findTenantByWabaId } = require("@shared/services/credentialsService");
 const { Message } = require("@infra/database/Message");
+const { Conversation } = require("@infra/database/Conversation");
 const mongoose = require("mongoose");
 const { touchConversation } = require("@shared/services/conversationService");
 const { normalizePhone, touchContactFromMessage } = require("@shared/services/contactService");
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { Campaign } = require("@infra/database/Campaign");
 const { HttpError } = require("@shared/utils/httpError");
-const { publishWorkspaceEvent } = require("@shared/services/realtimeService");
+const { publishWorkspaceEvent, publishToWorkspace } = require("@shared/services/realtimeService");
 const { getCrmLeadAssignmentQueue } = require("@infra/queues/crmLeadAssignment.queue");
 const { Workspace } = require("@infra/database/Workspace");
 const {
@@ -77,8 +78,11 @@ function normalizeStatus(status) {
   if (s === "delivered") return "delivered";
   if (s === "read") return "read";
   if (s === "failed") return "failed";
+  if (s === "accepted") return "accepted";
   return "sent";
 }
+
+const MESSAGE_STATUS_RANK = { accepted: 0, sent: 1, delivered: 2, read: 3, failed: 4 };
 
 function parseTierLimitToNumber(tier) {
   const s = String(tier || "").trim().toUpperCase();
@@ -357,6 +361,12 @@ async function receive(req, res) {
 
       const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
       if (statuses.length) {
+        await WhatsAppCredentials.updateOne(
+          { workspaceId: workspaceIdRaw, isActive: { $ne: false } },
+          { $set: { lastStatusWebhookAt: new Date() } }
+        ).catch(() => {});
+      }
+      if (statuses.length) {
         pushWebhookDebugEvent(workspaceIdRaw, {
           type: "statuses",
           field,
@@ -399,9 +409,16 @@ async function receive(req, res) {
           const filter = hasValidWorkspaceId
             ? { workspaceId: workspaceIdRaw, ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}), whatsappMessageId: waId }
             : { whatsappMessageId: waId };
+          const existing = await Message.findOne(filter).select("status").lean();
+          const oldStatus = String(existing?.status || "accepted").toLowerCase();
+          const effectiveStatus = (MESSAGE_STATUS_RANK[newStatus] ?? 0) >= (MESSAGE_STATUS_RANK[oldStatus] ?? 0)
+            ? newStatus
+            : oldStatus;
+          set.status = effectiveStatus;
           const update = hasValidWorkspaceId
             ? {
               $set: set,
+              $push: { statusHistory: { status: newStatus, timestamp: ts, error: s.errors || null } },
               $setOnInsert: {
                 workspaceId: workspaceIdRaw,
                 // Keep phone only in $set to avoid Mongo conflicting update operators.
@@ -411,7 +428,10 @@ async function receive(req, res) {
                 "statusTimestamps.acceptedAt": new Date(),
               },
             }
-            : { $set: set };
+            : {
+              $set: set,
+              $push: { statusHistory: { status: newStatus, timestamp: ts, error: s.errors || null } },
+            };
 
           const updated = await Message.findOneAndUpdate(
             filter,
@@ -424,11 +444,41 @@ async function receive(req, res) {
           );
           if (updated) {
             await refreshCampaignFromMessage(workspaceIdRaw, updated);
+            console.info("[message-status] updated", {
+              workspaceId: workspaceIdRaw,
+              wamidMasked: maskWamid(waId),
+              oldStatus,
+              newStatus: effectiveStatus,
+            });
+            publishToWorkspace(workspaceIdRaw, "message:status", {
+              messageId: updated._id ? String(updated._id) : null,
+              wamid: waId,
+              status: effectiveStatus,
+              statusTimestamp: ts,
+              error: s.errors || null,
+            });
+            const conversation = await Conversation.findOneAndUpdate(
+              {
+                workspaceId: workspaceIdRaw,
+                ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
+                phone: updated.phone || phone,
+                lastMessageDirection: "outbound",
+              },
+              { $set: { lastMessageStatus: effectiveStatus } },
+              { returnDocument: "after" }
+            );
+            if (conversation) {
+              publishToWorkspace(workspaceIdRaw, "conversation:update", {
+                conversationId: String(conversation._id),
+                customerPhone: conversation.phone,
+                lastMessageStatus: effectiveStatus,
+              });
+            }
             publishWorkspaceEvent(workspaceIdRaw, {
               type: "message_status",
               phone: updated.phone || phone || null,
               whatsappMessageId: waId,
-              status: newStatus,
+              status: effectiveStatus,
               messageId: updated._id ? String(updated._id) : null,
               statusTimestamps: updated.statusTimestamps || {},
             });
@@ -683,6 +733,11 @@ async function receive(req, res) {
             workspaceId: workspaceIdRaw,
             customerPhoneMasked: maskId(from),
             wamidMasked: maskWamid(waId),
+          });
+          publishToWorkspace(workspaceIdRaw, "message:new", {
+            conversationId: convo?._id ? String(convo._id) : null,
+            customerPhone: from,
+            message: msgDoc?.toObject ? msgDoc.toObject() : msgDoc,
           });
           publishWorkspaceEvent(workspaceIdRaw, {
             type: "message_inbound",

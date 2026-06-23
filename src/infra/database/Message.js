@@ -72,6 +72,10 @@ const MessageSchema = new mongoose.Schema(
       kind: { type: String, enum: ["owner", "admin", "employee", "system", "api"], required: true, default: "system" },
       actorId: { type: mongoose.Schema.Types.ObjectId, required: false },
     },
+    statusHistory: {
+      type: [{ _id: false, status: String, timestamp: Date, error: mongoose.Schema.Types.Mixed }],
+      default: [],
+    },
     wabaId: { type: String, trim: true, index: true, default: null },
     phoneNumberId: { type: String, trim: true, index: true, default: null },
     lastAssignedEmployeeId: { type: mongoose.Schema.Types.ObjectId, ref: "Employee", default: null, index: true },

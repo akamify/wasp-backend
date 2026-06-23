@@ -18,6 +18,8 @@ const {
 } = require("@shared/utils/templateStructure");
 const { assertTemplateBelongsToWaba } = require("@shared/services/templateOwnershipService");
 const { HttpError } = require("@shared/utils/httpError");
+const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
+const { publishToWorkspace } = require("@shared/services/realtimeService");
 
 function isMissingMetaTemplate(err) {
   const message = String(
@@ -334,6 +336,15 @@ async function sendTextMessageForUser({
   });
 
   const conversation = await touchConversation({ userId, wabaId: creds.wabaId, phoneNumberId: creds.phoneNumberId, phone: resolvedPhone, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
+  await WhatsAppCredentials.updateOne(
+    { workspaceId: userId, isActive: { $ne: false } },
+    { $set: { lastSuccessfulSendAt: now } }
+  ).catch(() => {});
+  publishToWorkspace(userId, "message:new", {
+    conversationId: conversation?._id ? String(conversation._id) : null,
+    customerPhone: resolvedPhone,
+    message: message.toObject ? message.toObject() : message,
+  });
   await touchContactFromMessage({ userId, wabaId: creds.wabaId, phoneNumberId: creds.phoneNumberId, phone: resolvedPhone, direction: "outbound", preview: text, occurredAt: now });
   if (conversation) {
     const patch = { lastEmployeeReplyAt: now };

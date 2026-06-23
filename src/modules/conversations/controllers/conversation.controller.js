@@ -141,6 +141,8 @@ async function listConversations(req, res) {
               text: "$text",
               payload: "$payload",
               display: "$display",
+              direction: "$direction",
+              status: "$status",
               createdAt: "$createdAt",
               sortAt: "$effectiveSortAt",
             },
@@ -158,6 +160,9 @@ async function listConversations(req, res) {
           ...item,
           lastMessageAt: latest.sortAt || latest.createdAt || item.lastMessageAt,
           lastMessagePreview: previewFromMessage(latest, item.lastMessagePreview),
+          lastMessage: previewFromMessage(latest, item.lastMessagePreview),
+          lastMessageDirection: latest.direction || item.lastMessageDirection || null,
+          lastMessageStatus: latest.status || item.lastMessageStatus || null,
         };
       })
       .sort((a, b) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime());
@@ -228,23 +233,31 @@ async function readConversation(req, res) {
   const phone = normalizePhone(req.params.phone);
   if (!phone) throw new HttpError(400, "Invalid phone number");
 
-  // Send read receipts only when agent opens/reads chat (controlled seen behavior).
-  // Best-effort: conversation read should still succeed even if Meta call fails.
+  const pendingInbound = await Message.find({
+    workspaceId: req.workspace.id,
+    wabaId: scope.wabaId,
+    phone,
+    direction: "inbound",
+    status: "received",
+    whatsappMessageId: { $type: "string" },
+    readReceiptSentAt: null,
+  })
+    .sort({ createdAt: 1 })
+    .limit(100)
+    .select("_id whatsappMessageId");
+
+  const localReadAt = new Date();
+  if (pendingInbound.length) {
+    await Message.updateMany(
+      { _id: { $in: pendingInbound.map((message) => message._id) } },
+      { $set: { status: "read", "statusTimestamps.readByBusinessAt": localReadAt } }
+    );
+  }
+  const conversation = await markConversationRead({ userId: req.workspace.id, wabaId: scope.wabaId, phone });
+
+  // Provider receipts are best-effort and do not gate local unread state.
   try {
     const creds = await getCredentialsForUser(req.workspace.id);
-    const pendingInbound = await Message.find({
-      workspaceId: req.workspace.id,
-      wabaId: scope.wabaId,
-      phone,
-      direction: "inbound",
-      status: "received",
-      whatsappMessageId: { $type: "string" },
-      readReceiptSentAt: null,
-    })
-      .sort({ createdAt: 1 })
-      .limit(100)
-      .select("_id whatsappMessageId");
-
     for (const msg of pendingInbound) {
       try {
         await markMessageAsRead({
@@ -270,7 +283,6 @@ async function readConversation(req, res) {
     // Ignore credential/Meta issues; keeping read endpoint resilient.
   }
 
-  const conversation = await markConversationRead({ userId: req.workspace.id, wabaId: scope.wabaId, phone });
   res.json({ success: true, conversation: conversation || null, phone });
 }
 

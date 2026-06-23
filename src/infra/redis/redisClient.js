@@ -3,6 +3,8 @@ const { getRedisUrl } = require("@core/config/redis");
 const logger = require("@core/logger/logger");
 
 let _connection;
+let _realtimePublisher;
+let _realtimeSubscriber;
 let _lastLoggedRedisErrorKey = null;
 let _lastLoggedRedisErrorAt = 0;
 let _quotaExceededHandled = false;
@@ -86,7 +88,30 @@ function createRedisConnection() {
     return _connection;
 }
 
+function createRealtimeRedisConnections() {
+    const connection = createRedisConnection();
+    if (!_realtimePublisher) {
+        _realtimePublisher = connection.duplicate();
+        _realtimePublisher.on("error", logRedisErrorOnce);
+    }
+    if (!_realtimeSubscriber) {
+        _realtimeSubscriber = connection.duplicate();
+        _realtimeSubscriber.on("error", logRedisErrorOnce);
+    }
+    return { publisher: _realtimePublisher, subscriber: _realtimeSubscriber };
+}
+
 async function closeRedisConnection() {
+    const realtimeConnections = [_realtimePublisher, _realtimeSubscriber].filter(Boolean);
+    _realtimePublisher = null;
+    _realtimeSubscriber = null;
+    await Promise.all(realtimeConnections.map(async (conn) => {
+        try {
+            await conn.quit();
+        } catch (_) {
+            try { conn.disconnect(false); } catch (_) { /* ignore */ }
+        }
+    }));
     if (!_connection) return;
     const conn = _connection;
     _connection = null;
@@ -101,5 +126,5 @@ async function closeRedisConnection() {
     }
 }
 
-module.exports = { createRedisConnection, closeRedisConnection };
+module.exports = { createRedisConnection, createRealtimeRedisConnections, closeRedisConnection };
 

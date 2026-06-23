@@ -72,7 +72,10 @@ function computeConnectionStatus(connection) {
   const codeVerificationStatus = String(connection.codeVerificationStatus || "").toUpperCase();
   const nameStatus = String(connection.nameStatus || "").toUpperCase();
   const metadataWarnings = Array.isArray(connection.metadataWarnings) ? connection.metadataWarnings : [];
+  const platformType = String(connection.platformType || "").toUpperCase();
+  const accountMode = String(connection.accountMode || "").toUpperCase();
   if (metadataWarnings.some(isMetaAuthorizationWarning)) return "reauthorization_required";
+  if ((connection.phoneNumberId || connection.phoneNumberIdPlain) && platformType === "CLOUD_API" && accountMode === "LIVE") return "connected";
   if (codeVerificationStatus && codeVerificationStatus !== "VERIFIED") return "pending_verification";
   if (["PENDING", "IN_REVIEW"].includes(nameStatus)) return "pending_display_name_review";
   if (metadataFetchStatus === "error") return "error";

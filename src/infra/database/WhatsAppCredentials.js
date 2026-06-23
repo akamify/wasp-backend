@@ -89,6 +89,8 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
     lastWebhookAt: { type: Date, default: null, index: true },
     lastWebhookField: { type: String, default: null },
     lastWebhookObject: { type: String, default: null },
+    lastSuccessfulSendAt: { type: Date, default: null, index: true },
+    lastStatusWebhookAt: { type: Date, default: null, index: true },
   },
   { timestamps: true }
 );
