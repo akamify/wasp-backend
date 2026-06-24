@@ -111,6 +111,15 @@ const MessageSchema = new mongoose.Schema(
     },
     payload: { type: Object },
     error: { type: Object },
+    messageKind: { type: String, enum: ["service", "template", "automation", "campaign"], default: null, index: true },
+    chargeAmount: { type: Number, default: 0 },
+    chargeCategory: { type: String, default: null },
+    platformWalletCharged: { type: Boolean, default: false },
+    chargeSource: { type: String, enum: ["wallet", "free_service_window", "none"], default: "none" },
+    walletTransactionId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction", default: null },
+    metaBillingHandledBy: { type: String, default: "Meta billing hub / WABA billing" },
+    sendFailureCode: { type: String, default: null },
+    sendFailureMessage: { type: String, default: null },
   },
   { timestamps: true }
 );
@@ -148,6 +157,15 @@ MessageSchema.pre("validate", function normalizeMessageTimeline() {
           : this.sentBy?.kind === "api"
             ? "api"
             : "manual");
+  this.messageKind =
+    this.messageKind ||
+    (this.campaignId
+      ? "campaign"
+      : this.type === "template" || this.templateId
+        ? "template"
+        : this.source === "automation"
+          ? "automation"
+          : "service");
 });
 
 // Only enforce uniqueness when Meta message ID is actually present.

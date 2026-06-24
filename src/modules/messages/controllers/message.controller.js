@@ -5,11 +5,9 @@ const { sendTemplateMessageForUser, sendTextMessageForUser, sendMediaMessageForU
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { assertNormalizedPhone, normalizePhone } = require("@shared/services/contactService");
 const {
-  chargeForMessaging,
-  refundMessagingCharge,
   walletChargesEnabledLive,
 } = require("@modules/wallet/services/wallet.core.service");
-const { isCustomerServiceWindowOpen, templateMessageChargeAmount } = require("@shared/services/pricingService");
+const { isCustomerServiceWindowOpen } = require("@shared/services/pricingService");
 const { renderTemplatePreviewParts } = require("@shared/utils/templateStructure");
 const { publishWorkspaceEvent } = require("@shared/services/realtimeService");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
@@ -61,6 +59,7 @@ function buildDetails(err) {
 }
 
 async function safeLogFailedOutboundMessage({ userId, templateId, phone, err }) {
+  if (err?.templateFailurePersisted) return;
   try {
     const scope = await requireActiveWabaScope(userId);
     await Message.create({
@@ -73,6 +72,14 @@ async function safeLogFailedOutboundMessage({ userId, templateId, phone, err }) 
       status: "failed",
       statusTimestamps: { failedAt: new Date() },
       error: buildDetails(err),
+      messageKind: templateId ? "template" : "service",
+      chargeAmount: 0,
+      chargeCategory: null,
+      platformWalletCharged: false,
+      chargeSource: "none",
+      metaBillingHandledBy: "Meta billing hub / WABA billing",
+      sendFailureCode: err?.details?.code || err?.code || "SEND_FAILED",
+      sendFailureMessage: providerErrorFrom(err),
     });
   } catch {}
 }
@@ -99,15 +106,7 @@ async function sendTemplate(req, res) {
   }
   await assertTemplateBelongsToCurrentWaba({ template, workspaceId: req.workspace.id });
 
-  const pricing = await templateMessageChargeAmount({ workspaceId: req.workspace.id, phone: normalizedPhone, category: template.category });
-  const chargeAmount = pricing.amount;
   try {
-    await chargeForMessaging(req.workspace.id, chargeAmount, "Message send", {
-      kind: "single",
-      templateId: String(template._id),
-      to: normalizedPhone,
-      pricing,
-    });
     await getCredentialsForUser(req.workspace.id);
 
     const result = await sendTemplateMessageForUser({
@@ -128,6 +127,7 @@ async function sendTemplate(req, res) {
       success: true,
       message: result.message,
       meta: result.apiResponse,
+      billing: result.billing,
     });
     publishWorkspaceEvent(req.workspace.id, {
       type: "message_outbound",
@@ -136,12 +136,6 @@ async function sendTemplate(req, res) {
       whatsappMessageId: result?.message?.whatsappMessageId || null,
     });
   } catch (err) {
-    if (!err?.statusCode && err?.response) {
-      // If provider send failed, refund the wallet debit.
-      try {
-        await refundMessagingCharge(req.workspace.id, chargeAmount, { templateId: templateId, to: normalizedPhone });
-      } catch {}
-    }
     if (err.statusCode) {
       throw err;
     }
@@ -181,17 +175,8 @@ async function bulkSend(req, res) {
       const r = queue.shift();
       if (!r) continue;
       const to = assertNormalizedPhone(r.to);
-      const pricing = await templateMessageChargeAmount({ workspaceId: req.workspace.id, phone: to, category: template.category });
-      const chargeAmount = pricing.amount;
-
       try {
-        await chargeForMessaging(req.workspace.id, chargeAmount, "Message send", {
-          kind: "bulk",
-          templateId: String(template._id),
-          to,
-          pricing,
-        });
-        const { message } = await sendTemplateMessageForUser({
+        const { message, billing } = await sendTemplateMessageForUser({
           userId: req.workspace.id,
           template,
           to,
@@ -209,13 +194,9 @@ async function bulkSend(req, res) {
           to,
           success: true,
           messageId: message?.whatsappMessageId || message?._id,
+          billing,
         });
       } catch (err) {
-        if (!err?.statusCode && err?.response) {
-          try {
-            await refundMessagingCharge(req.workspace.id, chargeAmount, { templateId: String(template._id), to });
-          } catch {}
-        }
         if (err.statusCode) {
           results.push({
             to,
@@ -280,7 +261,7 @@ async function sendText(req, res) {
       to: normalizedPhone,
       text: body,
     });
-    res.json({ success: true, message: result.message, meta: result.apiResponse });
+    res.json({ success: true, message: result.message, meta: result.apiResponse, billing: result.billing });
     publishWorkspaceEvent(req.workspace.id, {
       type: "message_outbound",
       phone: normalizedPhone,

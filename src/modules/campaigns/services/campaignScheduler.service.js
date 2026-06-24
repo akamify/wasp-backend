@@ -19,6 +19,9 @@ const {
 const { buildAttributeAudienceClauses } = require("@modules/campaigns/utils/attributeAudience");
 const { resolveRecipientRuntime } = require("@modules/campaigns/utils/templateVariableResolver");
 const logger = require("@core/logger/logger");
+const { Template } = require("@infra/database/Template");
+const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate");
+const { ensureBalance } = require("@modules/wallet/services/wallet.core.service");
 
 const SCHEDULE_LOCK_MS = Math.min(
     Math.max(Number(process.env.CAMPAIGN_SCHEDULE_LOCK_MS || 3 * 60 * 1000), 60 * 1000),
@@ -131,6 +134,7 @@ async function releaseFailedDispatch({ campaign, lockedBy, run, err }) {
     if (run?._id) {
         await campaignRunsRepository.markCampaignRunFailed({ runId: run._id, error: err }).catch(() => {});
     }
+    const insufficientWallet = Number(err?.statusCode || err?.status) === 402;
     await campaignsRepository.releaseScheduledCampaignLock({
         campaignId: campaign._id,
         workspaceId: campaign.workspaceId,
@@ -138,6 +142,7 @@ async function releaseFailedDispatch({ campaign, lockedBy, run, err }) {
         update: {
             $set: {
                 lastError: { message: err?.message || String(err || "Scheduled campaign dispatch failed") },
+                ...(insufficientWallet ? { status: CAMPAIGN_STATUSES.FAILED, "schedule.status": "failed" } : {}),
             },
         },
     }).catch(() => {});
@@ -239,6 +244,15 @@ async function dispatchScheduledCampaign({ workspaceId, campaignId, runAt }) {
             }
             return { ok: false, failed: true, reason: "missing_recipients" };
         }
+
+        const template = await Template.findOne({
+            _id: campaign.templateId,
+            workspaceId: campaign.workspaceId,
+            wabaId: campaign.wabaId,
+        });
+        if (!template) throw new Error("Template not found for scheduled campaign");
+        const estimate = await computeCampaignEstimate({ workspaceId: campaign.workspaceId, template, recipients });
+        if (estimate.estimatedCredits > 0) await ensureBalance(campaign.workspaceId, estimate.estimatedCredits);
 
         await campaignRunsRepository.markCampaignRunRunning({ runId: run._id, total: recipients.length });
         await enqueueCampaignRecipients({

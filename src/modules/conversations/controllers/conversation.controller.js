@@ -106,9 +106,16 @@ async function listConversations(req, res) {
   res.set("Expires", "0");
 
   const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
-  const conversations = await Conversation.find({ workspaceId: req.workspace.id, wabaId: scope.wabaId })
-    .sort({ lastMessageAt: -1 })
-    .limit(limit);
+  const conversationFilter = { workspaceId: req.workspace.id, wabaId: scope.wabaId };
+  if (String(req.query.filter || "").toLowerCase() === "unread") conversationFilter.unreadCount = { $gt: 0 };
+  if (String(req.query.filter || "").toLowerCase() === "read") {
+    conversationFilter.$or = [{ unreadCount: 0 }, { unreadCount: { $exists: false } }];
+  }
+  const [conversations, unreadRows] = await Promise.all([
+    Conversation.find(conversationFilter).sort({ lastMessageAt: -1 }).limit(limit),
+    Conversation.find({ workspaceId: req.workspace.id, wabaId: scope.wabaId, unreadCount: { $gt: 0 } }).select("unreadCount").lean(),
+  ]);
+  const totalUnread = unreadRows.reduce((total, conversation) => total + Number(conversation.unreadCount || 0), 0);
 
   let items = await attachContacts(req.workspace.id, scope.wabaId, conversations);
   const phones = items.map((item) => item.phone).filter(Boolean);
@@ -187,6 +194,7 @@ async function listConversations(req, res) {
           limit,
           total: items.length,
           hasNextPage: items.length >= limit,
+          totalUnread,
         },
       },
     });
@@ -195,7 +203,7 @@ async function listConversations(req, res) {
   const responseNow = new Date();
   items = items.map((item) => withServiceWindow(item, responseNow));
 
-  return res.json({ success: true, conversations: items });
+  return res.json({ success: true, conversations: items, totalUnread });
 }
 
 async function getConversation(req, res) {

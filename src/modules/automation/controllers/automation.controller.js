@@ -3,8 +3,6 @@ const { Event } = require("@infra/database/Event");
 const { HttpError } = require("@shared/utils/httpError");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
 const { assertNormalizedPhone } = require("@shared/services/contactService");
-const { debit, credit } = require("@modules/wallet/services/wallet.core.service");
-const { templateMessageChargeAmount } = require("@shared/services/pricingService");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 
 async function triggerEvent(req, res) {
@@ -37,15 +35,7 @@ async function triggerEvent(req, res) {
     status: "triggered",
   });
 
-  const pricing = await templateMessageChargeAmount({ workspaceId: req.workspace.id, phone: normalizedPhone, category: template.category });
-  const chargeAmount = pricing.amount;
   try {
-    await debit(req.workspace.id, chargeAmount, "Message send (automation)", {
-      templateId: String(template._id),
-      to: normalizedPhone,
-      eventName,
-      pricing,
-    });
     const { message, apiResponse } = await sendTemplateMessageForUser({
       userId: req.workspace.id,
       template,
@@ -55,6 +45,9 @@ async function triggerEvent(req, res) {
       headerVariables,
       otpCode,
       buttonValues,
+      source: "automation",
+      senderType: "automation",
+      sentBy: { kind: "system" },
     });
 
     event.messageId = message._id;
@@ -63,20 +56,11 @@ async function triggerEvent(req, res) {
 
     res.json({ success: true, event, message, meta: apiResponse });
   } catch (err) {
-    if (err.statusCode) throw err;
-
-    if (err?.response) {
-      try {
-        await credit(req.workspace.id, chargeAmount, "Message refund (automation failed)", "internal", "", {
-          templateId: String(template._id),
-          to: normalizedPhone,
-          eventName,
-        });
-      } catch {}
-    }
     event.status = "failed";
     event.error = err.response?.data || { message: err.message };
     await event.save();
+
+    if (err.statusCode) throw err;
 
     throw new HttpError(502, "Failed to send automated message", err.response?.data || err.message);
   }

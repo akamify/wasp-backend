@@ -7,8 +7,6 @@ const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate")
 const {
     ensureBalance,
     getOrCreateWallet,
-    debit,
-    credit,
 } = require("@modules/wallet/services/wallet.core.service");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
@@ -247,6 +245,7 @@ async function sendApiCampaignByName(req) {
     let inlineSentCount = 0;
     let inlineFailedCount = 0;
     let inlineLastFailure = null;
+    let inlineWalletBlocked = false;
     try {
         await enqueueCampaignRecipients({
             workspaceId,
@@ -286,19 +285,7 @@ async function sendApiCampaignByName(req) {
             );
 
             for (const recipient of recipients) {
-                const chargeAmount = estimate.openWindowSet.has(String(recipient.to)) ? 0 : estimate.categoryCost;
                 try {
-                    if (chargeAmount > 0) {
-                        await debit(workspaceId, chargeAmount, "Message send (campaign)", {
-                            campaignId: String(apiCampaign._id),
-                            templateId: String(template._id),
-                            to: recipient.to,
-                            pricing: {
-                                customerServiceWindowOpen: estimate.openWindowSet.has(String(recipient.to)),
-                                walletChargesEnabled: estimate.walletChargesEnabled,
-                            },
-                        });
-                    }
                     await sendTemplateMessageForUser({
                         userId: workspaceId,
                         campaignId: String(apiCampaign._id),
@@ -322,7 +309,7 @@ async function sendApiCampaignByName(req) {
                     const storedError = buildStoredSendError(err);
                     lastFailure = storedError;
                     inlineLastFailure = storedError;
-                    try {
+                    if (!err?.templateFailurePersisted) try {
                         await Message.create({
                             workspaceId,
                             wabaId: scope.wabaId,
@@ -337,19 +324,18 @@ async function sendApiCampaignByName(req) {
                             error: storedError,
                         });
                     } catch { }
-                    if (err?.response && chargeAmount > 0) {
-                        try {
-                            await credit(workspaceId, chargeAmount, "Message refund (campaign failed)", "internal", "", {
-                                campaignId: String(apiCampaign._id),
-                                templateId: String(template._id),
-                                to: recipient.to,
-                            });
-                        } catch { }
-                    }
                     await require("@infra/database/Campaign").Campaign.updateOne(
                         { _id: apiCampaign._id, workspaceId },
                         { $inc: { "totals.queued": -1, "totals.failed": 1 } }
                     );
+                    if (Number(err?.statusCode || err?.status) === 402) {
+                        inlineWalletBlocked = true;
+                        await require("@infra/database/Campaign").Campaign.updateOne(
+                            { _id: apiCampaign._id, workspaceId },
+                            { $set: { status: "failed", lastError: { message: "Insufficient wallet balance. Add credits to send templates." } } }
+                        );
+                        break;
+                    }
                 }
             }
             inlineSentCount = sentCount;
@@ -360,7 +346,7 @@ async function sendApiCampaignByName(req) {
                 {
                     $set: {
                         // API campaign must stay running until user explicitly completes/cancels.
-                        status: "running",
+                        status: inlineWalletBlocked ? "failed" : "running",
                         ...(lastFailure ? { lastError: { message: lastFailure?.providerMessage || lastFailure?.message || "Failed" } } : {}),
                     },
                 }
@@ -369,7 +355,7 @@ async function sendApiCampaignByName(req) {
     }
 
     const refreshed = await require("@infra/database/Campaign").Campaign.findOne({ _id: apiCampaign._id, workspaceId });
-    emitCampaignEvent(CAMPAIGN_EVENTS.PROCESSING, { campaignId: String(apiCampaign._id), workspaceId });
+    emitCampaignEvent(inlineWalletBlocked ? CAMPAIGN_EVENTS.FAILED : CAMPAIGN_EVENTS.PROCESSING, { campaignId: String(apiCampaign._id), workspaceId });
 
     const requestTotals = processedInline
         ? {
@@ -397,7 +383,7 @@ async function sendApiCampaignByName(req) {
             inlineLastFailure?.message ||
             "Campaign send failed";
         throw new HttpError(
-            inlineSentCount > 0 ? 409 : 400,
+            inlineWalletBlocked ? 402 : inlineSentCount > 0 ? 409 : 400,
             failureMessage,
             {
                 requestId,

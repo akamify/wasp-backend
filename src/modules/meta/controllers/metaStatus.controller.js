@@ -80,6 +80,7 @@ async function metaStatus(req, res) {
       lastStatusWebhookAt: null,
       setupWarnings: [],
       blockingIssues: ["WhatsApp phone number is not connected."],
+      metaBillingOwner: "platform_or_connected_waba",
       build: { commit: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA || null },
     });
   }
@@ -195,6 +196,7 @@ async function metaStatus(req, res) {
     lastStatusWebhookAt,
     setupWarnings,
     blockingIssues,
+    metaBillingOwner: "platform_or_connected_waba",
     limits: {
       messagingLimitTier: doc.messagingLimitTierCached || apiTier || null,
       messagingLimitCurrent: Number.isFinite(doc.messagingLimitCurrentCached)

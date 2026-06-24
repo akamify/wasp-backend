@@ -8,7 +8,7 @@ const TransactionSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    type: { type: String, enum: ["credit", "debit"], required: true, index: true },
+    type: { type: String, enum: ["credit", "debit", "template_message_charge"], required: true, index: true },
     amount: { type: Number, required: true },
     currency: { type: String, default: "INR" },
     reason: { type: String, required: true, trim: true },

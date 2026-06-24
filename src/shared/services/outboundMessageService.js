@@ -20,6 +20,44 @@ const { assertTemplateBelongsToWaba } = require("@shared/services/templateOwners
 const { HttpError } = require("@shared/utils/httpError");
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { publishToWorkspace } = require("@shared/services/realtimeService");
+const {
+  reserveTemplateCharge,
+  releaseTemplateCharge,
+  finalizeTemplateCharge,
+} = require("@modules/wallet/services/wallet.core.service");
+const {
+  META_BILLING_OWNER,
+  META_BILLING_HANDLED_BY,
+  MESSAGE_CHARGE_SOURCE,
+} = require("@shared/constants/messageBilling");
+
+async function persistTemplateFailure({ userId, messageId, template, to, campaignId, campaignRunId, source, error, charge }) {
+  const failureCode = error?.details?.code || (Number(error?.statusCode || error?.status) === 402 ? "INSUFFICIENT_WALLET_BALANCE" : "TEMPLATE_SEND_FAILED");
+  const failureMessage = error?.details?.userMessage || error?.message || "Template send failed";
+  const data = {
+    workspaceId: userId,
+    ...(campaignId ? { campaignId } : {}),
+    ...(campaignRunId ? { campaignRunId } : {}),
+    templateId: template?._id || null,
+    phone: to,
+    direction: "outbound",
+    type: "template",
+    status: "failed",
+    statusTimestamps: { failedAt: new Date() },
+    messageKind: campaignId ? "campaign" : source === "automation" ? "automation" : "template",
+    chargeAmount: 0,
+    chargeCategory: charge?.category || String(template?.category || "unknown").toLowerCase(),
+    platformWalletCharged: false,
+    chargeSource: charge?.chargeSource || MESSAGE_CHARGE_SOURCE.NONE,
+    metaBillingHandledBy: META_BILLING_HANDLED_BY,
+    sendFailureCode: failureCode,
+    sendFailureMessage: failureMessage,
+    error: { code: failureCode, message: failureMessage },
+  };
+  if (messageId) await Message.updateOne({ _id: messageId, workspaceId: userId }, { $set: data });
+  else await Message.create(data);
+  error.templateFailurePersisted = true;
+}
 
 function isMissingMetaTemplate(err) {
   const message = String(
@@ -133,6 +171,19 @@ async function sendTemplateMessageForUser({
   const creds = await getCredentialsForUser(userId);
   assertTemplateBelongsToWaba(template, creds.wabaId);
 
+  let charge;
+  try {
+    charge = await reserveTemplateCharge(userId, template.category, {
+      templateId: template?._id ? String(template._id) : null,
+      campaignId: campaignId ? String(campaignId) : null,
+      campaignRunId: campaignRunId ? String(campaignRunId) : null,
+      to,
+    });
+  } catch (error) {
+    await persistTemplateFailure({ userId, messageId, template, to, campaignId, campaignRunId, source, error, charge: null }).catch(() => {});
+    throw error;
+  }
+
   let apiResponse;
   try {
     apiResponse = await sendTemplateMessage({
@@ -145,6 +196,10 @@ async function sendTemplateMessageForUser({
       graphApiVersion: creds.graphApiVersion,
     });
   } catch (err) {
+    await releaseTemplateCharge(userId, charge).catch(() => {});
+    if (!messageId) {
+      await persistTemplateFailure({ userId, messageId, template, to, campaignId, campaignRunId, source, error: err, charge }).catch(() => {});
+    }
     throwIfPhoneNotRegistered(err);
     if (isMissingMetaTemplate(err) && template?._id) {
       await require("@infra/database/Template").Template.updateOne(
@@ -193,6 +248,12 @@ async function sendTemplateMessageForUser({
     displayText: previewText,
     previewText,
     type: "template",
+    messageKind: campaignId ? "campaign" : source === "automation" ? "automation" : "template",
+    chargeAmount: 0,
+    chargeCategory: charge.category,
+    platformWalletCharged: false,
+    chargeSource: charge.chargeSource,
+    metaBillingHandledBy: META_BILLING_HANDLED_BY,
     payload: {
       to,
       template: {
@@ -219,6 +280,20 @@ async function sendTemplateMessageForUser({
       )
     : await Message.create(messageData);
   if (!message) throw new Error("Outbound message reservation not found");
+
+  const finalizedCharge = await finalizeTemplateCharge(userId, charge, {
+    workspaceId: String(userId),
+    messageId: String(message._id),
+    wamid: waMessageId || null,
+    category: charge.category,
+  });
+  if (finalizedCharge.charged) {
+    message.chargeAmount = finalizedCharge.amount;
+    message.platformWalletCharged = true;
+    message.chargeSource = MESSAGE_CHARGE_SOURCE.WALLET;
+    message.walletTransactionId = finalizedCharge.transaction?._id || null;
+    await message.save();
+  }
 
   const conversation = await touchConversation({
     userId,
@@ -273,7 +348,15 @@ async function sendTemplateMessageForUser({
     } catch {}
   }
 
-  return { message, apiResponse };
+  return {
+    message,
+    apiResponse,
+    billing: {
+      metaBillingOwner: META_BILLING_OWNER,
+      platformWalletCharged: Boolean(message.platformWalletCharged),
+      messageChargeSource: message.chargeSource,
+    },
+  };
 }
 
 async function sendTextMessageForUser({
@@ -333,6 +416,12 @@ async function sendTextMessageForUser({
     previewText: text,
     type: "text",
     payload: { to, text },
+    messageKind: source === "automation" ? "automation" : "service",
+    chargeAmount: 0,
+    chargeCategory: null,
+    platformWalletCharged: false,
+    chargeSource: MESSAGE_CHARGE_SOURCE.FREE_SERVICE_WINDOW,
+    metaBillingHandledBy: META_BILLING_HANDLED_BY,
   });
 
   const conversation = await touchConversation({ userId, wabaId: creds.wabaId, phoneNumberId: creds.phoneNumberId, phone: resolvedPhone, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
@@ -367,7 +456,15 @@ async function sendTextMessageForUser({
     ).catch(() => {});
   }
 
-  return { message, apiResponse };
+  return {
+    message,
+    apiResponse,
+    billing: {
+      metaBillingOwner: META_BILLING_OWNER,
+      platformWalletCharged: false,
+      messageChargeSource: MESSAGE_CHARGE_SOURCE.FREE_SERVICE_WINDOW,
+    },
+  };
 }
 
 async function sendInteractiveListMessageForUser({
@@ -478,7 +575,15 @@ async function sendInteractiveListMessageForUser({
       }
     ).catch(() => {});
   }
-  return { message, apiResponse };
+  return {
+    message,
+    apiResponse,
+    billing: {
+      metaBillingOwner: META_BILLING_OWNER,
+      platformWalletCharged: false,
+      messageChargeSource: MESSAGE_CHARGE_SOURCE.FREE_SERVICE_WINDOW,
+    },
+  };
 }
 
 async function sendInteractiveButtonMessageForUser({

@@ -10,6 +10,7 @@ const WalletSchema = new mongoose.Schema(
       index: true,
     },
     balance: { type: Number, default: 0 }, // INR
+    reservedBalance: { type: Number, default: 0 },
     currency: { type: String, default: "INR" },
     lastRechargeAt: { type: Date, default: null },
   },

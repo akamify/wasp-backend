@@ -9,16 +9,14 @@ async function computeCampaignEstimate({ workspaceId, template, recipients }) {
     const recipientPhones = recipients.map((r) => r.to);
     const chargesEnabled = await walletChargesEnabledLive();
     const categoryCost = await messageCostForTemplateCategoryLive(template.category, 1);
-    const openWindowSet = chargesEnabled
-        ? new Set()
-        : await findOpenCustomerServiceWindowPhones({
-            workspaceId,
-            wabaId: template.wabaId,
-            phones: recipientPhones,
-        });
-    const billableCount = recipients.filter((recipient) => !openWindowSet.has(String(recipient.to))).length;
-    const freeCount = recipients.length - billableCount;
-    const estimatedCredits = roundCurrency(categoryCost * billableCount);
+    const openWindowSet = await findOpenCustomerServiceWindowPhones({
+        workspaceId,
+        wabaId: template.wabaId,
+        phones: recipientPhones,
+    });
+    const billableCount = chargesEnabled ? recipients.length : 0;
+    const freeCount = chargesEnabled ? 0 : recipients.length;
+    const estimatedCredits = chargesEnabled ? roundCurrency(categoryCost * billableCount) : 0;
 
     return {
         totalRecipients: recipients.length,

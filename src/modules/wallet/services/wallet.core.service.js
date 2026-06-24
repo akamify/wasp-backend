@@ -20,9 +20,10 @@ async function getOrCreateWallet(workspaceId) {
 async function ensureBalance(workspaceId, amount) {
   const wallet = await getOrCreateWallet(workspaceId);
   const currentBalance = roundCurrency(wallet.balance);
+  const availableBalance = roundCurrency(currentBalance - Number(wallet.reservedBalance || 0));
   const required = roundCurrency(amount);
-  if (currentBalance + 1e-9 < required) {
-    throw new HttpError(402, "Insufficient wallet balance", { balance: currentBalance, required });
+  if (availableBalance + 1e-9 < required) {
+    throw new HttpError(402, "Insufficient wallet balance", { balance: currentBalance, availableBalance, required });
   }
   return wallet;
 }
@@ -107,6 +108,118 @@ async function refundMessagingCharge(payerWorkspaceId, amount, meta = {}) {
   return { refunded: true };
 }
 
+function normalizeTemplateCategory(category) {
+  const normalized = String(category || "").trim().toLowerCase();
+  return ["marketing", "utility", "authentication"].includes(normalized) ? normalized : "unknown";
+}
+
+async function reserveTemplateCharge(workspaceId, category, meta = {}) {
+  const walletChargingEnabled = await walletChargesEnabledLive();
+  const normalizedCategory = normalizeTemplateCategory(category);
+  const amount = walletChargingEnabled
+    ? roundCurrency(await messageCostForTemplateCategoryLive(normalizedCategory, 1))
+    : 0;
+  if (!walletChargingEnabled || amount <= 0) {
+    console.info("[wallet] template charging skipped", {
+      workspaceId: String(workspaceId),
+      category: normalizedCategory,
+      chargeAmount: 0,
+      walletChargingDisabled: true,
+    });
+    return {
+      reservationId: null,
+      amount: 0,
+      category: normalizedCategory,
+      platformWalletCharged: false,
+      chargeSource: "none",
+      walletChargingDisabled: true,
+    };
+  }
+
+  await getOrCreateWallet(workspaceId);
+  const wallet = await walletRepository.reserveWalletFunds(workspaceId, amount);
+  if (!wallet) {
+    console.warn("[wallet] template charge blocked insufficient balance", {
+      workspaceId: String(workspaceId),
+      category: normalizedCategory,
+      amount,
+    });
+    throw new HttpError(402, "Insufficient wallet balance. Add credits to send templates.", {
+      code: "INSUFFICIENT_WALLET_BALANCE",
+      userMessage: "Insufficient wallet balance. Add credits to send templates.",
+      required: amount,
+    });
+  }
+
+  try {
+    const reservation = await walletRepository.createReservation({
+      workspaceId,
+      amount,
+      currency: wallet.currency,
+      category: normalizedCategory,
+      meta,
+    });
+    return {
+      reservationId: reservation._id,
+      amount,
+      category: normalizedCategory,
+      platformWalletCharged: false,
+      chargeSource: "wallet",
+      walletChargingDisabled: false,
+    };
+  } catch (error) {
+    await walletRepository.releaseWalletFunds(workspaceId, amount).catch(() => {});
+    throw error;
+  }
+}
+
+async function releaseTemplateCharge(workspaceId, reservation) {
+  if (!reservation?.reservationId || reservation.amount <= 0) return { released: false };
+  const updated = await walletRepository.updateHeldReservation(reservation.reservationId, {
+    status: "released",
+    releasedAt: new Date(),
+  });
+  if (!updated) return { released: false };
+  await walletRepository.releaseWalletFunds(workspaceId, reservation.amount);
+  return { released: true };
+}
+
+async function finalizeTemplateCharge(workspaceId, reservation, details = {}) {
+  if (!reservation?.reservationId || reservation.amount <= 0) {
+    return { charged: false, amount: 0, transaction: null };
+  }
+  const wallet = await walletRepository.finalizeWalletFunds(workspaceId, reservation.amount);
+  if (!wallet) throw new Error("Unable to finalize reserved template wallet charge");
+  const transaction = await walletRepository.createTransaction({
+    workspaceId,
+    type: "template_message_charge",
+    amount: reservation.amount,
+    currency: wallet.currency,
+    reason: "Template message charge",
+    provider: "internal",
+    providerRef: details.wamid || "",
+    meta: {
+      ...details,
+      category: reservation.category,
+      chargeSource: "wallet",
+      metaBillingNote: "Meta billing is charged separately through the configured WhatsApp billing hub.",
+    },
+  });
+  await walletRepository.updateHeldReservation(reservation.reservationId, {
+    status: "finalized",
+    finalizedAt: new Date(),
+    messageId: details.messageId || null,
+    walletTransactionId: transaction._id,
+  });
+  console.info("[wallet] template charge finalized", {
+    workspaceId: String(workspaceId),
+    messageId: details.messageId ? String(details.messageId) : null,
+    category: reservation.category,
+    amount: reservation.amount,
+  });
+  return { charged: true, amount: reservation.amount, transaction };
+}
+
 module.exports = {
   getOrCreateWallet,
   ensureBalance,
@@ -114,6 +227,9 @@ module.exports = {
   credit,
   chargeForMessaging,
   refundMessagingCharge,
+  reserveTemplateCharge,
+  releaseTemplateCharge,
+  finalizeTemplateCharge,
   messageCost,
   messageCostForTemplateCategory,
   messageCostForTemplateCategoryLive,

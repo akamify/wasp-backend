@@ -6,7 +6,7 @@ const { normalizeRecipients } = require("@modules/campaigns/utils/normalizeRecip
 const { computeCampaignEstimate } = require("@modules/campaigns/utils/estimate");
 const { normalizeScheduleInput } = require("@modules/campaigns/utils/schedule");
 const { campaignsRepository, contactsRepository, templatesRepository } = require("@modules/campaigns/repositories/index");
-const { debit, credit, ensureBalance, getOrCreateWallet } = require("@modules/wallet/services/wallet.core.service");
+const { ensureBalance, getOrCreateWallet } = require("@modules/wallet/services/wallet.core.service");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
 const { scheduleNextCampaignDispatch } = require("@modules/campaigns/services/campaignScheduler.service");
@@ -258,33 +258,30 @@ async function createCampaign(req) {
         let hasWorkers = false;
         try { hasWorkers = await hasCampaignWorkers(); } catch { hasWorkers = false; }
         if (!queuedToRedis || !hasWorkers) {
-            let sentCount = 0, failedCount = 0, lastFailure = null;
-            const openNowSet = estimate.openWindowSet || new Set();
+            let sentCount = 0, failedCount = 0, lastFailure = null, walletBlocked = false;
             campaign.status = CAMPAIGN_STATUSES.RUNNING;
             await campaign.save();
             emitCampaignEvent(CAMPAIGN_EVENTS.PROCESSING, { campaignId: String(campaign._id) });
             for (const recipient of normalizedRecipients) {
                 try {
-                    const chargeAmount = openNowSet.has(String(recipient.to)) ? 0 : estimate.categoryCost;
-                    if (chargeAmount > 0) await debit(req.workspace.id, chargeAmount, "Message send (campaign)", { campaignId: String(campaign._id), templateId: String(template._id), to: recipient.to, pricing: { customerServiceWindowOpen: openNowSet.has(String(recipient.to)), walletChargesEnabled: estimate.walletChargesEnabled } });
                     await sendTemplateMessageForUser({ userId: req.workspace.id, campaignId: String(campaign._id), template, to: recipient.to, variables: recipient.variables, headerVariables: recipient.headerVariables, otpCode: recipient.otpCode, buttonValues: recipient.buttonValues, buttonTtlMinutes: recipient.buttonTtlMinutes, flowTokens: recipient.flowTokens, flowActionData: recipient.flowActionData });
                     sentCount += 1;
                 } catch (err) {
                     failedCount += 1;
                     const storedError = buildStoredSendError(err);
                     lastFailure = storedError.providerMessage || storedError.message || "Campaign send failed";
-                    try {
+                    if (!err?.templateFailurePersisted) try {
                         const now = new Date();
                         await Message.create({ workspaceId: req.workspace.id, wabaId: template.wabaId, campaignId: campaign._id, templateId: template._id, phone: recipient.to, direction: "outbound", status: "failed", statusTimestamps: { failedAt: now }, text: "", payload: { to: recipient.to, template: { id: String(template._id), name: template.name, language: template.language }, runtime: { variables: recipient.variables || [], headerVariables: recipient.headerVariables || [], otpCode: recipient.otpCode || "", buttonValues: recipient.buttonValues || [], buttonTtlMinutes: recipient.buttonTtlMinutes || [], flowTokens: recipient.flowTokens || [], flowActionData: recipient.flowActionData || [] } }, error: storedError });
                     } catch {}
-                    try {
-                        const chargeAmount = openNowSet.has(String(recipient.to)) ? 0 : estimate.categoryCost;
-                        if (err?.response && chargeAmount > 0) await credit(req.workspace.id, chargeAmount, "Message refund (campaign failed)", "internal", "", { campaignId: String(campaign._id), templateId: String(template._id), to: recipient.to });
-                    } catch {}
+                    if (Number(err?.statusCode || err?.status) === 402) {
+                        walletBlocked = true;
+                        break;
+                    }
                 }
             }
             campaign.totals.queued = 0; campaign.totals.sent = sentCount; campaign.totals.failed = failedCount;
-            campaign.status = failedCount > 0 ? (sentCount > 0 ? "completed" : "failed") : "completed";
+            campaign.status = walletBlocked ? "failed" : failedCount > 0 ? (sentCount > 0 ? "completed" : "failed") : "completed";
             if (failedCount > 0 && lastFailure) campaign.lastError = { message: String(lastFailure) };
             await campaign.save();
             emitCampaignEvent(failedCount > 0 ? CAMPAIGN_EVENTS.FAILED : CAMPAIGN_EVENTS.COMPLETED, { campaignId: String(campaign._id) });

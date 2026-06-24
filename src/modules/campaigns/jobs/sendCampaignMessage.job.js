@@ -2,8 +2,6 @@ const { Campaign } = require("@infra/database/Campaign");
 const { Template } = require("@infra/database/Template");
 const { Message } = require("@infra/database/Message");
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
-const { debit, credit } = require("@modules/wallet/services/wallet.core.service");
-const { templateMessageChargeAmount } = require("@shared/services/pricingService");
 const { CAMPAIGN_STATUSES } = require("@modules/campaigns/constants/campaign.constants");
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
@@ -166,8 +164,6 @@ async function sendCampaignMessageJob(job) {
     if (!template) throw new Error("Template not found");
     await assertTemplateBelongsToCurrentWaba({ template, workspaceId });
 
-    const pricing = await templateMessageChargeAmount({ workspaceId, phone: to, category: template.category });
-    const chargeAmount = pricing.amount;
     const runtime = {
         variables: variables || [],
         headerVariables: headerVariables || [],
@@ -192,9 +188,6 @@ async function sendCampaignMessageJob(job) {
         return { ok: true, skipped: true, reason: "campaign_run_recipient_already_processed" };
     }
     try {
-        if (chargeAmount > 0) {
-            await debit(workspaceId, chargeAmount, "Message send (campaign)", { campaignId, templateId, to, pricing });
-        }
         await sendTemplateMessageForUser({
             userId: workspaceId,
             campaignId,
@@ -255,16 +248,11 @@ async function sendCampaignMessageJob(job) {
                 await Message.create(failedMessageData);
             }
         } catch { }
-        if (err?.response) {
-            try {
-                if (chargeAmount > 0) {
-                    await credit(workspaceId, chargeAmount, "Message refund (campaign failed)", "internal", "", {
-                        campaignId,
-                        templateId,
-                        to,
-                    });
-                }
-            } catch { }
+        if (Number(err?.statusCode || err?.status) === 402) {
+            await Campaign.updateOne(
+                { _id: campaignId, workspaceId },
+                { $set: { status: CAMPAIGN_STATUSES.FAILED, lastError: { message: "Insufficient wallet balance. Add credits to send templates." } } }
+            );
         }
         await Campaign.updateOne(
             { _id: campaignId, workspaceId },

@@ -37,18 +37,11 @@ async function findOpenCustomerServiceWindowPhones({ workspaceId, wabaId, phones
 
 async function templateMessageChargeAmount({ workspaceId, phone, category }) {
   const chargesEnabled = await walletChargesEnabledLive();
-  if (chargesEnabled) {
-    return {
-      amount: await messageCostForTemplateCategoryLive(category, 1),
-      walletChargesEnabled: true,
-      customerServiceWindowOpen: false,
-    };
-  }
-
   const customerServiceWindowOpen = await isCustomerServiceWindowOpen({ workspaceId, phone });
   return {
-    amount: customerServiceWindowOpen ? 0 : await messageCostForTemplateCategoryLive(category, 1),
-    walletChargesEnabled: false,
+    amount: chargesEnabled ? await messageCostForTemplateCategoryLive(category, 1) : 0,
+    walletChargesEnabled: chargesEnabled,
+    walletChargingDisabled: !chargesEnabled,
     customerServiceWindowOpen,
   };
 }

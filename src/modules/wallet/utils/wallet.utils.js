@@ -12,30 +12,12 @@ function roundCurrency(value) {
   return Math.abs(rounded) < 1e-9 ? 0 : rounded;
 }
 
-function envFlag(name) {
-  const raw = process.env[name];
-  if (raw == null) return null;
-  const s = String(raw).trim().toLowerCase();
-  if (["1", "true", "yes", "y", "on"].includes(s)) return true;
-  if (["0", "false", "no", "n", "off"].includes(s)) return false;
-  return null;
-}
-
 function walletChargesEnabled() {
-  const explicit = envFlag("WALLET_CHARGES_ENABLED");
-  if (explicit !== null) return explicit;
-  return String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  return String(process.env.WALLET_CHARGES_ENABLED || "").trim().toLowerCase() === "true";
 }
 
 async function walletChargesEnabledLive() {
-  const explicit = envFlag("WALLET_CHARGES_ENABLED");
-  if (explicit !== null) return explicit;
-  try {
-    const { getSettingBoolean } = require("@modules/platform-settings/services/platformSettingsResolver.service");
-    return getSettingBoolean("WALLET_CHARGES_ENABLED", walletChargesEnabled());
-  } catch {
-    return walletChargesEnabled();
-  }
+  return walletChargesEnabled();
 }
 
 function perCategoryCost(category) {

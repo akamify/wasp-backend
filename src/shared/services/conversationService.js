@@ -11,6 +11,11 @@ async function totalUnreadForWorkspace(workspaceId) {
   return Number(rows[0]?.total || 0);
 }
 
+function maskPhone(phone) {
+  const value = String(phone || "");
+  return value.length > 6 ? `${value.slice(0, 3)}***${value.slice(-3)}` : "***";
+}
+
 async function touchConversation({
   userId,
   wabaId,
@@ -63,6 +68,13 @@ async function touchConversation({
     publishToWorkspace(userId, "conversation:update", { conversation: conversation.toObject() });
     if (incrementUnread) {
       const totalUnread = await totalUnreadForWorkspace(userId);
+      conversation.$locals.totalUnread = totalUnread;
+      console.info("[unread] incremented", {
+        workspaceId: String(userId),
+        customerPhoneMasked: maskPhone(normalizedPhone),
+        unreadCount: Number(conversation.unreadCount || 0),
+        totalUnread,
+      });
       publishToWorkspace(userId, "unread:update", {
         conversationId: String(conversation._id),
         customerPhone: normalizedPhone,
@@ -91,6 +103,10 @@ async function markConversationRead({ userId, wabaId, phone }) {
   );
 
   if (conversation?._id) {
+    console.info("[unread] reset", {
+      workspaceId: String(userId),
+      customerPhoneMasked: maskPhone(normalizedPhone),
+    });
     publishToWorkspace(userId, "conversation:update", { conversation: conversation.toObject() });
     publishToWorkspace(userId, "unread:update", {
       conversationId: String(conversation._id),

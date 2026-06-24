@@ -738,6 +738,9 @@ async function receive(req, res) {
             conversationId: convo?._id ? String(convo._id) : null,
             customerPhone: from,
             message: msgDoc?.toObject ? msgDoc.toObject() : msgDoc,
+            conversation: convo?.toObject ? convo.toObject() : convo,
+            unreadCount: Number(convo?.unreadCount || 0),
+            totalUnread: Number(convo?.$locals?.totalUnread || 0),
           });
           publishWorkspaceEvent(workspaceIdRaw, {
             type: "message_inbound",
