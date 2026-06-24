@@ -1,6 +1,8 @@
+require("./src/core/config/loadEnv").loadEnv();
 require("module-alias/register");
-require("@core/config/loadEnv").loadEnv();
 process.env.WORKER_PROCESS = "true";
+
+require("@core/config/redis").logRedisConfig();
 
 const { connectDB } = require("@core/config/db");
 const { mongoUri } = require("@core/config/env");

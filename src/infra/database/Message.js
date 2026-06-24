@@ -47,6 +47,11 @@ const MessageSchema = new mongoose.Schema(
     sentAt: { type: Date, default: null },
     sortAt: { type: Date, default: null, index: true },
     replyToMessageId: { type: String, trim: true, default: null },
+    contextWamid: { type: String, trim: true, default: null, index: true },
+    replyToPreview: { type: String, trim: true, default: null },
+    replyToType: { type: String, trim: true, default: null },
+    interactiveReplyId: { type: String, trim: true, default: null },
+    interactiveReplyTitle: { type: String, trim: true, default: null },
     triggeredByMessageId: { type: String, trim: true, default: null, index: true },
 
     whatsappMessageId: { type: String, index: true, default: undefined },

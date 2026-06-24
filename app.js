@@ -1,7 +1,5 @@
+require("./src/core/config/loadEnv").loadEnv();
 require("module-alias/register");
-// Load env here as well (index.js already does this) so that running the app
-// via `node app.js` or `require('./app')` still has JWT/config available.
-require("@core/config/loadEnv").loadEnv();
 
 const crypto = require("crypto");
 const express = require("express");

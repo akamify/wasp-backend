@@ -4,7 +4,7 @@ const dotenv = require("dotenv");
 
 function loadEnv() {
   if (global.__WASPAKAMIFY_ENV_LOADED__) return;
-  const root = process.cwd();
+  const root = path.resolve(__dirname, "../../..");
   const envLocalPath = path.join(root, ".env.local");
   const envPath = path.join(root, ".env");
 

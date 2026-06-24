@@ -62,12 +62,15 @@ async function buildSeries({ workspaceId, wabaId, range }) {
     : null;
   if (!workspaceObjectId) return { group: "day", points: [] };
 
-  // Include all outbound messages so dashboard reflects real activity
-  // (template + non-template sends).
   const baseMatch = {
     workspaceId: workspaceObjectId,
     wabaId,
     direction: "outbound",
+    $or: [
+      { type: "template" },
+      { messageKind: "template" },
+      { messageKind: "campaign" },
+    ],
   };
 
   const addDateFieldsStage = {
@@ -253,30 +256,32 @@ async function overview(req, res) {
   const activeConnection = await resolveActiveConnection(workspaceId);
   const wabaId = activeConnection?.wabaId || "__no_active_waba__";
 
-  // Include all outbound messages so analytics matches dashboard activity.
   const msgBase = {
     workspaceId,
     wabaId,
     direction: "outbound",
+    $or: [
+      { type: "template" },
+      { messageKind: "template" },
+      { messageKind: "campaign" },
+    ],
   };
 
   const sentBase = {
     ...msgBase,
-    $or: [
-      { "statusTimestamps.sentAt": { $exists: true } },
-      { status: { $in: ["accepted", "sent", "delivered", "read", "failed", "timeout_unknown"] } },
-    ],
+    status: { $in: ["sent", "delivered", "read"] },
   };
 
-  const [sent, delivered, read, failed, clicks] = await Promise.all([
+  const [messages, sent, delivered, read, failed, clicks] = await Promise.all([
+    Message.countDocuments(msgBase),
     Message.countDocuments(sentBase),
     Message.countDocuments({
       ...msgBase,
-      "statusTimestamps.deliveredAt": { $exists: true },
+      status: { $in: ["delivered", "read"] },
     }),
     Message.countDocuments({
       ...msgBase,
-      "statusTimestamps.readAt": { $exists: true },
+      status: "read",
     }),
     Message.countDocuments({ ...msgBase, status: "failed" }),
     ClickLog.countDocuments({ workspaceId }),
@@ -333,7 +338,7 @@ async function overview(req, res) {
   res.json({
     success: true,
     range,
-    overview: { sent, delivered, read, failed, clicks },
+    overview: { messages, sent, delivered, read, failed, clicks },
     rates: { deliveryRatePct, readRatePct },
     growth: {
       monthly: { thisMonth: thisMonthSent, lastMonth: lastMonthSent, pct: monthlyGrowthPct },

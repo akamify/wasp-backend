@@ -1,23 +1,60 @@
 const { HttpError } = require("@shared/utils/httpError");
 
-function getRedisUrl() {
-  const redisUrl = String(process.env.REDIS_URL || process.env.UPSTASH_REDIS_URL || "").trim();
-  const restUrl = String(process.env.UPSTASH_REDIS_REST_URL || "").trim();
-
-  // Upstash REST URL is for HTTP API; BullMQ/ioredis requires redis:// or rediss:// URL.
-  if (!redisUrl && restUrl) {
-    throw new HttpError(
-      500,
-      "Invalid Redis configuration: use REDIS_URL or UPSTASH_REDIS_URL (redis:// / rediss://), not UPSTASH_REDIS_REST_URL."
-    );
-  }
-
-  const url = redisUrl;
-  if (!url && process.env.NODE_ENV === "production") {
-    throw new HttpError(500, "REDIS_URL not configured");
-  }
-  return url || "redis://127.0.0.1:6379";
+function isRedisDisabled() {
+  return String(process.env.DISABLE_REDIS || "").trim().toLowerCase() === "true";
 }
 
-module.exports = { getRedisUrl };
+function getRedisConfig() {
+  const disabled = isRedisDisabled();
+  const redisUrl = String(process.env.REDIS_URL || "").trim();
+  if (disabled) {
+    return { disabled: true, url: null, protocol: null, redisHost: null, port: null, source: "process.env.REDIS_URL" };
+  }
+  if (!redisUrl) throw new HttpError(500, "REDIS_URL is required when DISABLE_REDIS=false");
+
+  let parsed;
+  try {
+    parsed = new URL(redisUrl);
+  } catch {
+    throw new HttpError(500, "REDIS_URL must be a valid redis:// or rediss:// URL");
+  }
+  if (!["redis:", "rediss:"].includes(parsed.protocol)) {
+    throw new HttpError(500, "REDIS_URL must use redis:// or rediss://");
+  }
+
+  return {
+    disabled: false,
+    url: redisUrl,
+    protocol: parsed.protocol,
+    redisHost: parsed.hostname,
+    port: parsed.port || "6379",
+    source: "process.env.REDIS_URL",
+  };
+}
+
+function getRedisUrl() {
+  const config = getRedisConfig();
+  if (config.disabled) throw new HttpError(503, "Redis is disabled (set DISABLE_REDIS=false to enable)");
+  return config.url;
+}
+
+function logRedisConfig() {
+  const config = getRedisConfig();
+  console.info("[redis] config", {
+    disabled: config.disabled,
+    protocol: config.protocol,
+    redisHost: config.redisHost,
+    port: config.port,
+    source: config.source,
+  });
+  if (
+    String(process.env.NODE_ENV || "").toLowerCase() === "production" &&
+    String(config.redisHost || "").toLowerCase().includes("upstash.io")
+  ) {
+    console.warn("[redis] WARNING old Upstash Redis URL still active");
+  }
+  return config;
+}
+
+module.exports = { getRedisConfig, getRedisUrl, isRedisDisabled, logRedisConfig };
 

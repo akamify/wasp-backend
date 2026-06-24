@@ -20,6 +20,7 @@ const {
 const {
   reconcileCustomerServiceWindow,
 } = require("@modules/conversations/services/customerServiceWindow.service");
+const { resolveInboundReplyContext } = require("@modules/webhooks/services/inboundReplyContext.service");
 
 const WEBHOOK_DEBUG_LIMIT = 40;
 const webhookDebugEventsByWorkspace = new Map();
@@ -450,13 +451,6 @@ async function receive(req, res) {
               oldStatus,
               newStatus: effectiveStatus,
             });
-            publishToWorkspace(workspaceIdRaw, "message:status", {
-              messageId: updated._id ? String(updated._id) : null,
-              wamid: waId,
-              status: effectiveStatus,
-              statusTimestamp: ts,
-              error: s.errors || null,
-            });
             const conversation = await Conversation.findOneAndUpdate(
               {
                 workspaceId: workspaceIdRaw,
@@ -474,6 +468,15 @@ async function receive(req, res) {
                 lastMessageStatus: effectiveStatus,
               });
             }
+            publishToWorkspace(workspaceIdRaw, "message:status", {
+              messageId: updated._id ? String(updated._id) : null,
+              wamid: waId,
+              status: effectiveStatus,
+              statusTimestamp: ts,
+              error: s.errors || null,
+              conversationId: conversation?._id ? String(conversation._id) : null,
+              customerPhone: updated.phone || phone || null,
+            });
             publishWorkspaceEvent(workspaceIdRaw, {
               type: "message_status",
               phone: updated.phone || phone || null,
@@ -542,6 +545,17 @@ async function receive(req, res) {
         const from = normalizePhone(m.from);
         if (!waId || !from) continue;
 
+        const ts = asDateFromSeconds(m.timestamp);
+        const resolvedWabaId = wabaIdFromEntry || tenant?.wabaId || tenant?.businessAccountIdPlain || "";
+        const type = String(m.type || "").trim().toLowerCase();
+        const inboundReplyContext = await resolveInboundReplyContext({
+          workspaceId: workspaceIdRaw,
+          wabaId: resolvedWabaId,
+          phone: from,
+          inboundMessage: m,
+          inboundAt: ts,
+        }).catch(() => ({}));
+
         const normalizedFlowMessage = normalizedFlowMessageById.get(
           String(waId)
         );
@@ -559,9 +573,6 @@ async function receive(req, res) {
           }
         }
 
-        const ts = asDateFromSeconds(m.timestamp);
-        const resolvedWabaId = wabaIdFromEntry || tenant?.wabaId || tenant?.businessAccountIdPlain || "";
-        const type = String(m.type || "").trim().toLowerCase();
         // eslint-disable-next-line no-console
         console.info("[webhook] inbound message parsed", {
           maskedPhoneNumberId: maskId(phoneNumberId),
@@ -680,7 +691,14 @@ async function receive(req, res) {
                 "statusTimestamps.receivedAt": ts,
                 receivedAt: ts,
                 sortAt: ts,
-                replyToMessageId: m.context?.id ? String(m.context.id) : null,
+                replyToMessageId: inboundReplyContext.replyToMessageId || null,
+                contextWamid: inboundReplyContext.contextWamid || null,
+                replyToPreview: inboundReplyContext.replyToPreview || null,
+                replyToType: inboundReplyContext.replyToType || null,
+                interactiveReplyId: inboundReplyContext.interactiveReplyId || null,
+                interactiveReplyTitle: inboundReplyContext.interactiveReplyTitle || null,
+                ...(buttonReply ? { buttonReply } : {}),
+                ...(listReply ? { listReply } : {}),
                 sentBy: { kind: "system" },
                 text,
                 payload,

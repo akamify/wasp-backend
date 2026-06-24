@@ -1,5 +1,7 @@
+require("./src/core/config/loadEnv").loadEnv();
 require("module-alias/register");
-require("@core/config/loadEnv").loadEnv();
+
+require("@core/config/redis").logRedisConfig();
 
 const http = require("http");
 const app = require("./app");
