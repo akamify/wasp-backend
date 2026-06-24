@@ -76,6 +76,8 @@ async function metaStatus(req, res) {
       canSendServiceMessages: false,
       businessVerificationPending: false,
       paymentSetupRequiredForTemplates: false,
+      platformBillingManaged: true,
+      userMetaBillingSetupRequired: false,
       lastSuccessfulSendAt: null,
       lastStatusWebhookAt: null,
       setupWarnings: [],
@@ -158,16 +160,15 @@ async function metaStatus(req, res) {
   const operationalEvidence = Boolean(lastSuccessfulSendAt || lastStatusWebhookAt);
   const canSendServiceMessages = cloudApiActive && operationalEvidence;
   const businessVerificationPending =
-    String(phone?.account_status || phone?.status || "").toLowerCase() === "pending_verification" ||
-    (cloudApiActive && Boolean(codeVerificationStatus) && codeVerificationStatus !== "VERIFIED");
-  const paymentSetupRequiredForTemplates = businessVerificationPending;
+    String(phone?.account_status || "").toLowerCase() === "pending_verification";
+  const paymentSetupRequiredForTemplates = false;
   const setupWarnings = [];
   const blockingIssues = [];
   if (!phoneNumberId) blockingIssues.push("WhatsApp phone number is not connected.");
   else if (platformType !== "CLOUD_API") blockingIssues.push("Cloud API is not registered for this phone number.");
   else if (accountMode !== "LIVE") blockingIssues.push("WhatsApp account mode is not LIVE.");
   if (businessVerificationPending) {
-    setupWarnings.push("Business verification is pending. Service-window replies can work, but business-initiated/template messaging and higher limits may require payment/business verification.");
+    setupWarnings.push("Business verification is pending. This may affect messaging eligibility or limits, but user Meta billing setup is not required.");
   }
   if (codeVerificationStatus === "EXPIRED" && cloudApiActive && operationalEvidence) {
     setupWarnings.push("Code verification metadata is expired; the operational Cloud API connection remains active.");
@@ -192,6 +193,8 @@ async function metaStatus(req, res) {
     canSendServiceMessages,
     businessVerificationPending,
     paymentSetupRequiredForTemplates,
+    platformBillingManaged: true,
+    userMetaBillingSetupRequired: false,
     lastSuccessfulSendAt,
     lastStatusWebhookAt,
     setupWarnings,
