@@ -6,7 +6,10 @@ const rateLimiters = require("@core/middleware/rateLimiters");
 const { buildMemoryUpload } = require("@shared/utils/multerUpload");
 const { externalChatApiKeyAuth } = require("@modules/external-chat/middleware/externalChatApiKeyAuth");
 const { requireExternalChatWorkspace } = require("@modules/external-chat/middleware/requireExternalChatWorkspace");
-const { requireExternalChatAccess } = require("@modules/external-chat/middleware/requireExternalChatAccess");
+const {
+  requireExternalChatAccess,
+  requireExternalChatScope,
+} = require("@modules/external-chat/middleware/requireExternalChatAccess");
 const {
   listConversations,
   listConversationMessages,
@@ -72,33 +75,36 @@ const webhookUpdateSchema = Joi.object({
   enabled: Joi.boolean().optional(),
 }).min(1);
 
-router.get("/conversations", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(listConversations));
+router.get("/conversations", ...requireExternalAuthChain, requireExternalChatScope("conversations:read"), rateLimiters.externalChatRead, asyncHandler(listConversations));
 router.get(
   "/conversations/:phone/messages",
   ...requireExternalAuthChain,
+  requireExternalChatScope("messages:read"),
   rateLimiters.externalChatRead,
   asyncHandler(listConversationMessages)
 );
-router.post("/conversations/:phone/read", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(readConversation));
-router.get("/contacts", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(listContacts));
-router.get("/contacts/:phone", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(getContact));
+router.post("/conversations/:phone/read", ...requireExternalAuthChain, requireExternalChatScope("messages:read"), rateLimiters.externalChatRead, asyncHandler(readConversation));
+router.get("/contacts", ...requireExternalAuthChain, requireExternalChatScope("contacts:read"), rateLimiters.externalChatRead, asyncHandler(listContacts));
+router.get("/contacts/:phone", ...requireExternalAuthChain, requireExternalChatScope("contacts:read"), rateLimiters.externalChatRead, asyncHandler(getContact));
 router.patch(
   "/contacts/:phone",
   ...requireExternalAuthChain,
+  requireExternalChatScope("contacts:write"),
   rateLimiters.externalChatRead,
   validate(contactPayloadSchema.required()),
   asyncHandler(updateContact)
 );
 
-router.get("/webhooks", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(listWebhooks));
-router.post("/webhooks", ...requireExternalAuthChain, rateLimiters.externalChatRead, validate(webhookPayloadSchema), asyncHandler(createWebhook));
-router.patch("/webhooks/:id", ...requireExternalAuthChain, rateLimiters.externalChatRead, validate(webhookUpdateSchema), asyncHandler(updateWebhook));
-router.delete("/webhooks/:id", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(deleteWebhook));
-router.post("/webhooks/:id/rotate-secret", ...requireExternalAuthChain, rateLimiters.externalChatRead, asyncHandler(rotateWebhookSecret));
+router.get("/webhooks", ...requireExternalAuthChain, requireExternalChatScope("webhooks:write"), rateLimiters.externalChatRead, asyncHandler(listWebhooks));
+router.post("/webhooks", ...requireExternalAuthChain, requireExternalChatScope("webhooks:write"), rateLimiters.externalChatRead, validate(webhookPayloadSchema), asyncHandler(createWebhook));
+router.patch("/webhooks/:id", ...requireExternalAuthChain, requireExternalChatScope("webhooks:write"), rateLimiters.externalChatRead, validate(webhookUpdateSchema), asyncHandler(updateWebhook));
+router.delete("/webhooks/:id", ...requireExternalAuthChain, requireExternalChatScope("webhooks:write"), rateLimiters.externalChatRead, asyncHandler(deleteWebhook));
+router.post("/webhooks/:id/rotate-secret", ...requireExternalAuthChain, requireExternalChatScope("webhooks:write"), rateLimiters.externalChatRead, asyncHandler(rotateWebhookSecret));
 
 router.post(
   "/media",
   ...requireExternalAuthChain,
+  requireExternalChatScope("messages:send"),
   rateLimiters.externalChatUpload,
   upload.single("file"),
   asyncHandler(uploadMedia)
@@ -107,6 +113,7 @@ router.post(
 router.post(
   "/messages/send-text",
   ...requireExternalAuthChain,
+  requireExternalChatScope("messages:send"),
   rateLimiters.externalChatSend,
   validate(
     Joi.object({
@@ -121,6 +128,7 @@ router.post(
 router.post(
   "/messages/send-media",
   ...requireExternalAuthChain,
+  requireExternalChatScope("messages:send"),
   rateLimiters.externalChatSend,
   validate(
     Joi.object({
@@ -136,7 +144,7 @@ router.post(
   asyncHandler(sendMedia)
 );
 
-router.post("/realtime/token", ...requireExternalAuthChain, rateLimiters.externalChatRealtimeToken, asyncHandler(issueRealtimeToken));
+router.post("/realtime/token", ...requireExternalAuthChain, requireExternalChatScope("messages:read"), rateLimiters.externalChatRealtimeToken, asyncHandler(issueRealtimeToken));
 router.get("/realtime/stream", rateLimiters.externalChatRead, asyncHandler(streamRealtime));
 
 router.use((err, req, res, next) => {

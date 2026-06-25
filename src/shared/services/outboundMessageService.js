@@ -175,6 +175,8 @@ async function sendTemplateMessageForUser({
   try {
     charge = await reserveTemplateCharge(userId, template.category, {
       templateId: template?._id ? String(template._id) : null,
+      templateName: normalizedTemplate.name,
+      messageKind: campaignId ? "campaign" : source === "automation" ? "automation" : "template",
       campaignId: campaignId ? String(campaignId) : null,
       campaignRunId: campaignRunId ? String(campaignRunId) : null,
       to,

@@ -21,6 +21,15 @@ router.get("/attributes/:key", auth, requireWorkspace, requireWorkspacePermissio
 router.patch("/attributes/:key", auth, requireWorkspace, requireWorkspacePermission("contacts.update"), requireContactsAccess, validate(contactsValidation.attributeDefinitionUpdateSchema), asyncHandler(contactAttributesController.updateDefinition));
 router.delete("/attributes/:key", auth, requireWorkspace, requireWorkspacePermission("contacts.delete"), requireContactsAccess, asyncHandler(contactAttributesController.archiveDefinition));
 router.get("/lookup/:phone", auth, requireWorkspace, requireWorkspacePermission("contacts.view"), requireContactsAccess, asyncHandler(contactsController.lookupContactByPhone));
+router.post(
+  "/import-csv",
+  auth,
+  requireWorkspace,
+  requireWorkspacePermission("contacts.create"),
+  requireContactsAccess,
+  validate(contactsValidation.importContactsCsvSchema),
+  asyncHandler(contactsController.importContactsCsv)
+);
 router.get("/:id", auth, requireWorkspace, requireWorkspacePermission("contacts.view"), requireContactsAccess, asyncHandler(contactsController.getContact));
 router.post("/", auth, requireWorkspace, requireWorkspacePermission("contacts.create"), requireContactsAccess, validate(contactsValidation.contactSchema), asyncHandler(contactsController.createContact));
 router.put(

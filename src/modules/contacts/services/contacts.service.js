@@ -180,6 +180,109 @@ async function deleteContact(req) {
   return { success: true };
 }
 
+function normalizeImportTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  return Array.from(
+    new Set(
+      tags
+        .flatMap((tag) => String(tag || "").split(","))
+        .map((tag) => tag.trim())
+        .filter(Boolean)
+    )
+  ).slice(0, 50);
+}
+
+async function importContactsCsv(req) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  const duplicateStrategy = String(req.body?.options?.duplicateStrategy || "merge").trim();
+  const strategy = ["skip", "update", "merge"].includes(duplicateStrategy) ? duplicateStrategy : "merge";
+  const definitions = await contactAttributesRepository.listDefinitions({
+    workspaceId: req.workspace.id,
+    includeInactive: false,
+  });
+  const summary = {
+    totalRows: rows.length,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    invalid: 0,
+    duplicates: 0,
+    errors: [],
+  };
+  const seenPhones = new Set();
+
+  console.info("[contacts-import] started", {
+    workspaceId: req.workspace.id,
+    totalRows: rows.length,
+  });
+
+  for (const [index, row] of rows.entries()) {
+    const rowIndex = index + 1;
+    const phone = normalizePhone(row.phone);
+    if (!phone || phone.length < 8) {
+      summary.invalid += 1;
+      summary.errors.push({ rowIndex, reason: "invalid_phone" });
+      continue;
+    }
+    if (seenPhones.has(phone)) {
+      summary.duplicates += 1;
+    }
+    seenPhones.add(phone);
+
+    let normalizedAttributes = { values: {} };
+    try {
+      normalizedAttributes = normalizeAttributesMap(row.attributes || {}, definitions);
+    } catch (error) {
+      summary.invalid += 1;
+      summary.errors.push({ rowIndex, reason: error?.message || "invalid_attributes" });
+      continue;
+    }
+
+    const tags = normalizeImportTags(row.tags);
+    try {
+      const result = await contactsRepository.upsertImportedContact({
+        workspaceId: req.workspace.id,
+        wabaId: scope.wabaId,
+        phone,
+        duplicateStrategy: strategy,
+        create: {
+          phoneNumberId: scope.phoneNumberId || null,
+          name: row.name || undefined,
+          email: row.email ? String(row.email).trim().toLowerCase() : undefined,
+          company: row.company || undefined,
+          tags,
+          attributes: normalizedAttributes.values,
+          source: "imported",
+        },
+        merge: {
+          name: row.name || undefined,
+          email: row.email ? String(row.email).trim().toLowerCase() : undefined,
+          company: row.company || undefined,
+          tags,
+          attributes: normalizedAttributes.values,
+        },
+      });
+      if (result.action === "created") summary.created += 1;
+      else if (result.action === "updated") summary.updated += 1;
+      else summary.skipped += 1;
+    } catch (error) {
+      summary.invalid += 1;
+      summary.errors.push({ rowIndex, reason: error?.message || "import_failed" });
+    }
+  }
+
+  console.info("[contacts-import] completed", {
+    workspaceId: req.workspace.id,
+    created: summary.created,
+    updated: summary.updated,
+    skipped: summary.skipped,
+    invalid: summary.invalid,
+  });
+
+  return { success: true, summary };
+}
+
 function escapeCsvCell(value) {
   const text = value == null ? "" : String(value);
   if (!/[",\n]/.test(text)) return text;
@@ -245,6 +348,7 @@ module.exports = {
   getContact,
   lookupContactByPhone,
   createContact,
+  importContactsCsv,
   updateContact,
   deleteContact,
   exportContactsCsv,

@@ -3,6 +3,7 @@ require("module-alias/register");
 process.env.WORKER_PROCESS = "true";
 
 require("@core/config/redis").logRedisConfig();
+require("@modules/wallet/utils/wallet.utils").logWalletChargesConfig();
 
 const { connectDB } = require("@core/config/db");
 const { mongoUri } = require("@core/config/env");

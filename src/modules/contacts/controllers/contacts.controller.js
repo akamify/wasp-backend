@@ -21,6 +21,10 @@ async function createContact(req, res) {
   res.status(201).json(body);
 }
 
+async function importContactsCsv(req, res) {
+  res.json(await contactsService.importContactsCsv(req));
+}
+
 async function updateContact(req, res) {
   res.json(await contactsService.updateContact(req));
 }
@@ -42,6 +46,7 @@ module.exports = {
   getContact,
   lookupContactByPhone,
   createContact,
+  importContactsCsv,
   updateContact,
   deleteContact,
   exportContactsCsv,

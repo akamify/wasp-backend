@@ -23,4 +23,29 @@ async function requireExternalChatAccess(req, res, next) {
   return next();
 }
 
-module.exports = { requireExternalChatAccess };
+function requireExternalChatScope(scope) {
+  return async (req, res, next) => {
+    if (!scope) return next();
+    const scopes = new Set((req.auth?.scopes || []).map((item) => String(item || "").trim()));
+    if (scopes.has(scope)) return next();
+    console.info("[external-api] denied", {
+      reason: "missing_scope",
+      keyPrefix: req.auth?.keyPrefix || null,
+      scope,
+    });
+    await writeAuditLog(req, {
+      action: "external_chat.access_denied",
+      resourceType: "external_chat",
+      resourceId: req.auth?.apiKeyId || req.workspace?.id || req.user?.id,
+      metadata: {
+        workspaceId: req.workspace?.id || null,
+        apiKeyId: req.auth?.apiKeyId || null,
+        reason: "missing_scope",
+        scope,
+      },
+    });
+    return next(new HttpError(403, "API key missing required scope", { code: "missing_scope", scope }));
+  };
+}
+
+module.exports = { requireExternalChatAccess, requireExternalChatScope };

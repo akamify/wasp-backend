@@ -38,6 +38,32 @@ const exportContactsCsvSchema = Joi.object({
   contactIds: Joi.array().items(Joi.string().trim().min(1)).max(500).required(),
 });
 
+const importContactsCsvSchema = Joi.object({
+  rows: Joi.array()
+    .items(
+      Joi.object({
+        name: Joi.string().max(120).allow("").optional(),
+        phone: Joi.string().min(1).max(30).required(),
+        email: Joi.string().email().allow("").optional(),
+        company: Joi.string().max(120).allow("").optional(),
+        tags: Joi.array().items(Joi.string().max(40)).max(50).optional(),
+        attributes: Joi.object()
+          .pattern(
+            Joi.string().trim().min(1).max(50),
+            Joi.alternatives().try(Joi.string().max(500), Joi.number(), Joi.boolean(), Joi.valid(null))
+          )
+          .max(50)
+          .optional(),
+      }).unknown(false)
+    )
+    .min(1)
+    .max(5000)
+    .required(),
+  options: Joi.object({
+    duplicateStrategy: Joi.string().valid("skip", "update", "merge").default("merge"),
+  }).default({ duplicateStrategy: "merge" }),
+});
+
 const attributeDefinitionCreateSchema = Joi.object({
   key: Joi.string().trim().max(50).required(),
   label: Joi.string().trim().max(80).required(),
@@ -69,6 +95,7 @@ module.exports = {
   contactSchema,
   updateContactSchema,
   exportContactsCsvSchema,
+  importContactsCsvSchema,
   attributeDefinitionCreateSchema,
   attributeDefinitionUpdateSchema,
   contactAttributesSchema,

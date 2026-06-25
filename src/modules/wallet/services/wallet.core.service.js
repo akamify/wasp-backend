@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
 const { HttpError } = require("@shared/utils/httpError");
+const { Conversation } = require("@infra/database/Conversation");
+const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 const { walletRepository } = require("@modules/wallet/repositories/index");
 const {
   SEED_BALANCE,
@@ -12,6 +14,42 @@ const {
   messageCostForTemplateCategoryLive,
   isMerchantWorkspaceConfigured,
 } = require("@modules/wallet/utils/wallet.utils");
+
+async function isCustomerWindowOpenForCharge({ workspaceId, phone }) {
+  const normalizedPhone = String(phone || "").trim();
+  if (!workspaceId || !normalizedPhone) return false;
+  try {
+    const scope = await requireActiveWabaScope(workspaceId);
+    const row = await Conversation.findOne({
+      workspaceId,
+      wabaId: scope.wabaId,
+      phone: normalizedPhone,
+      customerServiceWindowExpiresAt: { $gt: new Date() },
+    })
+      .select("_id")
+      .lean();
+    return Boolean(row);
+  } catch {
+    return false;
+  }
+}
+
+async function createZeroChargeAudit(workspaceId, details = {}) {
+  const wallet = await getOrCreateWallet(workspaceId);
+  return walletRepository.createTransaction({
+    workspaceId,
+    type: "template_message_charge",
+    amount: 0,
+    currency: wallet.currency,
+    reason: details.reason || "Template message charge skipped",
+    provider: "internal",
+    providerRef: details.wamid || "",
+    meta: {
+      ...details,
+      skipped: true,
+    },
+  });
+}
 
 async function getOrCreateWallet(workspaceId) {
   return walletRepository.getOrCreateWallet(workspaceId, SEED_BALANCE);
@@ -116,15 +154,37 @@ function normalizeTemplateCategory(category) {
 async function reserveTemplateCharge(workspaceId, category, meta = {}) {
   const walletChargingEnabled = await walletChargesEnabledLive();
   const normalizedCategory = normalizeTemplateCategory(category);
-  const amount = walletChargingEnabled
+  if (normalizedCategory === "unknown") {
+    console.warn("[wallet] template category missing", {
+      templateName: meta.templateName || null,
+      workspaceId: String(workspaceId),
+    });
+  }
+  const customerServiceWindowOpen = await isCustomerWindowOpenForCharge({
+    workspaceId,
+    phone: meta.to,
+  });
+  const utilityTemplateFree =
+    normalizedCategory === "utility" && customerServiceWindowOpen;
+  const amount = walletChargingEnabled && !utilityTemplateFree
     ? roundCurrency(await messageCostForTemplateCategoryLive(normalizedCategory, 1))
     : 0;
   if (!walletChargingEnabled || amount <= 0) {
-    console.info("[wallet] template charging skipped", {
+    const reason = !walletChargingEnabled
+      ? "wallet_charges_disabled"
+      : utilityTemplateFree
+        ? "utility_template_in_open_service_window"
+        : "zero_charge_configured";
+    console.info("[wallet] charge decision", {
       workspaceId: String(workspaceId),
-      category: normalizedCategory,
+      messageKind: meta.messageKind || "template",
+      templateName: meta.templateName || null,
+      templateCategory: normalizedCategory,
+      customerServiceWindowOpen,
+      walletChargesEnabled: walletChargingEnabled,
       chargeAmount: 0,
-      walletChargingDisabled: true,
+      chargeSkipped: true,
+      reason,
     });
     return {
       reservationId: null,
@@ -132,9 +192,24 @@ async function reserveTemplateCharge(workspaceId, category, meta = {}) {
       category: normalizedCategory,
       platformWalletCharged: false,
       chargeSource: "none",
-      walletChargingDisabled: true,
+      walletChargingDisabled: !walletChargingEnabled,
+      chargeSkipped: true,
+      skipReason: reason,
+      customerServiceWindowOpen,
     };
   }
+
+  console.info("[wallet] charge decision", {
+    workspaceId: String(workspaceId),
+    messageKind: meta.messageKind || "template",
+    templateName: meta.templateName || null,
+    templateCategory: normalizedCategory,
+    customerServiceWindowOpen,
+    walletChargesEnabled: walletChargingEnabled,
+    chargeAmount: amount,
+    chargeSkipped: false,
+    reason: "wallet_charge_required",
+  });
 
   await getOrCreateWallet(workspaceId);
   const wallet = await walletRepository.reserveWalletFunds(workspaceId, amount);
@@ -166,6 +241,8 @@ async function reserveTemplateCharge(workspaceId, category, meta = {}) {
       platformWalletCharged: false,
       chargeSource: "wallet",
       walletChargingDisabled: false,
+      chargeSkipped: false,
+      customerServiceWindowOpen,
     };
   } catch (error) {
     await walletRepository.releaseWalletFunds(workspaceId, amount).catch(() => {});
@@ -186,6 +263,16 @@ async function releaseTemplateCharge(workspaceId, reservation) {
 
 async function finalizeTemplateCharge(workspaceId, reservation, details = {}) {
   if (!reservation?.reservationId || reservation.amount <= 0) {
+    if (reservation?.chargeSkipped) {
+      const transaction = await createZeroChargeAudit(workspaceId, {
+        ...details,
+        category: reservation.category,
+        chargeSource: "none",
+        reason: reservation.skipReason || "template_message_charge_skipped",
+        customerServiceWindowOpen: Boolean(reservation.customerServiceWindowOpen),
+      }).catch(() => null);
+      return { charged: false, amount: 0, transaction };
+    }
     return { charged: false, amount: 0, transaction: null };
   }
   const wallet = await walletRepository.finalizeWalletFunds(workspaceId, reservation.amount);

@@ -12,12 +12,37 @@ function roundCurrency(value) {
   return Math.abs(rounded) < 1e-9 ? 0 : rounded;
 }
 
+function parseWalletChargesEnabled(rawValue) {
+  const raw = String(rawValue ?? "").trim().toLowerCase();
+  if (["true", "1", "yes"].includes(raw)) return true;
+  if (!raw || ["false", "0", "no"].includes(raw)) return false;
+  return false;
+}
+
+function walletChargesConfig() {
+  const rawValue = process.env.WALLET_CHARGES_ENABLED;
+  return {
+    enabled: parseWalletChargesEnabled(rawValue),
+    source: "WALLET_CHARGES_ENABLED",
+    rawValuePresent: rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== "",
+  };
+}
+
 function walletChargesEnabled() {
-  return String(process.env.WALLET_CHARGES_ENABLED || "").trim().toLowerCase() === "true";
+  return walletChargesConfig().enabled;
 }
 
 async function walletChargesEnabledLive() {
   return walletChargesEnabled();
+}
+
+function logWalletChargesConfig() {
+  const config = walletChargesConfig();
+  console.info("[wallet] charges config", {
+    enabled: config.enabled,
+    source: config.source,
+    rawValuePresent: config.rawValuePresent,
+  });
 }
 
 function perCategoryCost(category) {
@@ -88,8 +113,11 @@ module.exports = {
   SEED_BALANCE,
   MERCHANT_WORKSPACE_ID,
   roundCurrency,
+  parseWalletChargesEnabled,
+  walletChargesConfig,
   walletChargesEnabled,
   walletChargesEnabledLive,
+  logWalletChargesConfig,
   perCategoryCost,
   messageCost,
   messageCostForTemplateCategory,

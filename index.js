@@ -2,6 +2,7 @@ require("./src/core/config/loadEnv").loadEnv();
 require("module-alias/register");
 
 require("@core/config/redis").logRedisConfig();
+require("@modules/wallet/utils/wallet.utils").logWalletChargesConfig();
 
 const http = require("http");
 const app = require("./app");

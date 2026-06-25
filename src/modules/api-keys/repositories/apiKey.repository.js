@@ -16,7 +16,7 @@ async function listApiKeys(userId) {
   return user;
 }
 
-async function addApiKey({ userId, workspaceId, wabaId, keyHash, name, permissions }) {
+async function addApiKey({ userId, workspaceId, wabaId, keyPrefix, keyHash, name, permissions }) {
   const user = await User.findById(userId).select("+apiKeys");
   if (!user) return null;
   user.apiKeys = Array.isArray(user.apiKeys) ? user.apiKeys : [];
@@ -24,11 +24,14 @@ async function addApiKey({ userId, workspaceId, wabaId, keyHash, name, permissio
     workspaceId,
     wabaId,
     name: name || "Default",
+    keyPrefix,
     keyHash,
     permissions: {
       campaignSend: permissions?.campaignSend !== false,
       chatAccess: Boolean(permissions?.chatAccess),
+      scopes: Array.isArray(permissions?.scopes) ? permissions.scopes : [],
     },
+    status: "active",
     revoked: false,
   });
   await user.save();
@@ -42,6 +45,7 @@ async function revokeApiKey({ userId, keyId }) {
   if (!item) return null;
   item.revoked = true;
   item.revokedAt = new Date();
+  item.status = "disabled";
   await user.save();
   return item;
 }
@@ -53,6 +57,7 @@ async function updateApiKeyState({ userId, keyId, revoked }) {
   if (!item) return null;
   item.revoked = Boolean(revoked);
   item.revokedAt = item.revoked ? new Date() : null;
+  item.status = item.revoked ? "disabled" : "active";
   await user.save();
   return item;
 }
@@ -65,6 +70,7 @@ async function updateApiKeyPermissions({ userId, keyId, permissions }) {
   item.permissions = {
     campaignSend: permissions?.campaignSend !== false,
     chatAccess: Boolean(permissions?.chatAccess),
+    scopes: Array.isArray(permissions?.scopes) ? permissions.scopes : item.permissions?.scopes || [],
   };
   await user.save();
   return item;

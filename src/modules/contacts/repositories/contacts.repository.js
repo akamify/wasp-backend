@@ -29,6 +29,33 @@ async function createContact(data) {
   return Contact.create(data);
 }
 
+async function upsertImportedContact({ workspaceId, wabaId, phone, create, merge, duplicateStrategy }) {
+  const existing = await Contact.findOne({ workspaceId, wabaId, phone });
+  if (existing && duplicateStrategy === "skip") {
+    return { action: "skipped", contact: existing };
+  }
+  if (!existing) {
+    const contact = await Contact.create({ workspaceId, wabaId, phone, ...create });
+    return { action: "created", contact };
+  }
+
+  if (merge.name !== undefined && merge.name) existing.name = merge.name;
+  if (merge.email !== undefined && merge.email) existing.email = String(merge.email).trim().toLowerCase();
+  if (merge.company !== undefined && merge.company) existing.company = merge.company;
+  if (Array.isArray(merge.tags) && merge.tags.length) {
+    existing.tags = Array.from(new Set([...(existing.tags || []), ...merge.tags].map((tag) => String(tag || "").trim()).filter(Boolean)));
+  }
+  if (merge.attributes && typeof merge.attributes === "object" && !Array.isArray(merge.attributes)) {
+    const existingAttributes = existing.attributes instanceof Map
+      ? Object.fromEntries(existing.attributes.entries())
+      : { ...(existing.attributes || {}) };
+    existing.attributes = { ...existingAttributes, ...merge.attributes };
+  }
+  existing.source = existing.source || "imported";
+  const contact = await existing.save();
+  return { action: "updated", contact };
+}
+
 async function updateContact(existingDoc, updates) {
   const nextTags =
     updates.tags !== undefined
@@ -125,6 +152,7 @@ module.exports = {
   findIdByPhone,
   findDuplicateByPhone,
   createContact,
+  upsertImportedContact,
   updateContact,
   deleteContact,
   findContactsForExport,

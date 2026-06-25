@@ -158,7 +158,7 @@ async function uploadMedia(req, res) {
 
 function closedWindowError() {
   return new HttpError(409, "Customer service window is closed. Template message is required.", {
-    code: "CUSTOMER_SERVICE_WINDOW_CLOSED",
+    code: "service_window_closed_requires_template",
   });
 }
 
@@ -190,6 +190,11 @@ async function sendText(req, res) {
   const normalizedPhone = assertNormalizedPhone(req.body.to);
   const text = String(req.body.text || "").trim();
   if (!text) throw new HttpError(400, "Text is required", { code: "TEXT_REQUIRED" });
+  console.info("[external-api] message send requested", {
+    workspaceId: req.workspace.id,
+    keyPrefix: req.auth?.keyPrefix || null,
+    messageType: "text",
+  });
 
   const windowOpen = await isCustomerServiceWindowOpen({ workspaceId: req.workspace.id, phone: normalizedPhone });
   if (!windowOpen) throw closedWindowError();
@@ -238,6 +243,11 @@ async function sendText(req, res) {
 
 async function sendMedia(req, res) {
   const normalizedPhone = assertNormalizedPhone(req.body.to);
+  console.info("[external-api] message send requested", {
+    workspaceId: req.workspace.id,
+    keyPrefix: req.auth?.keyPrefix || null,
+    messageType: String(req.body.type || "media"),
+  });
 
   const windowOpen = await isCustomerServiceWindowOpen({ workspaceId: req.workspace.id, phone: normalizedPhone });
   if (!windowOpen) throw closedWindowError();

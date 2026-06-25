@@ -8,10 +8,13 @@ function normalizeKeyItem(item) {
   return {
     id: String(item._id),
     name: item.name || "Default",
+    keyPrefix: item.keyPrefix || null,
     permissions: {
       campaignSend: Boolean(item?.permissions?.campaignSend),
       chatAccess: Boolean(item?.permissions?.chatAccess),
     },
+    scopes: Array.isArray(item?.permissions?.scopes) ? item.permissions.scopes : [],
+    status: item.status || (item.revoked ? "disabled" : "active"),
     revoked: Boolean(item.revoked),
     revokedAt: item.revokedAt || null,
     createdAt: item.createdAt || null,
@@ -39,15 +42,27 @@ async function generateApiKey({ userId, workspaceId, name }) {
   if (!user) throw new HttpError(404, "User not found");
   const raw = generateApiKeyRaw();
   const keyHash = sha256Hex(raw);
+  const chatAccess = Boolean(user?.allowedApiPermissions?.chatAccess);
   const created = await repo.addApiKey({
     userId,
     workspaceId: scope.workspaceId,
     wabaId: scope.wabaId,
+    keyPrefix: raw.slice(0, 8),
     keyHash,
     name: name || "Primary key",
     permissions: {
       campaignSend: user?.allowedApiPermissions?.campaignSend !== false,
-      chatAccess: Boolean(user?.allowedApiPermissions?.chatAccess),
+      chatAccess,
+      scopes: chatAccess
+        ? [
+            "contacts:read",
+            "contacts:write",
+            "conversations:read",
+            "messages:read",
+            "messages:send",
+            "webhooks:write",
+          ]
+        : [],
     },
   });
   if (!created) throw new HttpError(404, "User not found");
