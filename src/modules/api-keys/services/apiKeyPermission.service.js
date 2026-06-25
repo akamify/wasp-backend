@@ -178,6 +178,8 @@ async function setApiKeyChatAccess({ req, userId, keyId, enabled }) {
           campaignSend: Boolean(key?.permissions?.campaignSend),
           chatAccess: Boolean(key?.permissions?.chatAccess),
         },
+        scopes: Array.isArray(key?.permissions?.scopes) ? key.permissions.scopes : [],
+        status: key.status || (key.revoked ? "disabled" : "active"),
         revoked: Boolean(key.revoked),
       },
     },
@@ -211,6 +213,20 @@ async function enableWorkspaceChatAccess({ req, workspaceId }) {
   if (!current) throw new HttpError(404, "Workspace not found");
   const workspace = await workspacesRepository.setExternalChatFeature({ workspaceId, enabled: true });
   if (!workspace) throw new HttpError(404, "Workspace not found");
+  const ownerId = current.ownerId || workspace.ownerId;
+  if (ownerId) {
+    await repo.updateUserSecurityFlags({
+      userId: ownerId,
+      patch: {
+        $set: {
+          "allowedApiPermissions.chatAccess": true,
+          chatAccessEnabledBy: req?.user?.id || null,
+          chatAccessEnabledAt: new Date(),
+        },
+      },
+    });
+    await repo.syncAllNonRevokedApiKeysChatAccess({ userId: ownerId, enabled: true });
+  }
   await workspacesRepository.updateWorkspace({
     workspaceId,
     patch: {
@@ -235,6 +251,14 @@ async function disableWorkspaceChatAccess({ req, workspaceId }) {
   if (!current) throw new HttpError(404, "Workspace not found");
   const workspace = await workspacesRepository.setExternalChatFeature({ workspaceId, enabled: false });
   if (!workspace) throw new HttpError(404, "Workspace not found");
+  const ownerId = current.ownerId || workspace.ownerId;
+  if (ownerId) {
+    await repo.syncAllNonRevokedApiKeysChatAccess({ userId: ownerId, enabled: false });
+    await repo.updateUserSecurityFlags({
+      userId: ownerId,
+      patch: { $set: { "allowedApiPermissions.chatAccess": false } },
+    });
+  }
   await workspacesRepository.updateWorkspace({
     workspaceId,
     patch: {

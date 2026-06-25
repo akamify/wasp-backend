@@ -81,7 +81,7 @@ async function setExternalChatFeature({ workspaceId, enabled }) {
   return Workspace.findOneAndUpdate(
     { _id: workspaceId, isActive: true },
     patch,
-    { new: true }
+    { returnDocument: "after" }
   ).select("_id ownerId name plan isActive allowedApiPermissions features");
 }
 
@@ -89,7 +89,7 @@ async function updateWorkspace({ workspaceId, patch, actorUserId }) {
   const workspace = await Workspace.findOneAndUpdate(
     { _id: workspaceId, isActive: true, status: { $ne: "deleted" } },
     { $set: patch },
-    { new: true }
+    { returnDocument: "after" }
   );
   if (workspace) {
     await WorkspaceActivityLog.create({

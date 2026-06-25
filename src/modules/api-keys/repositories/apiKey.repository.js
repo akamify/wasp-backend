@@ -2,6 +2,25 @@ const mongoose = require("mongoose");
 const { User } = require("@infra/database/User");
 const { Workspace } = require("@infra/database/Workspace");
 
+const CHAT_ACCESS_SCOPES = [
+  "contacts:read",
+  "contacts:write",
+  "conversations:read",
+  "messages:read",
+  "messages:send",
+  "webhooks:write",
+];
+
+function applyChatAccessScopes(existingScopes, enabled) {
+  const scopes = new Set((Array.isArray(existingScopes) ? existingScopes : []).map((scope) => String(scope || "").trim()).filter(Boolean));
+  if (enabled) {
+    CHAT_ACCESS_SCOPES.forEach((scope) => scopes.add(scope));
+  } else {
+    CHAT_ACCESS_SCOPES.forEach((scope) => scopes.delete(scope));
+  }
+  return Array.from(scopes);
+}
+
 async function findUserById(userId, select = "") {
   return User.findById(userId).select(select);
 }
@@ -83,6 +102,7 @@ async function updateApiKeyChatAccess({ userId, keyId, enabled }) {
   if (!item) return null;
   item.permissions = item.permissions || {};
   item.permissions.chatAccess = Boolean(enabled);
+  item.permissions.scopes = applyChatAccessScopes(item.permissions.scopes, enabled);
   if (item.permissions.campaignSend === undefined) {
     item.permissions.campaignSend = true;
   }
@@ -91,23 +111,18 @@ async function updateApiKeyChatAccess({ userId, keyId, enabled }) {
 }
 
 async function updateUserSecurityFlags({ userId, patch }) {
-  return User.findByIdAndUpdate(userId, patch, { new: true }).select("accountBlocked tokenVersion allowedApiPermissions chatAccessEnabledBy chatAccessEnabledAt");
+  return User.findByIdAndUpdate(userId, patch, { returnDocument: "after" }).select("accountBlocked tokenVersion allowedApiPermissions chatAccessEnabledBy chatAccessEnabledAt");
 }
 
 async function syncAllApiKeysChatAccess({ userId, enabled }) {
-  await User.updateOne(
-    { _id: userId, "apiKeys.0": { $exists: true } },
-    { $set: { "apiKeys.$[k].permissions.chatAccess": !!enabled } },
-    { arrayFilters: [{ "k.revoked": { $ne: true } }] }
-  );
+  const patch = { $set: { "apiKeys.$[k].permissions.chatAccess": !!enabled } };
+  if (enabled) patch.$addToSet = { "apiKeys.$[k].permissions.scopes": { $each: CHAT_ACCESS_SCOPES } };
+  else patch.$pullAll = { "apiKeys.$[k].permissions.scopes": CHAT_ACCESS_SCOPES };
+  await User.updateOne({ _id: userId, "apiKeys.0": { $exists: true } }, patch, { arrayFilters: [{ "k.revoked": { $ne: true } }] });
 }
 
 async function syncAllNonRevokedApiKeysChatAccess({ userId, enabled }) {
-  await User.updateOne(
-    { _id: userId, "apiKeys.0": { $exists: true } },
-    { $set: { "apiKeys.$[k].permissions.chatAccess": !!enabled } },
-    { arrayFilters: [{ "k.revoked": { $ne: true } }] }
-  );
+  return syncAllApiKeysChatAccess({ userId, enabled });
 }
 
 async function syncWorkspaceChatAccessByOwner({ ownerId, enabled }) {
@@ -121,7 +136,7 @@ async function clearLegacyApiKey({ userId }) {
   return User.findByIdAndUpdate(
     userId,
     { $set: { apiKeyHash: null, apiKeyEnc: null } },
-    { new: true }
+    { returnDocument: "after" }
   ).select("_id");
 }
 
@@ -137,7 +152,7 @@ async function setApiKeyOtp({ userId, otpHash, expiresAt, purpose, keyId }) {
       },
       $inc: { apiKeyOtpAttempts: 0 },
     },
-    { new: true }
+    { returnDocument: "after" }
   ).select("+apiKeyOtpCodeHash +apiKeyOtpCodeExpiresAt +apiKeyOtpPurpose +apiKeyOtpAttempts +apiKeyOtpKeyId email name");
 }
 
@@ -159,6 +174,7 @@ module.exports = {
   syncAllApiKeysChatAccess,
   syncAllNonRevokedApiKeysChatAccess,
   syncWorkspaceChatAccessByOwner,
+  CHAT_ACCESS_SCOPES,
   clearLegacyApiKey,
   setApiKeyOtp,
   findUserForApiKeyOtp,
