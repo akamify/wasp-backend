@@ -272,7 +272,7 @@ async function getPublicPlatformBrand(req, res) {
   return res.json({
     success: true,
     settings: {
-      brandName: String(page?.data?.brandName || appBrandName || "DigitalWasp"),
+      brandName: String(page?.data?.brandName || appBrandName || "AiWizChat"),
       brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
     },
     meta: {

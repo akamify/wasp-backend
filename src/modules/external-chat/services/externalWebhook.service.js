@@ -195,6 +195,10 @@ async function deliverExternalWebhookJob(job) {
         timeout: Math.max(Number(process.env.EXTERNAL_CHAT_WEBHOOK_TIMEOUT_MS || 10000), 1000),
         headers: {
           "Content-Type": "application/json",
+          "X-AiWizChat-Event": mapped.type,
+          "X-AiWizChat-Timestamp": timestamp,
+          "X-AiWizChat-Delivery-Id": deliveryId,
+          "X-AiWizChat-Signature": `sha256=${signature}`,
           "X-Waspakamify-Event": mapped.type,
           "X-Waspakamify-Timestamp": timestamp,
           "X-Waspakamify-Delivery-Id": deliveryId,
