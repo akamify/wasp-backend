@@ -7,12 +7,25 @@ const { sendEmail } = require("@shared/services/emailService");
 const repo = require("@modules/auth/auth.repository");
 const { base64Url, shouldReturnAuthDebugTokens } = require("@modules/auth/auth.utils");
 
+function maskEmail(email) {
+  const value = String(email || "").trim().toLowerCase();
+  const [name, domain] = value.split("@");
+  if (!name || !domain) return value ? "***" : "";
+  return `${name.slice(0, 2)}***@${domain}`;
+}
+
 async function forgotPassword({ email, resetPath = "/reset-password" }) {
   const normalized = String(email || "").trim().toLowerCase();
   const user = await repo.findUserForForgotPassword(normalized);
 
   const headers = {};
   if (user) {
+    console.info("[auth.forgot_password] user_found", {
+      email: maskEmail(user.email),
+      role: String(user.role || ""),
+      resetPath: String(resetPath || ""),
+    });
+
     const rawToken = base64Url(crypto.randomBytes(32));
     const tokenHash = sha256Hex(rawToken);
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
@@ -38,10 +51,25 @@ async function forgotPassword({ email, resetPath = "/reset-password" }) {
       textContent: `Reset your password using this link: ${resetLink}`,
     });
 
+    console.info("[auth.forgot_password] email_delivery", {
+      email: maskEmail(user.email),
+      role: String(user.role || ""),
+      sent: Boolean(delivery?.sent),
+      skipped: Boolean(delivery?.skipped),
+      failed: Boolean(delivery?.failed),
+      reason: delivery?.reason || null,
+      providerMessage: delivery?.providerMessage || null,
+    });
+
     if (shouldReturnAuthDebugTokens()) {
       headers["X-Debug-Reset-Link"] = resetLink;
       headers["X-Debug-Email-Delivery"] = String(delivery?.sent ? "sent" : delivery?.skipped ? "skipped" : "failed");
     }
+  } else {
+    console.info("[auth.forgot_password] user_not_found", {
+      email: maskEmail(normalized),
+      resetPath: String(resetPath || ""),
+    });
   }
 
   return {

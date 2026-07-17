@@ -128,16 +128,33 @@ async function verifyApiKeyOtp({ workspaceId, userId, purpose, otp }) {
       if (!key.revoked && String(key.workspaceId || "") === scope.workspaceId && String(key.wabaId || "") === scope.wabaId) {
         key.revoked = true;
         key.revokedAt = new Date();
+        key.status = "disabled";
       }
     }
+    const chatAccess = Boolean(user?.allowedApiPermissions?.chatAccess);
     user.apiKeys.push({
       workspaceId: scope.workspaceId,
       wabaId: scope.wabaId,
       name: "Primary key",
+      keyPrefix: apiKey.slice(0, 8),
       keyHash: sha256Hex(apiKey),
       keyEnc,
-      permissions: { campaignSend: true, chatAccess: false },
+      permissions: {
+        campaignSend: user?.allowedApiPermissions?.campaignSend !== false,
+        chatAccess,
+        scopes: chatAccess
+          ? [
+              "contacts:read",
+              "contacts:write",
+              "conversations:read",
+              "messages:read",
+              "messages:send",
+              "webhooks:write",
+            ]
+          : [],
+      },
       revoked: false,
+      status: "active",
     });
     await user.save();
     return { success: true, message: "API key generated successfully.", apiKey };

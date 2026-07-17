@@ -70,11 +70,13 @@ async function generateApiKey({ userId, workspaceId, name }) {
 }
 
 async function regenerateApiKey({ userId, workspaceId, keyId, name }) {
-  if (keyId) {
-    await repo.revokeApiKey({ userId, keyId });
-  } else {
-    await repo.clearLegacyApiKey({ userId });
-  }
+  const scope = await requireActiveWabaScope(workspaceId);
+  await repo.revokeActiveApiKeysForScope({
+    userId,
+    workspaceId: scope.workspaceId,
+    wabaId: scope.wabaId,
+  });
+  await repo.clearLegacyApiKey({ userId });
   return generateApiKey({ userId, workspaceId, name: name || "Regenerated key" });
 }
 

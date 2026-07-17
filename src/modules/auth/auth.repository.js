@@ -107,7 +107,7 @@ async function findUserForApiKeyOtp(userId) {
 
 async function findUserForVerifyApiKeyOtp(userId) {
   return includeSchemaHiddenFields(
-    User.findById(userId).select("email name apiKeyHash apiKeyEnc apiKeys apiKeyOtpCodeHash apiKeyOtpCodeExpiresAt apiKeyOtpPurpose")
+    User.findById(userId).select("email name allowedApiPermissions apiKeyHash apiKeyEnc apiKeys apiKeyOtpCodeHash apiKeyOtpCodeExpiresAt apiKeyOtpPurpose")
   );
 }
 

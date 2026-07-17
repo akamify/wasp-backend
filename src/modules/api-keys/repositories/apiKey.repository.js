@@ -69,6 +69,38 @@ async function revokeApiKey({ userId, keyId }) {
   return item;
 }
 
+async function revokeActiveApiKeysForScope({ userId, workspaceId, wabaId, exceptKeyId = null }) {
+  const workspaceObjectId = mongoose.Types.ObjectId.isValid(String(workspaceId || ""))
+    ? new mongoose.Types.ObjectId(String(workspaceId))
+    : workspaceId;
+  const match = {
+    _id: userId,
+    "apiKeys.0": { $exists: true },
+  };
+  const arrayFilter = {
+    "k.revoked": { $ne: true },
+    "k.status": { $ne: "disabled" },
+    "k.workspaceId": workspaceObjectId,
+    "k.wabaId": wabaId,
+  };
+  if (exceptKeyId && mongoose.Types.ObjectId.isValid(String(exceptKeyId))) {
+    arrayFilter["k._id"] = { $ne: new mongoose.Types.ObjectId(exceptKeyId) };
+  }
+
+  const now = new Date();
+  return User.updateOne(
+    match,
+    {
+      $set: {
+        "apiKeys.$[k].revoked": true,
+        "apiKeys.$[k].revokedAt": now,
+        "apiKeys.$[k].status": "disabled",
+      },
+    },
+    { arrayFilters: [arrayFilter] }
+  );
+}
+
 async function updateApiKeyState({ userId, keyId, revoked }) {
   const user = await User.findById(userId).select("+apiKeys");
   if (!user) return null;
@@ -167,6 +199,7 @@ module.exports = {
   listApiKeys,
   addApiKey,
   revokeApiKey,
+  revokeActiveApiKeysForScope,
   updateApiKeyState,
   updateApiKeyPermissions,
   updateApiKeyChatAccess,

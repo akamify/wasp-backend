@@ -9,14 +9,58 @@ const { ensureDefaultWorkspace } = require("@modules/auth/auth.service.user.work
 const { canLoginStatus, getBlockedLoginMessage } = require("@shared/utils/userStatus");
 const { normalizeAdminPermissions } = require("@shared/utils/adminPermissions");
 
+function maskEmail(email) {
+  const value = String(email || "").trim().toLowerCase();
+  const [name, domain] = value.split("@");
+  if (!name || !domain) return value ? "***" : "";
+  return `${name.slice(0, 2)}***@${domain}`;
+}
+
 async function loginUser({ email, password }) {
-  const user = await repo.findUserForLoginByEmail(String(email).toLowerCase());
-  if (!user) throw new HttpError(401, "Invalid credentials");
-  if (!canLoginStatus(user.status)) throw new HttpError(403, getBlockedLoginMessage(user.status));
-  if (user.accountBlocked) throw new HttpError(403, "This user is inactive");
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  const user = await repo.findUserForLoginByEmail(normalizedEmail);
+  if (!user) {
+    console.info("[auth.login] denied", {
+      reason: "user_not_found",
+      email: maskEmail(normalizedEmail),
+    });
+    throw new HttpError(401, "Invalid credentials");
+  }
+  if (!canLoginStatus(user.status)) {
+    console.info("[auth.login] denied", {
+      reason: "status_not_allowed",
+      email: maskEmail(user.email),
+      role: String(user.role || ""),
+      status: String(user.status || ""),
+    });
+    throw new HttpError(403, getBlockedLoginMessage(user.status));
+  }
+  if (user.accountBlocked) {
+    console.info("[auth.login] denied", {
+      reason: "account_blocked",
+      email: maskEmail(user.email),
+      role: String(user.role || ""),
+    });
+    throw new HttpError(403, "This user is inactive");
+  }
 
   const ok = await bcrypt.compare(password, user.passwordHash);
-  if (!ok) throw new HttpError(401, "Invalid credentials");
+  if (!ok) {
+    console.info("[auth.login] denied", {
+      reason: "password_mismatch",
+      email: maskEmail(user.email),
+      role: String(user.role || ""),
+      status: String(user.status || ""),
+      passwordHashPresent: Boolean(user.passwordHash),
+    });
+    throw new HttpError(401, "Invalid credentials");
+  }
+
+  console.info("[auth.login] password_verified", {
+    email: maskEmail(user.email),
+    role: String(user.role || ""),
+    twoFactorEnabled: Boolean(user.twoFactorEnabled),
+  });
 
   if (String(user.role || "") === "super_admin") {
     const otp = generateOtpCode();
