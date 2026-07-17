@@ -21,6 +21,12 @@ function uniqueOrigins(values) {
 }
 
 const port = Number(process.env.PORT || 3000);
+const defaultCorsOrigins = [
+  "https://aiwizchat.com",
+  "https://www.aiwizchat.com",
+  "https://wasp.akamify.com",
+  "https://www.wasp.akamify.com",
+];
 
 module.exports = {
   port,
@@ -51,6 +57,7 @@ module.exports = {
     process.env.LOOKUP_SECRET || process.env.CREDENTIALS_LOOKUP_SECRET || "",
   defaultWorkspaceId: process.env.DEFAULT_WORKSPACE_ID || "",
   corsOrigins: uniqueOrigins([
+    ...defaultCorsOrigins,
     ...parseCsvEnv(process.env.CORS_ORIGINS || ""),
     ...parseCsvEnv(process.env.FRONTEND_BASE_URL || ""),
   ]),
