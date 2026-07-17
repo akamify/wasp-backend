@@ -2,6 +2,7 @@ const Joi = require("joi");
 const { HttpError } = require("@shared/utils/httpError");
 const { writeAuditLog } = require("@shared/services/auditLog.service");
 const { workspacesRepository } = require("@modules/workspaces/repositories/index");
+const apiKeyRepo = require("@modules/api-keys/repositories/apiKey.repository");
 
 const toggleExternalChatSchema = Joi.object({
   enabled: Joi.boolean().required(),
@@ -23,6 +24,25 @@ async function toggleExternalChatFeature({ req, workspaceId, payload }) {
   if (!updated) throw new HttpError(404, "Workspace not found");
 
   const enabled = Boolean(updated?.features?.externalChatApiAccess);
+  const ownerId = workspace.ownerId || updated.ownerId;
+  if (ownerId) {
+    await apiKeyRepo.updateUserSecurityFlags({
+      userId: ownerId,
+      patch: {
+        $set: {
+          "allowedApiPermissions.chatAccess": enabled,
+          ...(enabled
+            ? {
+                chatAccessEnabledBy: req.user?.id || null,
+                chatAccessEnabledAt: new Date(),
+              }
+            : {}),
+        },
+      },
+    });
+    await apiKeyRepo.syncAllNonRevokedApiKeysChatAccess({ userId: ownerId, enabled });
+  }
+
   await writeAuditLog(req, {
     action: enabled
       ? "workspace.external_chat_feature_enabled"

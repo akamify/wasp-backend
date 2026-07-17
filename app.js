@@ -104,7 +104,7 @@ app.use(
       return cb(null, allowed);
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-workspace-id"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-workspace-id", "X-API-Key"],
     maxAge: 86400,
   })
 );

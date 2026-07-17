@@ -21,6 +21,12 @@ function uniqueOrigins(values) {
 }
 
 const port = Number(process.env.PORT || 3000);
+const defaultFrontendBaseUrl =
+  process.env.NODE_ENV === "production" ? "https://aiwizchat.com" : "";
+const frontendBaseUrl =
+  process.env.FRONTEND_BASE_URL ||
+  process.env.FRONTEND_URL ||
+  defaultFrontendBaseUrl;
 
 module.exports = {
   port,
@@ -28,14 +34,14 @@ module.exports = {
   jwtSecret: requiredInProd("JWT_SECRET", "dev_jwt_secret_change_me"),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
   adminSessionExpiresIn: process.env.ADMIN_SESSION_EXPIRES_IN || "1d",
-  adminEmail: process.env.ADMIN_EMAIL || "",
+  adminEmail: process.env.ADMIN_EMAIL || process.env.SUPER_ADMIN_EMAIL || "",
   adminPassword: process.env.ADMIN_PASSWORD || "",
-  adminName: process.env.ADMIN_NAME || "Whasp Admin",
+  adminName: process.env.ADMIN_NAME || "AiWizChat Admin",
   superAdminEmail: String(process.env.SUPER_ADMIN_EMAIL || "").trim().toLowerCase(),
-  appBrandName: process.env.APP_BRAND_NAME || "DigitalWhasp",
+  appBrandName: process.env.APP_BRAND_NAME || "AiWizChat",
   appBrandLogoUrl: process.env.APP_BRAND_LOGO_URL || "",
   appBaseUrl:
-    process.env.FRONTEND_BASE_URL ||
+    frontendBaseUrl ||
     process.env.APP_BASE_URL ||
     `http://localhost:${port}`,
   metaGraphVersion: process.env.META_GRAPH_VERSION || "v22.0",
@@ -44,8 +50,11 @@ module.exports = {
   lookupSecret: process.env.LOOKUP_SECRET || process.env.CREDENTIALS_LOOKUP_SECRET || "",
   defaultWorkspaceId: process.env.DEFAULT_WORKSPACE_ID || "",
   corsOrigins: uniqueOrigins([
+    ...parseCsvEnv(process.env.CORS_ORIGIN || ""),
     ...parseCsvEnv(process.env.CORS_ORIGINS || ""),
+    ...parseCsvEnv(process.env.FRONTEND_URL || ""),
     ...parseCsvEnv(process.env.FRONTEND_BASE_URL || ""),
+    ...parseCsvEnv(defaultFrontendBaseUrl || ""),
   ]),
   trackingBaseUrl:
     process.env.TRACKING_BASE_URL || process.env.APP_BASE_URL || `http://localhost:${port}`,

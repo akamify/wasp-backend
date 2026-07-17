@@ -13,13 +13,6 @@ async function forgotPassword({ email }) {
 
   const headers = {};
   if (user) {
-    if (String(user.role || "") === "admin") {
-      return {
-        headers,
-        body: { success: true, message: "If your email is registered, a reset link has been sent." },
-      };
-    }
-
     const isSuperAdmin = String(user.role || "") === "super_admin";
     if (isSuperAdmin && (!superAdminEmail || normalized !== String(superAdminEmail))) {
       return {

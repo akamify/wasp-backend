@@ -10,7 +10,7 @@ try {
 
 const brevoApiKey = process.env.BREVO_API_KEY || "";
 const brevoSenderEmail = process.env.BREVO_SENDER_EMAIL || "";
-const brevoSenderName = process.env.BREVO_SENDER_NAME || appBrandName || "DigitalWhasp";
+const brevoSenderName = process.env.BREVO_SENDER_NAME || appBrandName || "AiWizChat";
 
 async function sendEmail({ toEmail, toName, subject, htmlContent, textContent, senderOverride }) {
   const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";

@@ -297,7 +297,7 @@ async function adminGetPlatformBrand(req, res) {
   return res.json({
     success: true,
     settings: {
-      brandName: String(page?.data?.brandName || appBrandName || "DigitalWhasp"),
+      brandName: String(page?.data?.brandName || appBrandName || "AiWizChat"),
       brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
     },
     meta: { source: page ? "db" : "env", updatedAt: page?.updatedAt || null },
@@ -319,7 +319,7 @@ async function adminUpdatePlatformBrand(req, res) {
       $set: {
         title: "Platform Brand",
         data: {
-          brandName: nextName || String(appBrandName || "DigitalWhasp"),
+          brandName: nextName || String(appBrandName || "AiWizChat"),
           brandLogoUrl: nextLogo || String(appBrandLogoUrl || ""),
         },
         updatedByAdminId: String(req.user?.id || "admin"),
@@ -331,7 +331,7 @@ async function adminUpdatePlatformBrand(req, res) {
   return res.json({
     success: true,
     settings: {
-      brandName: String(page?.data?.brandName || appBrandName || "DigitalWhasp"),
+      brandName: String(page?.data?.brandName || appBrandName || "AiWizChat"),
       brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
     },
     meta: { source: "db", updatedAt: page?.updatedAt || null },
