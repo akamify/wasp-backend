@@ -22,6 +22,10 @@ function uniqueOrigins(values) {
 
 const port = Number(process.env.PORT || 3000);
 const defaultCorsOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
   "https://aiwizchat.com",
   "https://www.aiwizchat.com",
   "https://wasp.akamify.com",
