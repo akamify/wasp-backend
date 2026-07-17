@@ -2,6 +2,15 @@ const { HttpError } = require("@shared/utils/httpError");
 const { writeAuditLog } = require("@shared/services/auditLog.service");
 
 async function deny(req, next, reason) {
+  console.info("[external-api] denied", {
+    reason,
+    workspaceId: req.workspace?.id || null,
+    keyPrefix: req.auth?.keyPrefix || null,
+    workspaceFeature: Boolean(req.workspace?.features?.externalChatApiAccess),
+    workspaceChatAccess: Boolean(req.workspace?.allowedApiPermissions?.chatAccess),
+    keyChatAccess: Boolean(req.auth?.permissions?.chatAccess),
+  });
+
   await writeAuditLog(req, {
     action: "external_chat.access_denied",
     resourceType: "external_chat",
