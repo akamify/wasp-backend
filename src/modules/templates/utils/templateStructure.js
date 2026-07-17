@@ -32,6 +32,12 @@ function invariant(condition, message) {
   }
 }
 
+function invariantMeta(condition, message, code) {
+  if (!condition) {
+    throw new HttpError(400, message, { code: code || "META_TEMPLATE_VALIDATION" });
+  }
+}
+
 function assertMetaTextParameter(value, label) {
   const text = String(value ?? "");
   invariant(!/[\r\n\t]/.test(text), `${label} cannot contain new-line or tab characters`);
@@ -73,6 +79,66 @@ function assertSequentialPlaceholders(text, label) {
       );
     }
   }
+}
+
+function placeholderCount(text) {
+  return placeholderIndexes(text).length;
+}
+
+function assertTextLength(text, label, max) {
+  invariantMeta(String(text || "").length <= max, `${label} must be ${max} characters or less`, "META_TEMPLATE_TEXT_LENGTH");
+}
+
+function assertNoMalformedPlaceholders(text, label) {
+  const source = String(text || "");
+  const looseMatches = source.match(/\{\{[^}]*\}\}/g) || [];
+  for (const match of looseMatches) {
+    invariantMeta(/^\{\{[1-9]\d*\}\}$/.test(match), `${label} variables must use numeric format like {{1}}`, "META_TEMPLATE_VARIABLE_FORMAT");
+  }
+}
+
+function assertVariablePlacement(text, label) {
+  const source = String(text || "");
+  const indexes = placeholderIndexes(source);
+  if (!indexes.length) return;
+
+  const trimmed = source.trim();
+  invariantMeta(!/^\{\{[1-9]\d*\}\}/.test(trimmed), `${label} cannot start with a variable. Add text before {{1}}.`, "META_TEMPLATE_VARIABLE_POSITION");
+  invariantMeta(!/\{\{[1-9]\d*\}\}$/.test(trimmed), `${label} cannot end with a variable. Add text after the variable.`, "META_TEMPLATE_VARIABLE_POSITION");
+  invariantMeta(!/\{\{[1-9]\d*\}\}\s*\{\{[1-9]\d*\}\}/.test(source), `${label} cannot contain adjacent variables. Add meaningful text between variables.`, "META_TEMPLATE_VARIABLE_POSITION");
+
+  const staticText = source.replace(/\{\{[1-9]\d*\}\}/g, "").trim();
+  invariantMeta(staticText.length >= 2, `${label} must include meaningful text besides variables`, "META_TEMPLATE_VARIABLE_POSITION");
+}
+
+function assertTextComponent(text, label, max, { allowVariables = true } = {}) {
+  assertTextLength(text, label, max);
+  assertNoMalformedPlaceholders(text, label);
+  if (allowVariables) {
+    assertSequentialPlaceholders(text, label);
+    assertVariablePlacement(text, label);
+  } else {
+    invariantMeta(placeholderCount(text) === 0, `${label} cannot contain variables`, "META_TEMPLATE_VARIABLE_UNSUPPORTED");
+  }
+}
+
+function assertHeaderExample(component, variableCount) {
+  if (variableCount === 0) return;
+  const values = Array.isArray(component?.example?.header_text) ? component.example.header_text : [];
+  invariantMeta(values.length === variableCount, "HEADER variable example must match the number of header variables", "META_TEMPLATE_EXAMPLE_COUNT");
+  values.forEach((value, index) => {
+    invariantMeta(toTrimmedString(value), `HEADER example for {{${index + 1}}} is required`, "META_TEMPLATE_EXAMPLE_REQUIRED");
+  });
+}
+
+function assertBodyExample(component, variableCount) {
+  if (variableCount === 0) return;
+  const rows = Array.isArray(component?.example?.body_text) ? component.example.body_text : [];
+  const values = Array.isArray(rows[0]) ? rows[0] : [];
+  invariantMeta(values.length === variableCount, "BODY variable examples must match the number of body variables", "META_TEMPLATE_EXAMPLE_COUNT");
+  values.forEach((value, index) => {
+    invariantMeta(toTrimmedString(value), `BODY example for {{${index + 1}}} is required`, "META_TEMPLATE_EXAMPLE_REQUIRED");
+  });
 }
 
 function hasDynamicUrl(url) {
@@ -146,8 +212,14 @@ function normalizeButton(button, category) {
 
     invariant(text, "URL button text is required");
     invariant(url, "URL button URL is required");
+    assertTextLength(text, "URL button text", 25);
+    assertTextLength(url, "URL button URL", 2000);
 
-    const dynamic = /\{\{\d+\}\}/.test(url);
+    assertNoMalformedPlaceholders(url, "URL button URL");
+    assertSequentialPlaceholders(url, "URL button URL");
+    const urlVariables = placeholderIndexes(url);
+    invariantMeta(urlVariables.length <= 1, "URL button supports only 1 variable", "META_TEMPLATE_URL_VARIABLE_LIMIT");
+    const dynamic = urlVariables.length > 0;
     if (dynamic) {
       const sample = toTrimmedString(example?.[0] || "");
       invariant(sample, "URL button sample is required for dynamic URLs");
@@ -173,6 +245,7 @@ function normalizeButton(button, category) {
   if (type === "QUICK_REPLY") {
     const text = toTrimmedString(button?.text);
     invariant(text, "Quick reply button text is required");
+    assertTextLength(text, "Quick reply button text", 25);
 
     return {
       type: "QUICK_REPLY",
@@ -185,6 +258,7 @@ function normalizeButton(button, category) {
     const phoneNumber = toTrimmedString(button?.phone_number || button?.phoneNumber);
     invariant(text, "Phone button text is required");
     invariant(phoneNumber, "Phone button number is required");
+    assertTextLength(text, "Phone button text", 25);
 
     return {
       type: "PHONE_NUMBER",
@@ -196,6 +270,7 @@ function normalizeButton(button, category) {
   if (type === "VOICE_CALL") {
     const text = toTrimmedString(button?.text);
     invariant(text, "Call on WhatsApp button text is required");
+    assertTextLength(text, "Call on WhatsApp button text", 25);
 
     return {
       type: "VOICE_CALL",
@@ -210,6 +285,7 @@ function normalizeButton(button, category) {
     invariant(text, "Flow button text is required");
     invariant(flowId, "Flow button flow_id is required");
     invariant(["DEFAULT", "DOCUMENT", "PROMOTION", "REVIEW"].includes(icon), "Invalid flow button icon");
+    assertTextLength(text, "Flow button text", 25);
 
     return {
       type: "FLOW",
@@ -224,6 +300,7 @@ function normalizeButton(button, category) {
 
     const text = toTrimmedString(button?.text);
     invariant(text, "Copy offer code button text is required");
+    assertTextLength(text, "Copy offer code button text", 25);
 
     return {
       type: "COPY_CODE",
@@ -274,7 +351,8 @@ function normalizeStandardComponents(category, components) {
     if (type === "BODY") {
       const text = String(component?.text ?? "");
       invariant(text.trim(), "BODY text is required");
-      assertSequentialPlaceholders(text, "BODY");
+      assertTextComponent(text, "BODY", 1024);
+      assertBodyExample(component, placeholderCount(text));
       hasBody = true;
       normalized.push({
         type: "BODY",
@@ -290,9 +368,10 @@ function normalizeStandardComponents(category, components) {
       if (format === "TEXT") {
         const text = String(component?.text ?? "");
         invariant(text.trim(), "HEADER text is required");
+        assertTextComponent(text, "HEADER", 60);
         // Meta restriction: header supports at most 1 variable placeholder.
         invariant(maxPlaceholderIndex(text) <= 1, "HEADER supports at most 1 variable placeholder");
-        assertSequentialPlaceholders(text, "HEADER");
+        assertHeaderExample(component, placeholderCount(text));
         normalized.push({
           type: "HEADER",
           format: "TEXT",
@@ -302,6 +381,7 @@ function normalizeStandardComponents(category, components) {
         continue;
       }
 
+      invariant(["IMAGE", "VIDEO", "DOCUMENT", "LOCATION"].includes(format), "Unsupported HEADER format");
       normalized.push({
         type: "HEADER",
         ...(format ? { format } : {}),
@@ -327,6 +407,7 @@ function normalizeStandardComponents(category, components) {
     if (type === "FOOTER") {
       const text = toTrimmedString(component?.text);
       if (text) {
+        assertTextComponent(text, "FOOTER", 60, { allowVariables: false });
         normalized.push({
           type: "FOOTER",
           text,

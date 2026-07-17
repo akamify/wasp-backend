@@ -5,6 +5,7 @@ const leadRepo = require("@modules/crm/repositories/lead.repository");
 const { pickEmployeeByMode } = require("@modules/crm/services/leadDistribution.service");
 const { assignConversation } = require("@modules/crm/services/leadAssignment.service");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { getWorkspaceEntitlements } = require("@modules/workspaces/services/workspaceEntitlement.service");
 
 function parseHHMM(value) {
   const s = String(value || "").trim();
@@ -84,10 +85,12 @@ async function detectAndAssignLead({ workspaceId, wabaId, phone, inboundAt }) {
   const mode = String(workspace.crmSettings?.assignmentMode || "ROUND_ROBIN").toUpperCase();
   const autoAssignEnabled = workspace.crmSettings?.autoAssignEnabled !== false;
   const effectiveMode = autoAssignEnabled && mode === "MANUAL" ? "ROUND_ROBIN" : mode;
+  const entitlements = await getWorkspaceEntitlements(workspaceId);
+  const routingAllowed = Boolean(entitlements.features?.smartAgentRoutingAccess || entitlements.features?.leadDistributionAccess);
 
   // If auto assignment is disabled (or mode is MANUAL), we still treat this as a lead (OPEN)
   // but do not assign automatically.
-  if (!autoAssignEnabled || effectiveMode === "MANUAL") {
+  if (!autoAssignEnabled || effectiveMode === "MANUAL" || !routingAllowed) {
     await Conversation.updateOne(
       { _id: conversation._id, workspaceId },
       {
@@ -99,7 +102,7 @@ async function detectAndAssignLead({ workspaceId, wabaId, phone, inboundAt }) {
         },
       }
     ).catch(() => {});
-    return { ok: true, skipped: "auto_assign_disabled" };
+    return { ok: true, skipped: routingAllowed ? "auto_assign_disabled" : "auto_assign_not_allowed_by_plan" };
   }
 
   const withinSchedule = isWithinScheduleWindow({

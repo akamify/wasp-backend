@@ -6,6 +6,7 @@ const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.se
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 const { contactAttributesRepository } = require("@modules/contacts/repositories/index");
+const { getWorkspaceEntitlements } = require("@modules/workspaces/services/workspaceEntitlement.service");
 const {
   normalizeAttributesMap,
   removeAttributeKeys,
@@ -20,6 +21,27 @@ function parseListPaging(req) {
 
 function escapeRegex(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function enforceTagLimit({ workspaceId, wabaId, incomingTags = [] }) {
+  const entitlements = await getWorkspaceEntitlements(workspaceId);
+  const maxTags = entitlements.limits?.maxTags;
+  if (maxTags === null || maxTags === undefined) return;
+  const limit = Number(maxTags || 0);
+  const currentTags = await contactsRepository.listContactTags({ workspaceId, wabaId });
+  const nextTags = new Set((Array.isArray(currentTags) ? currentTags : []).map((tag) => String(tag || "").trim()).filter(Boolean));
+  for (const tag of incomingTags) {
+    const clean = String(tag || "").trim();
+    if (clean) nextTags.add(clean);
+  }
+  if (limit <= 0 || nextTags.size > limit) {
+    throw new HttpError(403, "Contact tag limit reached for your current plan", {
+      limitKey: "maxTags",
+      limit,
+      currentUsage: currentTags.length,
+      requestedUsage: nextTags.size,
+    });
+  }
 }
 
 async function buildListFilter(req, scope) {
@@ -116,6 +138,8 @@ async function createContact(req) {
   if (duplicate) throw new HttpError(409, "A contact with this phone already exists");
   const definitions = await contactAttributesRepository.listDefinitions({ workspaceId: req.workspace.id, includeInactive: true });
   const normalizedAttributes = normalizeAttributesMap(req.body.attributes, definitions, { enforceRequired: true });
+  const tags = Array.from(new Set((req.body.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)));
+  await enforceTagLimit({ workspaceId: req.workspace.id, wabaId: scope.wabaId, incomingTags: tags });
 
   const contact = await contactsRepository.createContact({
     workspaceId: req.workspace.id,
@@ -127,7 +151,7 @@ async function createContact(req) {
     company: req.body.company || undefined,
     language: req.body.language ? String(req.body.language).trim() : undefined,
     notes: req.body.notes || undefined,
-    tags: Array.from(new Set((req.body.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean))),
+    tags,
     attributes: normalizedAttributes.values,
     source: "manual",
   });
@@ -161,6 +185,9 @@ async function updateContact(req) {
     tags: req.body.tags,
     attributes: undefined,
   };
+  if (Array.isArray(req.body.tags)) {
+    await enforceTagLimit({ workspaceId: req.workspace.id, wabaId: scope.wabaId, incomingTags: req.body.tags });
+  }
   if (req.body.attributes !== undefined) {
     const definitions = await contactAttributesRepository.listDefinitions({ workspaceId: req.workspace.id, includeInactive: true });
     const normalized = normalizeAttributesMap(req.body.attributes, definitions);
@@ -211,6 +238,11 @@ async function importContactsCsv(req) {
     errors: [],
   };
   const seenPhones = new Set();
+  const allImportTags = new Set();
+  for (const row of rows) {
+    for (const tag of normalizeImportTags(row.tags)) allImportTags.add(tag);
+  }
+  await enforceTagLimit({ workspaceId: req.workspace.id, wabaId: scope.wabaId, incomingTags: Array.from(allImportTags) });
 
   console.info("[contacts-import] started", {
     workspaceId: req.workspace.id,

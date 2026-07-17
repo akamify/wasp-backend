@@ -31,22 +31,31 @@ module.exports = {
   adminEmail: process.env.ADMIN_EMAIL || "",
   adminPassword: process.env.ADMIN_PASSWORD || "",
   adminName: process.env.ADMIN_NAME || "Whasp Admin",
-  superAdminEmail: String(process.env.SUPER_ADMIN_EMAIL || "").trim().toLowerCase(),
+  superAdminEmail: String(process.env.SUPER_ADMIN_EMAIL || "")
+    .trim()
+    .toLowerCase(),
   appBrandName: process.env.APP_BRAND_NAME || "DigitalWhasp",
   appBrandLogoUrl: process.env.APP_BRAND_LOGO_URL || "",
+
   appBaseUrl:
     process.env.FRONTEND_BASE_URL ||
     process.env.APP_BASE_URL ||
+    "http://localhost:5173/" ||
+    "http://localhost:3000" ||
     `http://localhost:${port}`,
+
   metaGraphVersion: process.env.META_GRAPH_VERSION || "v22.0",
   metaWebhookVerifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || "",
   metaAppSecret: process.env.META_APP_SECRET || "",
-  lookupSecret: process.env.LOOKUP_SECRET || process.env.CREDENTIALS_LOOKUP_SECRET || "",
+  lookupSecret:
+    process.env.LOOKUP_SECRET || process.env.CREDENTIALS_LOOKUP_SECRET || "",
   defaultWorkspaceId: process.env.DEFAULT_WORKSPACE_ID || "",
   corsOrigins: uniqueOrigins([
     ...parseCsvEnv(process.env.CORS_ORIGINS || ""),
     ...parseCsvEnv(process.env.FRONTEND_BASE_URL || ""),
   ]),
   trackingBaseUrl:
-    process.env.TRACKING_BASE_URL || process.env.APP_BASE_URL || `http://localhost:${port}`,
+    process.env.TRACKING_BASE_URL ||
+    process.env.APP_BASE_URL ||
+    `http://localhost:${port}`,
 };

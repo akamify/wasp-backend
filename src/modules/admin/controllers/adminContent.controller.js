@@ -346,7 +346,7 @@ async function adminUploadPlatformBrandLogo(req, res) {
     buffer: file.buffer,
     mimeType: file.mimetype,
     originalName: file.originalname,
-    folder: "waspakamify/platform-brand",
+    folder: "aiwizchat/platform-brand",
   });
   const logoUrl = String(uploaded?.secure_url || uploaded?.url || "").trim();
   if (!logoUrl) throw new HttpError(500, "Failed to upload logo");

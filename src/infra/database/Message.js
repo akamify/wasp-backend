@@ -81,6 +81,32 @@ const MessageSchema = new mongoose.Schema(
       type: [{ _id: false, status: String, timestamp: Date, error: mongoose.Schema.Types.Mixed }],
       default: [],
     },
+    tracking: {
+      trackingToken: { type: String, trim: true, default: null },
+      clicked: { type: Boolean, default: false, index: true },
+      clickCount: { type: Number, default: 0 },
+      firstClickedAt: { type: Date, default: null },
+      lastClickedAt: { type: Date, default: null, index: true },
+    },
+    conversion: {
+      converted: { type: Boolean, default: false, index: true },
+      totalRevenue: { type: Number, default: 0 },
+      lastConversionAt: { type: Date, default: null, index: true },
+      events: {
+        type: [
+          {
+            _id: false,
+            eventId: { type: mongoose.Schema.Types.ObjectId, ref: "ConversionEvent" },
+            eventName: { type: String, trim: true, default: null },
+            value: { type: Number, default: 0 },
+            currency: { type: String, trim: true, default: null },
+            source: { type: String, trim: true, default: null },
+            timestamp: { type: Date, default: null },
+          },
+        ],
+        default: [],
+      },
+    },
     wabaId: { type: String, trim: true, index: true, default: null },
     phoneNumberId: { type: String, trim: true, index: true, default: null },
     lastAssignedEmployeeId: { type: mongoose.Schema.Types.ObjectId, ref: "Employee", default: null, index: true },
@@ -184,6 +210,18 @@ MessageSchema.index(
   }
 );
 MessageSchema.index({ workspaceId: 1, wabaId: 1, phone: 1, sortAt: 1, createdAt: 1 });
+MessageSchema.index(
+  { workspaceId: 1, "tracking.trackingToken": 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      "tracking.trackingToken": { $type: "string" },
+    },
+  }
+);
+MessageSchema.index({ workspaceId: 1, contactId: 1, direction: 1, createdAt: -1 });
+MessageSchema.index({ workspaceId: 1, campaignId: 1, "tracking.clicked": 1 });
+MessageSchema.index({ workspaceId: 1, templateId: 1, "conversion.converted": 1 });
 MessageSchema.index(
   { campaignRunId: 1, contactId: 1 },
   {

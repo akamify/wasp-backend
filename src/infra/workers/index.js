@@ -5,6 +5,7 @@ const { startWebhookWorker } = require("@infra/workers/webhook.worker");
 const { startCleanupWorker } = require("@infra/workers/cleanup.worker");
 const { startCrmLeadAssignmentWorker } = require("@infra/workers/crmLeadAssignment.worker");
 const { startFlowSessionExpiryWorker } = require("@infra/workers/flowSessionExpiry.worker");
+const { startSubscriptionLifecycleWorker } = require("@infra/workers/subscriptionLifecycle.worker");
 const logger = require("@core/logger/logger");
 const { closeAllQueueResources } = require("@infra/queues/index");
 
@@ -20,6 +21,7 @@ function startAllWorkers() {
         startCleanupWorker(),
         startCrmLeadAssignmentWorker(),
         startFlowSessionExpiryWorker(),
+        startSubscriptionLifecycleWorker(),
     ].filter(Boolean);
     return _started;
 }
@@ -53,6 +55,7 @@ module.exports = {
     startCleanupWorker,
     startCrmLeadAssignmentWorker,
     startFlowSessionExpiryWorker,
+    startSubscriptionLifecycleWorker,
     startAllWorkers,
     stopAllWorkers,
 };

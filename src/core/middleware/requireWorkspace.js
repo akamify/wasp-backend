@@ -19,15 +19,19 @@ async function requireWorkspace(req, res, next) {
     let workspaceId = pickWorkspaceId(req);
 
     // API key flow may not provide x-workspace-id explicitly.
-    // In that case, resolve the oldest active workspace for the authenticated owner.
+    // Prefer the workspace already embedded in the API key before falling back.
     if (!workspaceId && req.auth?.isApiKey && req.user?.id) {
-      const defaultWorkspace = await Workspace.findOne({
-        ownerId: req.user.id,
-        isActive: true,
-      })
-        .sort({ createdAt: 1 })
-        .select("_id");
-      if (defaultWorkspace) workspaceId = String(defaultWorkspace._id);
+      if (req.auth?.workspaceId) {
+        workspaceId = String(req.auth.workspaceId);
+      } else {
+        const defaultWorkspace = await Workspace.findOne({
+          ownerId: req.user.id,
+          isActive: true,
+        })
+          .sort({ createdAt: 1 })
+          .select("_id");
+        if (defaultWorkspace) workspaceId = String(defaultWorkspace._id);
+      }
     }
     if (!workspaceId && req.user?.id) {
       const membership = await WorkspaceMember.findOne({ userId: req.user.id, status: "active" })

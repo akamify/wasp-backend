@@ -116,6 +116,12 @@ async function assignConversation({
     reason,
     assignedBy: assignedBy || { kind: "system" },
   });
+  if (!fromEmployeeId || fromEmployeeId !== String(toEmployeeId)) {
+    await Promise.allSettled([
+      assignmentRepo.incrementAssignedChatsCount({ workspaceId, employeeId: toEmployeeId, delta: 1 }),
+      fromEmployeeId ? assignmentRepo.incrementAssignedChatsCount({ workspaceId, employeeId: fromEmployeeId, delta: -1 }) : Promise.resolve(),
+    ]);
+  }
 
   // Redis allowlist sets
   await setEmployeePhoneMembership({ employeeId: toEmployeeId, phone, add: true });

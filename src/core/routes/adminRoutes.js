@@ -78,6 +78,18 @@ const docsBrandUpload = buildMemoryUpload({
   maxFileSizeBytes: 5 * 1024 * 1024,
   allowedMimeTypes: ["image/png", "image/jpeg", "image/webp", "image/svg+xml"],
 });
+const docsMediaUpload = buildMemoryUpload({
+  maxFileSizeBytes: 25 * 1024 * 1024,
+  allowedMimeTypes: [
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/svg+xml",
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+  ],
+});
 const platformBrandUpload = buildMemoryUpload({
   maxFileSizeBytes: 5 * 1024 * 1024,
   allowedMimeTypes: ["image/png", "image/jpeg", "image/webp", "image/svg+xml"],
@@ -153,6 +165,11 @@ router.patch("/support-tickets/:id/resolve", c("tickets.edit"), asyncHandler(adm
 router.get("/app-update", p("/admin/settings"), asyncHandler(adminAppUpdate));
 router.get("/docs-feedbacks", requireAdminPermission("page", "/admin/docs"), asyncHandler(docsController.adminDocsFeedbacks));
 router.get("/docs-feedbacks/:id", requireAdminPermission("page", "/admin/docs"), asyncHandler(docsController.adminDocsFeedbackGet));
+router.get("/docs-feedbacks-summary", requireAdminPermission("page", "/admin/docs"), asyncHandler(docsController.adminDocsFeedbackSummary));
+router.get("/docs-categories", requireAdminPermission("page", "/admin/docs"), asyncHandler(docsController.adminDocsCategories));
+router.post("/docs-categories", requireAdminPermission("component", "docs.edit"), asyncHandler(docsController.adminDocsCategoryCreate));
+router.put("/docs-categories/:id", requireAdminPermission("component", "docs.edit"), asyncHandler(docsController.adminDocsCategoryUpdate));
+router.delete("/docs-categories/:id", requireAdminPermission("component", "docs.delete"), asyncHandler(docsController.adminDocsCategoryDelete));
 router.get("/docs", requireAdminPermission("page", "/admin/docs"), asyncHandler(docsController.adminDocsList));
 router.get("/docs/:id", requireAdminPermission("page", "/admin/docs"), asyncHandler(docsController.adminDocsGet));
 router.post("/docs", requireAdminPermission("component", "docs.create"), asyncHandler(docsController.adminDocsCreate));
@@ -165,6 +182,12 @@ router.post(
   requireAdminPermission("component", "docs.edit"),
   docsBrandUpload.single("file"),
   asyncHandler(docsController.adminDocsBrandUploadLogo)
+);
+router.post(
+  "/docs-media/upload",
+  requireAdminPermission("component", "docs.edit"),
+  docsMediaUpload.single("file"),
+  asyncHandler(docsController.adminDocsMediaUpload)
 );
 
 // Admin profile

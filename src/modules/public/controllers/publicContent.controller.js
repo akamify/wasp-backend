@@ -132,6 +132,9 @@ const docFeedbackSchema = Joi.object({
   docTitle: Joi.string().trim().allow("").max(240).default(""),
   pagePath: Joi.string().trim().allow("").max(1000).default(""),
   visitorId: Joi.string().trim().allow("").max(160).default(""),
+  articleId: Joi.string().trim().allow("").max(160).default(""),
+  userId: Joi.string().trim().allow("").max(160).default(""),
+  feedback: Joi.string().trim().allow("").max(4000).default(""),
 });
 
 function getClientIp(req) {
@@ -147,6 +150,9 @@ async function createDocsFeedback(req, res) {
     helpful: payload.helpful,
     pagePath: payload.pagePath,
     visitorId: payload.visitorId,
+    articleId: payload.articleId,
+    userId: payload.userId,
+    feedback: payload.feedback,
     ipAddress: getClientIp(req),
     userAgent: String(req.headers["user-agent"] || "").slice(0, 1000),
     source: "docs-web",

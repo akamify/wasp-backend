@@ -299,6 +299,7 @@ async function assignPlanToWorkspace(req) {
       limits: plan.limits || {},
       displayFeatures: plan.displayFeatures || [],
       unavailableFeatures: plan.unavailableFeatures || [],
+      addonServices: plan.addonServices || [],
     },
     paymentMode: String(req.body?.paymentMode || "manual"),
     assignedBy: req.user?.id || null,

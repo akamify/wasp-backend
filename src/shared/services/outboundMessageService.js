@@ -30,6 +30,25 @@ const {
   META_BILLING_HANDLED_BY,
   MESSAGE_CHARGE_SOURCE,
 } = require("@shared/constants/messageBilling");
+const { createTrackingToken } = require("@modules/analytics/services/customerEngagement.service");
+
+function buildAttributionDefaults(existingToken) {
+  return {
+    tracking: {
+      trackingToken: existingToken || createTrackingToken(),
+      clicked: false,
+      clickCount: 0,
+      firstClickedAt: null,
+      lastClickedAt: null,
+    },
+    conversion: {
+      converted: false,
+      totalRevenue: 0,
+      lastConversionAt: null,
+      events: [],
+    },
+  };
+}
 
 async function persistTemplateFailure({ userId, messageId, template, to, campaignId, campaignRunId, source, error, charge }) {
   const failureCode = error?.details?.code || (Number(error?.statusCode || error?.status) === 402 ? "INSUFFICIENT_WALLET_BALANCE" : "TEMPLATE_SEND_FAILED");
@@ -256,6 +275,7 @@ async function sendTemplateMessageForUser({
     platformWalletCharged: false,
     chargeSource: charge.chargeSource,
     metaBillingHandledBy: META_BILLING_HANDLED_BY,
+    ...buildAttributionDefaults(),
     payload: {
       to,
       template: {
@@ -424,6 +444,7 @@ async function sendTextMessageForUser({
     platformWalletCharged: false,
     chargeSource: MESSAGE_CHARGE_SOURCE.FREE_SERVICE_WINDOW,
     metaBillingHandledBy: META_BILLING_HANDLED_BY,
+    ...buildAttributionDefaults(),
   });
 
   const conversation = await touchConversation({ userId, wabaId: creds.wabaId, phoneNumberId: creds.phoneNumberId, phone: resolvedPhone, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
@@ -546,6 +567,7 @@ async function sendInteractiveListMessageForUser({
         action: { button: buttonText, sections },
       },
     },
+    ...buildAttributionDefaults(),
   });
   const conversation = await touchConversation({
     userId,
@@ -647,6 +669,7 @@ async function sendInteractiveButtonMessageForUser({
       buttons: normalizedButtons,
     },
     payload,
+    ...buildAttributionDefaults(),
   });
 
   try {
@@ -902,6 +925,7 @@ async function sendMediaMessageForUser({
     displayText: caption ? String(caption).slice(0, 160) : mediaPreview,
     previewText: caption ? String(caption).slice(0, 160) : mediaPreview,
     payload,
+    ...buildAttributionDefaults(),
   });
 
   const conversation = await touchConversation({

@@ -1,7 +1,9 @@
 const { Plan } = require("@infra/database/Plan");
 const { PLAN_STATUSES } = require("@modules/billing/constants/planStatuses");
+const mongoose = require("mongoose");
 
 function findById(id) {
+  if (!mongoose.Types.ObjectId.isValid(String(id || ""))) return null;
   return Plan.findOne({ _id: id, deletedAt: null });
 }
 

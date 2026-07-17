@@ -4,6 +4,7 @@ const { asyncHandler } = require("@shared/utils/asyncHandler");
 const rateLimiters = require("@core/middleware/rateLimiters");
 const { validate } = require("@core/middleware/validate");
 const { apiKeyAuth } = require("@core/middleware/apiKeyAuth");
+const { requireWorkspace } = require("@core/middleware/requireWorkspace");
 const { requireApiPermission } = require("@modules/api-keys/middleware/requireApiPermission");
 const { sendApiCampaignByName } = require("@modules/integrations/controllers/integrationCampaign.controller");
 
@@ -13,6 +14,7 @@ router.post(
   "/campaigns/send",
   rateLimiters.general,
   apiKeyAuth,
+  requireWorkspace,
   requireApiPermission("campaignSend"),
   validate(
     Joi.object({

@@ -7,6 +7,7 @@ const { writeConversationEvent } = require("@modules/crm/services/conversationEv
 const { assignConversation } = require("@modules/crm/services/leadAssignment.service");
 const { normalizePhone } = require("@shared/services/contactService");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { getWorkspaceEntitlements } = require("@modules/workspaces/services/workspaceEntitlement.service");
 
 const assignSchema = Joi.object({
   employeeId: Joi.string().required().allow(""),
@@ -17,6 +18,10 @@ async function manualAssign(req, res) {
   const payload = await assignSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
   const phone = normalizePhone(req.params.phone);
   if (!phone) throw new HttpError(400, "Invalid phone number");
+  const entitlements = await getWorkspaceEntitlements(req.workspace.id);
+  if (!entitlements.features?.leadDistributionAccess && !entitlements.features?.employeeAccess && !entitlements.features?.multiAgentInboxAccess) {
+    throw new HttpError(403, "Your current plan does not allow lead assignment");
+  }
   const scope = await requireActiveWabaScope(req.workspace.id);
 
   const conversation = await Conversation.findOne({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone }).select(

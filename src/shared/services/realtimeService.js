@@ -30,13 +30,13 @@ function ensureRedisPubSub() {
       try {
         const envelope = JSON.parse(raw);
         if (envelope.origin === instanceId) return;
-        const workspaceId = String(channel || "").replace(/^waspakamify:realtime:/, "");
+        const workspaceId = String(channel || "").replace(/^aiwizchat:realtime:/, "");
         emitLocal(workspaceId, envelope.eventName, envelope.payload, envelope.at);
       } catch (_) {
         // Ignore malformed pub/sub payloads.
       }
     });
-    subscriber.psubscribe("waspakamify:realtime:*").catch(() => {});
+    subscriber.psubscribe("aiwizchat:realtime:*").catch(() => {});
   } catch (_) {
     redisPublisher = null;
   }
@@ -53,7 +53,7 @@ function publishToWorkspace(workspaceId, eventName, payload = {}) {
   }
   ensureRedisPubSub();
   if (redisPublisher) {
-    const channel = `waspakamify:realtime:${id}`;
+    const channel = `aiwizchat:realtime:${id}`;
     redisPublisher.publish(channel, JSON.stringify({ origin: instanceId, eventName: name, payload, at })).catch(() => {});
   }
 }

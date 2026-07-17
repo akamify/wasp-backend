@@ -22,6 +22,10 @@ const WORKSPACE_PERMISSIONS = [
   "campaigns.view",
   "campaigns.create",
   "campaigns.send",
+  "automation.view",
+  "automation.create",
+  "automation.update",
+  "automation.manage",
   "analytics.view",
   "settings.view",
   "settings.update",
@@ -46,11 +50,15 @@ const ROLE_PERMISSIONS = {
     "campaigns.view",
     "campaigns.create",
     "campaigns.send",
+    "automation.view",
+    "automation.create",
+    "automation.update",
+    "automation.manage",
     "analytics.view",
     "settings.view",
   ],
   agent: ["workspace.view", "templates.view", "inbox.view", "inbox.reply", "contacts.view", "contacts.create", "contacts.update"],
-  viewer: ["workspace.view", "templates.view", "inbox.view", "contacts.view", "campaigns.view", "analytics.view"],
+  viewer: ["workspace.view", "templates.view", "inbox.view", "contacts.view", "campaigns.view", "automation.view", "analytics.view"],
 };
 
 module.exports = { ROLE_PERMISSIONS, WORKSPACE_PERMISSIONS };

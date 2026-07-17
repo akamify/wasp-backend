@@ -26,7 +26,7 @@ function uploadBufferToCloudinary({ buffer, mimeType, originalName, folder }) {
     throw err;
   }
 
-  const targetFolder = String(folder || process.env.CLOUDINARY_FOLDER || "waspakamify").trim();
+  const targetFolder = String(folder || process.env.CLOUDINARY_FOLDER || "aiwizchat").trim();
   const safeOriginal = String(originalName || "resume").trim() || "resume";
   const resourceType = "raw";
 

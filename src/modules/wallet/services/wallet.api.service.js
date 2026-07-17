@@ -90,13 +90,22 @@ async function razorpayWebhook(req) {
 
   const rawBody = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || {});
   const expected = crypto.createHmac("sha256", razorpayWebhookSecret).update(rawBody).digest("hex");
+  if (String(signature).length !== expected.length) throw new HttpError(401, "Invalid webhook signature");
   const ok = crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
   if (!ok) throw new HttpError(401, "Invalid webhook signature");
 
   const event = req.body || {};
+  event.__razorpayEventId = req.headers["x-razorpay-event-id"] || event.id || "";
+  const paymentEntity = event?.payload?.payment?.entity;
+  const subscriptionEntity = event?.payload?.subscription?.entity;
+  if (subscriptionEntity || paymentEntity?.subscription_id || String(event.event || "").startsWith("subscription.")) {
+    const { handleRazorpaySubscriptionWebhook } = require("@modules/billing/services/billing.autoRenew.service");
+    return handleRazorpaySubscriptionWebhook(event);
+  }
+
   if (event.event !== "payment.captured") return { success: true, ignored: true };
 
-  const payment = event?.payload?.payment?.entity;
+  const payment = paymentEntity;
   const order = event?.payload?.order?.entity;
   const notes = order?.notes || payment?.notes || {};
   const workspaceId = notes.workspaceId;
@@ -109,5 +118,13 @@ async function razorpayWebhook(req) {
   return { success: true };
 }
 
-module.exports = { getWallet, createRechargeOrder, walletHistory, razorpayWebhook };
+module.exports = {
+  getWallet,
+  createRechargeOrder,
+  walletHistory,
+  razorpayWebhook,
+  getRazorpayClient,
+  razorpayKeyId,
+  razorpayKeySecret,
+};
 

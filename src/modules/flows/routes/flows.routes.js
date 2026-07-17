@@ -2,107 +2,99 @@ const express = require("express");
 const { auth } = require("@core/middleware/auth");
 const { requireWorkspace } = require("@core/middleware/requireWorkspace");
 const { validate } = require("@core/middleware/validate");
+const { requireBillingFeature } = require("@core/middleware/requireBillingFeature");
+const { requireWorkspacePermission } = require("@modules/workspaces/middleware/requireWorkspacePermission");
 const { asyncHandler } = require("@shared/utils/asyncHandler");
 const flowsController = require("@modules/flows/controllers/flows.controller");
 const flowsValidation = require("@modules/flows/validations/flows.validation");
 
 const router = express.Router();
+const requireAutomationAccess = requireBillingFeature("automationPageAccess", {
+  message: "Your current plan does not include automation access.",
+});
+
+router.use(auth, requireWorkspace, requireAutomationAccess);
 
 router.post(
   "/",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.create"),
   validate(flowsValidation.createFlowSchema),
   asyncHandler(flowsController.createFlow)
 );
 router.get(
   "/",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.view"),
   validate(flowsValidation.listFlowsQuerySchema, "query"),
   asyncHandler(flowsController.listFlows)
 );
 router.post(
   "/test-api-request",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.update"),
   validate(flowsValidation.testApiRequestSchema),
   asyncHandler(flowsController.testApiRequest)
 );
 router.post(
   "/test-media-node",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.update"),
   validate(flowsValidation.testMediaNodeSchema),
   asyncHandler(flowsController.testMediaNode)
 );
 router.get(
   "/:flowId",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.view"),
   asyncHandler(flowsController.getFlow)
 );
 router.patch(
   "/:flowId",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.update"),
   validate(flowsValidation.updateFlowMetadataSchema),
   asyncHandler(flowsController.updateFlowMetadata)
 );
 router.put(
   "/:flowId/draft",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.update"),
   validate(flowsValidation.saveDraftSchema),
   asyncHandler(flowsController.saveDraft)
 );
 router.post(
   "/:flowId/validate",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.update"),
   asyncHandler(flowsController.validateDraft)
 );
 router.post(
   "/:flowId/publish",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.manage"),
   asyncHandler(flowsController.publishFlow)
 );
 router.post(
   "/:flowId/pause",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.manage"),
   asyncHandler(flowsController.pauseFlow)
 );
 router.post(
   "/:flowId/resume",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.manage"),
   asyncHandler(flowsController.resumeFlow)
 );
 router.post(
   "/:flowId/archive",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.manage"),
   asyncHandler(flowsController.archiveFlow)
 );
 router.post(
   "/:flowId/start",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.manage"),
   validate(flowsValidation.startFlowSchema),
   asyncHandler(flowsController.startFlow)
 );
 router.delete(
   "/:flowId",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.manage"),
   asyncHandler(flowsController.softDeleteFlow)
 );
 router.get(
   "/:flowId/versions",
-  auth,
-  requireWorkspace,
+  requireWorkspacePermission("automation.view"),
   asyncHandler(flowsController.listFlowVersions)
 );
 

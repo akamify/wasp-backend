@@ -8,6 +8,7 @@ const {
   toPlainAttributes,
 } = require("@modules/contacts/utils/attributes.utils");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { getWorkspaceEntitlements } = require("@modules/workspaces/services/workspaceEntitlement.service");
 
 async function getDefinitions(workspaceId, includeInactive = false) {
   return contactAttributesRepository.listDefinitions({ workspaceId, includeInactive });
@@ -34,6 +35,19 @@ async function getDefinition(req) {
 
 async function createDefinition(req) {
   const normalized = validateAttributeDefinitionPayload(req.body);
+  const entitlements = await getWorkspaceEntitlements(req.workspace.id);
+  const maxCustomAttributes = entitlements.limits?.maxCustomAttributes;
+  if (maxCustomAttributes !== null && maxCustomAttributes !== undefined) {
+    const limit = Number(maxCustomAttributes || 0);
+    const existing = await contactAttributesRepository.listDefinitions({ workspaceId: req.workspace.id, includeInactive: false });
+    if (limit <= 0 || existing.length >= limit) {
+      throw new HttpError(403, "Custom attribute limit reached for your current plan", {
+        limitKey: "maxCustomAttributes",
+        limit,
+        currentUsage: existing.length,
+      });
+    }
+  }
   try {
     const definition = await contactAttributesRepository.createDefinition({
       workspaceId: req.workspace.id,
