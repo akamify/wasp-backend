@@ -6,7 +6,6 @@ const repo = require("@modules/auth/auth.repository");
 const { generateOtpCode, buildOtpEmailHtml, isProdEnv, shouldReturnAuthDebugTokens } = require("@modules/auth/auth.utils");
 const { signToken, signLoginChallengeToken } = require("@modules/auth/auth.tokens");
 const { ensureDefaultWorkspace } = require("@modules/auth/auth.service.user.workspace");
-const { superAdminEmail } = require("@core/config/env");
 const { canLoginStatus, getBlockedLoginMessage } = require("@shared/utils/userStatus");
 const { normalizeAdminPermissions } = require("@shared/utils/adminPermissions");
 
@@ -20,10 +19,6 @@ async function loginUser({ email, password }) {
   if (!ok) throw new HttpError(401, "Invalid credentials");
 
   if (String(user.role || "") === "super_admin") {
-    if (!superAdminEmail || String(user.email || "").toLowerCase() !== superAdminEmail) {
-      throw new HttpError(403, "Super admin email is not configured correctly");
-    }
-
     const otp = generateOtpCode();
     user.loginOtpCodeHash = sha256Hex(otp);
     user.loginOtpCodeExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
@@ -32,7 +27,7 @@ async function loginUser({ email, password }) {
     await user.save();
 
     const delivery = await sendEmail({
-      toEmail: superAdminEmail,
+      toEmail: user.email,
       toName: user.name || "",
       subject: "Super admin login OTP",
       htmlContent: buildOtpEmailHtml({

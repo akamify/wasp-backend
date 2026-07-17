@@ -6,7 +6,6 @@ const { generateOtpCode, buildOtpEmailHtml, isProdEnv, shouldReturnAuthDebugToke
 const { signToken } = require("@modules/auth/auth.tokens");
 const { ensureDefaultWorkspace } = require("@modules/auth/auth.service.user.workspace");
 const { verifyLoginChallengeToken, verifyRegisterChallengeToken } = require("@modules/auth/auth.tokens");
-const { superAdminEmail } = require("@core/config/env");
 const { canLoginStatus, getBlockedLoginMessage } = require("@shared/utils/userStatus");
 
 async function verifyLoginOtp({ challengeToken, otp }) {
@@ -93,7 +92,7 @@ async function resendLoginOtp({ challengeToken }) {
   await user.save();
 
   const delivery = await sendEmail({
-    toEmail: isSuperAdmin ? superAdminEmail : user.email,
+    toEmail: user.email,
     toName: user.name || "",
     subject: isSuperAdmin ? "Super admin login OTP" : "Your login OTP code",
     htmlContent: buildOtpEmailHtml({

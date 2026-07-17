@@ -84,16 +84,16 @@ async function resetPassword(req, res) {
 }
 
 async function adminForgotPassword(req, res) {
-  const result = await adminService.adminForgotPassword({ email: req.body?.email });
-  if (result?.headers) {
-    applyHeaders(res, result.headers);
-    return res.json(result.body);
-  }
-  return res.json(result);
+  const result = await passwordService.forgotPassword({
+    email: req.body?.email,
+    resetPath: "/admin/reset-password",
+  });
+  applyHeaders(res, result.headers);
+  return res.json(result.body);
 }
 
 async function adminResetPassword(req, res) {
-  res.json(await adminService.adminResetPassword(req.body));
+  res.json(await passwordService.resetPassword(req.body));
 }
 
 async function me(req, res) {

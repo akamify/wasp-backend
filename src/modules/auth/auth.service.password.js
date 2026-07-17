@@ -1,33 +1,28 @@
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
-const { appBaseUrl, superAdminEmail } = require("@core/config/env");
+const { appBaseUrl } = require("@core/config/env");
 const { HttpError } = require("@shared/utils/httpError");
 const { sha256Hex } = require("@shared/utils/hash");
 const { sendEmail } = require("@shared/services/emailService");
 const repo = require("@modules/auth/auth.repository");
 const { base64Url, shouldReturnAuthDebugTokens } = require("@modules/auth/auth.utils");
 
-async function forgotPassword({ email }) {
+async function forgotPassword({ email, resetPath = "/reset-password" }) {
   const normalized = String(email || "").trim().toLowerCase();
   const user = await repo.findUserForForgotPassword(normalized);
 
   const headers = {};
   if (user) {
-    const isSuperAdmin = String(user.role || "") === "super_admin";
-    if (isSuperAdmin && (!superAdminEmail || normalized !== String(superAdminEmail))) {
-      return {
-        headers,
-        body: { success: true, message: "If your email is registered, a reset link has been sent." },
-      };
-    }
-
     const rawToken = base64Url(crypto.randomBytes(32));
     const tokenHash = sha256Hex(rawToken);
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
 
     await repo.setUserPasswordResetToken(user._id, { tokenHash, expiresAt });
 
-    const resetLink = `${appBaseUrl}/reset-password?token=${encodeURIComponent(rawToken)}`;
+    const normalizedResetPath = String(resetPath || "/reset-password").startsWith("/")
+      ? String(resetPath || "/reset-password")
+      : `/${String(resetPath || "reset-password")}`;
+    const resetLink = `${appBaseUrl}${normalizedResetPath}?token=${encodeURIComponent(rawToken)}`;
     const delivery = await sendEmail({
       toEmail: user.email,
       toName: user.name || "",
