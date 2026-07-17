@@ -15,7 +15,9 @@ async function writeAssignmentAudit({ workspaceId, phone, fromEmployeeId, toEmpl
 
 async function incrementAssignedChatsCount({ workspaceId, employeeId, delta }) {
   if (!employeeId || !delta) return;
-  await Employee.updateOne({ _id: employeeId, workspaceId }, { $inc: { assignedChatsCount: delta } });
+  const filter = { _id: employeeId, workspaceId };
+  if (Number(delta) < 0) filter.assignedChatsCount = { $gt: 0 };
+  await Employee.updateOne(filter, { $inc: { assignedChatsCount: delta } });
 }
 
 module.exports = {

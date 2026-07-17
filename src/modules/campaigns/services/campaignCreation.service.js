@@ -10,9 +10,11 @@ const { ensureBalance, getOrCreateWallet } = require("@modules/wallet/services/w
 const { sendTemplateMessageForUser } = require("@shared/services/outboundMessageService");
 const { enqueueCampaignRecipients, hasCampaignWorkers } = require("@modules/campaigns/services/campaignsQueue.service");
 const { scheduleNextCampaignDispatch } = require("@modules/campaigns/services/campaignScheduler.service");
+const { waitForCampaignSendSlot } = require("@modules/campaigns/services/campaignRateLimit.service");
 const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
 const { subscriptionRepository } = require("@modules/billing/repositories");
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
+const { getWorkspaceEntitlements } = require("@modules/workspaces/services/workspaceEntitlement.service");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 const { validateBeforeSend } = require("@shared/utils/templateStructure");
 const { buildAttributeAudienceClauses } = require("@modules/campaigns/utils/attributeAudience");
@@ -159,6 +161,14 @@ async function createCampaign(req) {
         throw new HttpError(400, "Tag and attribute audiences are only supported for broadcast campaigns");
     }
     const normalizedSchedule = normalizeScheduleInput({ scheduledAt, schedule });
+    if (normalizedSchedule.isScheduled && isPlanRestrictionsEnabled()) {
+        const entitlements = await getWorkspaceEntitlements(req.workspace.id);
+        const schedulerAllowed = Boolean(
+            entitlements.features?.campaignSchedulerAccess ||
+            (normalizedType === CAMPAIGN_TYPES.CSV && entitlements.features?.csvCampaignSchedulerAccess)
+        );
+        if (!schedulerAllowed) throw new HttpError(403, "Your current plan does not allow campaign scheduler");
+    }
     if (normalizedSchedule.isRecurring && normalizedType === CAMPAIGN_TYPES.API) {
         throw new HttpError(400, "Recurring schedule is only supported for broadcast and CSV campaigns");
     }
@@ -264,6 +274,7 @@ async function createCampaign(req) {
             emitCampaignEvent(CAMPAIGN_EVENTS.PROCESSING, { campaignId: String(campaign._id) });
             for (const recipient of normalizedRecipients) {
                 try {
+                    await waitForCampaignSendSlot({ workspaceId: req.workspace.id, wabaId: template.wabaId });
                     await sendTemplateMessageForUser({ userId: req.workspace.id, campaignId: String(campaign._id), template, to: recipient.to, variables: recipient.variables, headerVariables: recipient.headerVariables, otpCode: recipient.otpCode, buttonValues: recipient.buttonValues, buttonTtlMinutes: recipient.buttonTtlMinutes, flowTokens: recipient.flowTokens, flowActionData: recipient.flowActionData });
                     sentCount += 1;
                 } catch (err) {

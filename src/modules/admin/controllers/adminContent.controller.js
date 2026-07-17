@@ -297,7 +297,7 @@ async function adminGetPlatformBrand(req, res) {
   return res.json({
     success: true,
     settings: {
-      brandName: String(page?.data?.brandName || appBrandName || "AiWizChat"),
+      brandName: String(page?.data?.brandName || appBrandName || "DigitalWhasp"),
       brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
     },
     meta: { source: page ? "db" : "env", updatedAt: page?.updatedAt || null },
@@ -319,7 +319,7 @@ async function adminUpdatePlatformBrand(req, res) {
       $set: {
         title: "Platform Brand",
         data: {
-          brandName: nextName || String(appBrandName || "AiWizChat"),
+          brandName: nextName || String(appBrandName || "DigitalWhasp"),
           brandLogoUrl: nextLogo || String(appBrandLogoUrl || ""),
         },
         updatedByAdminId: String(req.user?.id || "admin"),
@@ -331,7 +331,7 @@ async function adminUpdatePlatformBrand(req, res) {
   return res.json({
     success: true,
     settings: {
-      brandName: String(page?.data?.brandName || appBrandName || "AiWizChat"),
+      brandName: String(page?.data?.brandName || appBrandName || "DigitalWhasp"),
       brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
     },
     meta: { source: "db", updatedAt: page?.updatedAt || null },
@@ -346,7 +346,7 @@ async function adminUploadPlatformBrandLogo(req, res) {
     buffer: file.buffer,
     mimeType: file.mimetype,
     originalName: file.originalname,
-    folder: "waspakamify/platform-brand",
+    folder: "aiwizchat/platform-brand",
   });
   const logoUrl = String(uploaded?.secure_url || uploaded?.url || "").trim();
   if (!logoUrl) throw new HttpError(500, "Failed to upload logo");

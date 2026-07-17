@@ -29,7 +29,10 @@ function calculatePrice({
 
   let gstAmountPaise = 0;
   let payableAmountPaise = safeDiscounted;
-  if (taxMode === TAX_MODES.INCLUSIVE) {
+  if (taxMode === TAX_MODES.NONE) {
+    gstAmountPaise = 0;
+    payableAmountPaise = safeDiscounted;
+  } else if (taxMode === TAX_MODES.INCLUSIVE) {
     gstAmountPaise = gst > 0 ? Math.round((safeDiscounted * gst) / (100 + gst)) : 0;
     payableAmountPaise = safeDiscounted;
   } else {

@@ -47,15 +47,29 @@ app.use(
     "/webhook",
     "/api/webhook",
   ],
-  express.raw({ type: "application/json", limit: "10mb" })
+  express.raw({ type: "application/json", limit: "10mb" }),
 );
 
-const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
-const { metaAppId: startupMetaAppId, metaAppSecret: startupMetaAppSecret, metaAppSecretSource } = getMetaAppConfig();
-const startupTokenEncSecret = String(process.env.TOKEN_ENCRYPTION_SECRET || "").trim();
+const isProd =
+  String(process.env.NODE_ENV || "").toLowerCase() === "production";
+
+const {
+  metaAppId: startupMetaAppId,
+  metaAppSecret: startupMetaAppSecret,
+  metaAppSecretSource,
+} = getMetaAppConfig();
+
+const startupTokenEncSecret = String(
+  process.env.TOKEN_ENCRYPTION_SECRET || "",
+).trim();
+
+
 if (!startupMetaAppSecret || startupMetaAppSecret.length < 12) {
-  throw new Error("META_APP_SECRET is missing or too short. Webhook signature verification cannot run safely.");
+  throw new Error(
+    "META_APP_SECRET is missing or too short. Webhook signature verification cannot run safely.",
+  );
 }
+
 const jsonParser = express.json({
   limit: "10mb",
   verify: (req, res, buf) => {
@@ -69,10 +83,20 @@ app.use((req, res, next) => {
   if (isMetaWebhookPath(req.originalUrl || req.url)) return next();
   return jsonParser(req, res, next);
 });
+
+
 app.use(express.urlencoded({ extended: false }));
 const normalizedCorsOrigins = Array.isArray(corsOrigins)
-  ? corsOrigins.map((origin) => String(origin || "").trim().replace(/\/+$/, "")).filter(Boolean)
+  ? corsOrigins
+      .map((origin) =>
+        String(origin || "")
+          .trim()
+          .replace(/\/+$/, ""),
+      )
+      .filter(Boolean)
   : [];
+
+
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -83,37 +107,46 @@ app.use(
       },
     },
     crossOriginEmbedderPolicy: false,
-  })
+  }),
 );
+
+
 if (isProd) {
   app.use(
     helmet.hsts({
       maxAge: 15552000,
       includeSubDomains: true,
       preload: true,
-    })
+    }),
   );
 }
+
+
 app.use(
   cors({
     origin(origin, cb) {
       if (!origin) return cb(null, true); // non-browser clients
       if (!isProd) return cb(null, true);
-      const normalizedOrigin = String(origin || "").trim().replace(/\/+$/, "");
+      const normalizedOrigin = String(origin || "")
+        .trim()
+        .replace(/\/+$/, "");
       const allowed = normalizedCorsOrigins.includes(normalizedOrigin);
       return cb(null, allowed);
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-workspace-id", "X-API-Key"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-workspace-id", "x-api-key"],
     maxAge: 86400,
-  })
+  }),
 );
+
+
 app.use(morgan("dev"));
 
 // Disable caching for API JSON responses (prevents stale UI + 304 with empty body on some clients).
 app.use((req, res, next) => {
   // Keep media endpoints cacheable by browsers/CDNs.
-  if (req.path.includes("/messages/media/") || req.path.includes("/tracking/")) return next();
+  if (req.path.includes("/messages/media/") || req.path.includes("/tracking/"))
+    return next();
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
@@ -126,7 +159,7 @@ app.get("/", (req, res) =>
     message: `${appBrandName} API is running`,
     health: "/health",
     apiHealth: "/api/health",
-  })
+  }),
 );
 app.get("/health", (req, res) => res.json({ ok: true }));
 

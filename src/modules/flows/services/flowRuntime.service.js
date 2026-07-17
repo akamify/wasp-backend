@@ -7,6 +7,7 @@ const {
   sendText,
   writeEvent,
   moveSession,
+  resolveVariables,
 } = require("@modules/flows/services/flowRuntime.utils");
 const {
   executeSetTagNode,
@@ -32,6 +33,63 @@ const MAX_FALLBACKS = 3;
 const GENERIC_RETRY_MESSAGE = "Sorry, I could not understand that. Please try again.";
 const GENERIC_END_MESSAGE =
   "Sorry, I could not complete this automation. A team member can assist you.";
+
+function getPath(source, path) {
+  return String(path || "")
+    .split(".")
+    .filter(Boolean)
+    .reduce((value, key) => value?.[key], source);
+}
+
+function conditionValue(config, scope) {
+  const key = String(config?.sourceKey || "").trim();
+  if (!key) return undefined;
+  if (config.sourceType === "contact_field") return getPath(scope.contact, key);
+  if (config.sourceType === "context") return getPath(scope.context, key);
+  if (config.sourceType === "inbound") return getPath(scope.inbound, key);
+  if (config.sourceType === "static") return getPath(scope.static, key);
+  return getPath(scope.attributes, key);
+}
+
+function compareCondition(actual, operator, expected) {
+  const exists = actual !== undefined && actual !== null && String(actual).trim() !== "";
+  if (operator === "exists") return exists;
+  if (operator === "not_exists") return !exists;
+  const actualText = String(actual ?? "").toLowerCase();
+  const expectedText = String(expected ?? "").toLowerCase();
+  if (operator === "equals") return actualText === expectedText;
+  if (operator === "not_equals") return actualText !== expectedText;
+  if (operator === "contains") return actualText.includes(expectedText);
+  if (operator === "not_contains") return !actualText.includes(expectedText);
+  if (operator === "starts_with") return actualText.startsWith(expectedText);
+  if (operator === "ends_with") return actualText.endsWith(expectedText);
+  const actualNumber = Number(actual);
+  const expectedNumber = Number(expected);
+  if (!Number.isFinite(actualNumber) || !Number.isFinite(expectedNumber)) return false;
+  if (operator === "gt") return actualNumber > expectedNumber;
+  if (operator === "gte") return actualNumber >= expectedNumber;
+  if (operator === "lt") return actualNumber < expectedNumber;
+  if (operator === "lte") return actualNumber <= expectedNumber;
+  return false;
+}
+
+function delayMs(config) {
+  const amount = Math.max(1, Number(config?.amount || 1));
+  if (config?.unit === "seconds") return amount * 1000;
+  if (config?.unit === "hours") return amount * 60 * 60 * 1000;
+  return amount * 60 * 1000;
+}
+
+function castVariableValue(value, valueType) {
+  if (valueType === "number") {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : 0;
+  }
+  if (valueType === "boolean") {
+    return ["true", "1", "yes", "y"].includes(String(value || "").trim().toLowerCase());
+  }
+  return String(value ?? "");
+}
 
 function flowLog(label, data) {
   process.stdout.write(`${label} ${JSON.stringify(data)}\n`);
@@ -566,10 +624,44 @@ async function executeSession({
           inboundMessage,
         });
       } catch (error) {
+        const failure = sendFailureData(error);
+        await writeEvent({
+          workspaceId,
+          session,
+          eventType: "template_failed",
+          nodeId: node.id,
+          data: failure,
+        });
+        const failureEdge = edgeForHandle(version, node.id, "failure");
+        if (failureEdge) {
+          session = await moveSession({
+            workspaceId,
+            session,
+            nodeId: failureEdge.target,
+            updates: {
+              context: {
+                ...(session.context || {}),
+                lastTemplateError: failure.reason,
+              },
+            },
+          });
+          continue;
+        }
         return failPromptSend({ workspaceId, session, node, error });
       }
-      const edge = defaultEdge(version, node.id);
-      if (node.config?.autoContinue === true && edge) {
+      await writeEvent({
+        workspaceId,
+        session,
+        eventType: "template_sent",
+        nodeId: node.id,
+        data: {
+          templateName: node.config?.templateName || null,
+          languageCode: node.config?.languageCode || null,
+        },
+      });
+      const successEdge = edgeForHandle(version, node.id, "success");
+      const edge = successEdge || (node.config?.autoContinue === true ? defaultEdge(version, node.id) : null);
+      if (edge) {
         session = await moveSession({
           workspaceId,
           session,
@@ -613,6 +705,166 @@ async function executeSession({
         session,
         nodeId: edge.target,
         updates: { context: result.context },
+      });
+      continue;
+    }
+
+    if (node.type === "condition") {
+      const actual = conditionValue(node.config || {}, scope);
+      const expected = resolveVariables(node.config?.compareValue || "", scope);
+      const passed = compareCondition(actual, node.config?.operator || "equals", expected);
+      await writeEvent({
+        workspaceId,
+        session,
+        eventType: "condition_evaluated",
+        nodeId: node.id,
+        data: {
+          sourceType: node.config?.sourceType || "contact_attribute",
+          sourceKey: node.config?.sourceKey || null,
+          operator: node.config?.operator || "equals",
+          result: passed,
+        },
+      });
+      const edge = edgeForHandle(version, node.id, passed ? "true" : "false");
+      if (!edge) return failSession({ workspaceId, session, contact, businessInitiated, inboundMessage });
+      session = await moveSession({
+        workspaceId,
+        session,
+        nodeId: edge.target,
+      });
+      continue;
+    }
+
+    if (node.type === "delay") {
+      const edge = defaultEdge(version, node.id);
+      if (!edge) return completeSession({ workspaceId, session, node });
+      const delayUntil = new Date(Date.now() + delayMs(node.config || {}));
+      const waitingSession = await moveSession({
+        workspaceId,
+        session,
+        nodeId: node.id,
+        updates: {
+          waitingFor: {
+            type: "delay",
+            attributeKey: edge.target,
+            nodeId: node.id,
+          },
+          expiresAt: delayUntil,
+          context: {
+            ...(session.context || {}),
+            lastDelay: {
+              nodeId: node.id,
+              targetNodeId: edge.target,
+              resumeAt: delayUntil,
+            },
+          },
+        },
+      });
+      await writeEvent({
+        workspaceId,
+        session: waitingSession,
+        eventType: "delay_scheduled",
+        nodeId: node.id,
+        data: { resumeAt: delayUntil, targetNodeId: edge.target },
+      });
+      return { status: "waiting", session: waitingSession };
+    }
+
+    if (node.type === "wait_for_reply") {
+      const prompt = String(node.config?.prompt || "").trim();
+      const promptSentAt = new Date();
+      if (prompt) {
+        try {
+          await sendText({
+            workspaceId,
+            contact,
+            session,
+            node,
+            text: prompt,
+            businessInitiated,
+            inboundMessage,
+          });
+        } catch (error) {
+          return failPromptSend({ workspaceId, session, node, error });
+        }
+      }
+      const timeoutMinutes = Math.min(600, Math.max(1, Number(node.config?.timeoutMinutes || 30)));
+      session = await moveSession({
+        workspaceId,
+        session,
+        nodeId: node.id,
+        updates: {
+          waitingFor: {
+            type: `reply:${node.config?.inputType || "text"}`,
+            attributeKey: node.config?.saveToAttribute || null,
+            nodeId: node.id,
+          },
+          expiresAt: new Date(promptSentAt.getTime() + timeoutMinutes * 60 * 1000),
+          lastPromptSentAt: prompt ? promptSentAt : session.lastPromptSentAt,
+          lastPromptNodeId: node.id,
+          lastPromptMessageStatus: prompt ? "sent" : session.lastPromptMessageStatus,
+          lastPromptFailureReason: null,
+        },
+      });
+      await writeEvent({
+        workspaceId,
+        session,
+        eventType: "wait_for_reply_started",
+        nodeId: node.id,
+        data: { timeoutMinutes, inputType: node.config?.inputType || "text" },
+      });
+      return { status: "waiting", session };
+    }
+
+    if (node.type === "variable") {
+      const name = String(node.config?.name || "").trim();
+      const context = { ...(session.context || {}) };
+      if (name) {
+        if (node.config?.action === "clear") {
+          delete context[name];
+        } else {
+          const resolvedValue = resolveVariables(node.config?.value || "", scope);
+          context[name] = castVariableValue(resolvedValue, node.config?.valueType || "string");
+        }
+      }
+      await writeEvent({
+        workspaceId,
+        session,
+        eventType: "variable_updated",
+        nodeId: node.id,
+        data: { action: node.config?.action === "clear" ? "clear" : "set", name },
+      });
+      const edge = defaultEdge(version, node.id);
+      if (!edge) return completeSession({ workspaceId, session, node });
+      session = await moveSession({
+        workspaceId,
+        session,
+        nodeId: edge.target,
+        updates: { context },
+      });
+      continue;
+    }
+
+    if (node.type === "fallback") {
+      try {
+        await sendText({
+          workspaceId,
+          contact,
+          session,
+          node,
+          text: node.config?.message,
+          businessInitiated,
+          inboundMessage,
+        });
+      } catch (error) {
+        return failPromptSend({ workspaceId, session, node, error });
+      }
+      const edge = defaultEdge(version, node.id);
+      if (!edge) return { status: "waiting", session };
+      session = await moveSession({
+        workspaceId,
+        session,
+        nodeId: edge.target,
       });
       continue;
     }
@@ -805,6 +1057,22 @@ async function handleFallback({
     }
     return failSession({ workspaceId, session: updated, contact, inboundMessage });
   }
+  if (version.fallbackNodeId && nodeById(version, version.fallbackNodeId)) {
+    const moved = await moveSession({
+      workspaceId,
+      session: updated,
+      nodeId: version.fallbackNodeId,
+      updates: {
+        waitingFor: { type: null, attributeKey: null, nodeId: null },
+      },
+    });
+    return executeSession({
+      workspaceId,
+      sessionId: moved._id,
+      inboundMessage,
+      businessInitiated: false,
+    });
+  }
   await sendText({
     workspaceId,
     contact,
@@ -911,17 +1179,35 @@ async function continueSession({
       availableEdges,
     });
   } else if (
-    ["text", "number", "email", "phone"].includes(waiting.type)
+    ["text", "number", "email", "phone"].includes(waiting.type) ||
+    String(waiting.type || "").startsWith("reply:")
   ) {
-    const answer = inboundMessage?.text;
-    if (validQuestionAnswer(waiting.type, answer)) {
+    const answer =
+      inboundMessage?.text ||
+      inboundMessage?.buttonReply?.title ||
+      inboundMessage?.listReply?.title;
+    const inputType = String(waiting.type || "").startsWith("reply:")
+      ? String(waiting.type).slice("reply:".length) || "text"
+      : waiting.type;
+    if (validQuestionAnswer(inputType, answer)) {
       const key = String(waiting.attributeKey || "").trim();
+      const answerText = String(answer).trim();
+      if (key) {
+        const updatedContact = await flowSessionRepository.mergeContactAttributes({
+          workspaceId,
+          contactId: contact._id,
+          attributes: { [key]: answerText },
+        });
+        contact.attributes = updatedContact?.attributes || contact.attributes;
+      }
       context = {
         ...context,
-        lastAnswer: String(answer).trim(),
-        ...(key ? { [key]: String(answer).trim() } : {}),
+        lastAnswer: answerText,
+        ...(key ? { [key]: answerText } : {}),
       };
-      edge = defaultEdge(version, waiting.nodeId);
+      edge = String(waiting.type || "").startsWith("reply:")
+        ? edgeForHandle(version, waiting.nodeId, "reply") || defaultEdge(version, waiting.nodeId)
+        : defaultEdge(version, waiting.nodeId);
     }
   }
 

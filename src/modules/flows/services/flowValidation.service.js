@@ -18,6 +18,11 @@ const VALID_NODE_TYPES = new Set([
   "list",
   "media",
   "template",
+  "condition",
+  "delay",
+  "wait_for_reply",
+  "variable",
+  "fallback",
   "set_tag",
   "set_attribute",
   "api_request",
@@ -25,6 +30,30 @@ const VALID_NODE_TYPES = new Set([
   "end",
 ]);
 const VALID_INPUT_TYPES = new Set(["text", "number", "email", "phone"]);
+const VALID_CONDITION_SOURCES = new Set([
+  "contact_attribute",
+  "contact_field",
+  "context",
+  "inbound",
+  "static",
+]);
+const VALID_CONDITION_OPERATORS = new Set([
+  "equals",
+  "not_equals",
+  "contains",
+  "not_contains",
+  "starts_with",
+  "ends_with",
+  "exists",
+  "not_exists",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+]);
+const VALID_DELAY_UNITS = new Set(["seconds", "minutes", "hours"]);
+const VALID_VARIABLE_ACTIONS = new Set(["set", "clear"]);
+const VALID_VARIABLE_TYPES = new Set(["string", "number", "boolean"]);
 const VALID_HTTP_METHODS = new Set([
   "GET",
   "POST",
@@ -43,6 +72,30 @@ const VALID_MEDIA_SOURCE_TYPES = new Set([
 ]);
 const TEMPLATE_TOKEN_PATTERN = /\{\{\s*[^}]+\s*\}\}/;
 const SENSITIVE_TEMPLATE_KEY_PATTERN = /(token|secret|password|apikey|api_key|authorization)/i;
+const VALID_TEMPLATE_SOURCE_TYPES = new Set([
+  "static",
+  "literal",
+  "contact_field",
+  "contact_attribute",
+  "api_context",
+  "context",
+  "workspace_field",
+  "workspace",
+]);
+const LIST_LIMITS = {
+  body: 1024,
+  buttonText: 20,
+  sections: 10,
+  rows: 10,
+  sectionTitle: 24,
+  rowTitle: 24,
+  rowDescription: 72,
+  rowId: 200,
+};
+const REPLY_BUTTON_LIMITS = {
+  title: 20,
+  id: 256,
+};
 const FORBIDDEN_API_HEADERS = new Set([
   "host",
   "content-length",
@@ -226,7 +279,39 @@ function templateMappingRows(config) {
 function validateTemplateMappings(node, errors) {
   const config = node?.config || {};
   for (const mapping of templateMappingRows(config)) {
+    const sourceType = String(mapping?.sourceType || mapping?.type || "").trim();
     const sourceKey = String(mapping?.sourceKey || mapping?.value || "").trim();
+    const fallback = String(mapping?.fallback || mapping?.fallbackValue || "").trim();
+    const staticValue = String(mapping?.value || mapping?.staticValue || "").trim();
+    if (!VALID_TEMPLATE_SOURCE_TYPES.has(sourceType)) {
+      addIssue(
+        errors,
+        "TEMPLATE_MAPPING_SOURCE_INVALID",
+        "Template variable mapping source must be static, contact field, contact attribute, API context, or workspace field",
+        { nodeId: node.id, field: "config.templateConfig.components.variables.sourceType" }
+      );
+    }
+    if (
+      sourceType !== "static" &&
+      sourceType !== "literal" &&
+      !sourceKey &&
+      !fallback
+    ) {
+      addIssue(
+        errors,
+        "TEMPLATE_MAPPING_SOURCE_KEY_REQUIRED",
+        "Dynamic template variable mappings require a source key or fallback value",
+        { nodeId: node.id, field: "config.templateConfig.components.variables.sourceKey" }
+      );
+    }
+    if ((sourceType === "static" || sourceType === "literal") && !staticValue && !fallback) {
+      addIssue(
+        errors,
+        "TEMPLATE_MAPPING_STATIC_VALUE_REQUIRED",
+        "Static template variable mappings require a value or fallback value",
+        { nodeId: node.id, field: "config.templateConfig.components.variables.value" }
+      );
+    }
     if (sourceKey && SENSITIVE_TEMPLATE_KEY_PATTERN.test(sourceKey)) {
       addIssue(
         errors,
@@ -361,6 +446,22 @@ function validateTextButtonsNode(node, outgoingEdges, errors) {
       nodeId: node.id,
       field: "config.buttons.title",
     });
+    if (String(button?.title || "").trim().length > REPLY_BUTTON_LIMITS.title) {
+      addIssue(
+        errors,
+        "BUTTON_TITLE_TOO_LONG",
+        `WhatsApp reply button title can be at most ${REPLY_BUTTON_LIMITS.title} characters`,
+        { nodeId: node.id, field: "config.buttons.title" }
+      );
+    }
+    if (buttonId.length > REPLY_BUTTON_LIMITS.id) {
+      addIssue(
+        errors,
+        "BUTTON_ID_TOO_LONG",
+        `WhatsApp reply button id can be at most ${REPLY_BUTTON_LIMITS.id} characters`,
+        { nodeId: node.id, field: "config.buttons.id" }
+      );
+    }
 
     if (
       buttonId &&
@@ -396,6 +497,22 @@ function validateListNode(node, outgoingEdges, errors) {
     nodeId: node.id,
     field: "config.buttonText",
   });
+  if (String(config.text || "").trim().length > LIST_LIMITS.body) {
+    addIssue(
+      errors,
+      "LIST_TEXT_TOO_LONG",
+      `WhatsApp list body text can be at most ${LIST_LIMITS.body} characters`,
+      { nodeId: node.id, field: "config.text" }
+    );
+  }
+  if (String(config.buttonText || "").trim().length > LIST_LIMITS.buttonText) {
+    addIssue(
+      errors,
+      "LIST_BUTTON_TEXT_TOO_LONG",
+      `WhatsApp list button text can be at most ${LIST_LIMITS.buttonText} characters`,
+      { nodeId: node.id, field: "config.buttonText" }
+    );
+  }
 
   if (!Array.isArray(config.sections) || config.sections.length === 0) {
     addIssue(errors, "LIST_SECTIONS_REQUIRED", "List sections are required", {
@@ -404,10 +521,26 @@ function validateListNode(node, outgoingEdges, errors) {
     });
     return;
   }
+  if (config.sections.length > LIST_LIMITS.sections) {
+    addIssue(
+      errors,
+      "LIST_SECTIONS_MAX_EXCEEDED",
+      `WhatsApp list messages can have at most ${LIST_LIMITS.sections} sections`,
+      { nodeId: node.id, field: "config.sections" }
+    );
+  }
 
   const rowIds = new Set();
   let rowCount = 0;
   for (const section of config.sections) {
+    if (String(section?.title || "").trim().length > LIST_LIMITS.sectionTitle) {
+      addIssue(
+        errors,
+        "LIST_SECTION_TITLE_TOO_LONG",
+        `WhatsApp list section title can be at most ${LIST_LIMITS.sectionTitle} characters`,
+        { nodeId: node.id, field: "config.sections.title" }
+      );
+    }
     if (!Array.isArray(section?.rows) || section.rows.length === 0) {
       addIssue(
         errors,
@@ -435,12 +568,36 @@ function validateListNode(node, outgoingEdges, errors) {
       } else {
         rowIds.add(rowId);
       }
+      if (rowId.length > LIST_LIMITS.rowId) {
+        addIssue(
+          errors,
+          "LIST_ROW_ID_TOO_LONG",
+          `WhatsApp list row id can be at most ${LIST_LIMITS.rowId} characters`,
+          { nodeId: node.id, field: "config.sections.rows.id" }
+        );
+      }
       if (!isNonEmptyString(row?.title)) {
         addIssue(
           errors,
           "LIST_ROW_TITLE_REQUIRED",
           "List row title is required",
           { nodeId: node.id, field: "config.sections.rows.title" }
+        );
+      }
+      if (String(row?.title || "").trim().length > LIST_LIMITS.rowTitle) {
+        addIssue(
+          errors,
+          "LIST_ROW_TITLE_TOO_LONG",
+          `WhatsApp list row title can be at most ${LIST_LIMITS.rowTitle} characters`,
+          { nodeId: node.id, field: "config.sections.rows.title" }
+        );
+      }
+      if (String(row?.description || "").trim().length > LIST_LIMITS.rowDescription) {
+        addIssue(
+          errors,
+          "LIST_ROW_DESCRIPTION_TOO_LONG",
+          `WhatsApp list row description can be at most ${LIST_LIMITS.rowDescription} characters`,
+          { nodeId: node.id, field: "config.sections.rows.description" }
         );
       }
       if (
@@ -464,6 +621,14 @@ function validateListNode(node, outgoingEdges, errors) {
       nodeId: node.id,
       field: "config.sections.rows",
     });
+  }
+  if (rowCount > LIST_LIMITS.rows) {
+    addIssue(
+      errors,
+      "LIST_ROWS_MAX_EXCEEDED",
+      `WhatsApp list messages can have at most ${LIST_LIMITS.rows} rows total`,
+      { nodeId: node.id, field: "config.sections.rows" }
+    );
   }
 }
 
@@ -514,6 +679,18 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
         "QUESTION_INPUT_TYPE_INVALID",
         "Question inputType must be text, number, email, or phone",
         { nodeId, field: "config.inputType" }
+      );
+    }
+    if (
+      isNonEmptyString(config.saveToAttribute) &&
+      (String(config.saveToAttribute).includes(".") ||
+        String(config.saveToAttribute).startsWith("$"))
+    ) {
+      addIssue(
+        errors,
+        "QUESTION_ATTRIBUTE_KEY_INVALID",
+        "Question save attribute cannot contain dots or start with $",
+        { nodeId, field: "config.saveToAttribute" }
       );
     }
   }
@@ -642,6 +819,125 @@ function validateNode(node, outgoingEdges, fallbackNodeId, errors, warnings) {
       );
     }
     validateTemplateMappings(node, errors);
+  }
+
+  if (node.type === "condition") {
+    if (!VALID_CONDITION_SOURCES.has(config.sourceType)) {
+      addIssue(errors, "CONDITION_SOURCE_INVALID", "Condition source must be contact_attribute, contact_field, context, inbound, or static", {
+        nodeId,
+        field: "config.sourceType",
+      });
+    }
+    validateRequiredString({
+      errors,
+      value: config.sourceKey,
+      code: "CONDITION_SOURCE_KEY_REQUIRED",
+      message: "Condition node requires config.sourceKey",
+      nodeId,
+      field: "config.sourceKey",
+    });
+    if (!VALID_CONDITION_OPERATORS.has(config.operator)) {
+      addIssue(errors, "CONDITION_OPERATOR_INVALID", "Condition operator is invalid", {
+        nodeId,
+        field: "config.operator",
+      });
+    }
+    if (!["exists", "not_exists"].includes(config.operator) && config.compareValue === undefined) {
+      addIssue(errors, "CONDITION_COMPARE_VALUE_REQUIRED", "Condition compareValue is required for this operator", {
+        nodeId,
+        field: "config.compareValue",
+      });
+    }
+    for (const handle of ["true", "false"]) {
+      if (!outgoingEdges.some((edge) => String(edge.sourceHandle || "").trim().toLowerCase() === handle)) {
+        addIssue(errors, `CONDITION_${handle.toUpperCase()}_EDGE_MISSING`, `Condition node requires a ${handle} outgoing edge`, {
+          nodeId,
+          field: "edges",
+        });
+      }
+    }
+  }
+
+  if (node.type === "delay") {
+    const amount = Number(config.amount);
+    if (!Number.isFinite(amount) || amount < 1 || amount > 1440) {
+      addIssue(errors, "DELAY_AMOUNT_INVALID", "Delay amount must be between 1 and 1440", {
+        nodeId,
+        field: "config.amount",
+      });
+    }
+    if (!VALID_DELAY_UNITS.has(config.unit)) {
+      addIssue(errors, "DELAY_UNIT_INVALID", "Delay unit must be seconds, minutes, or hours", {
+        nodeId,
+        field: "config.unit",
+      });
+    }
+  }
+
+  if (node.type === "wait_for_reply") {
+    validateNoVariables(errors, nodeId, "config.prompt", config.prompt);
+    if (!VALID_INPUT_TYPES.has(config.inputType)) {
+      addIssue(errors, "WAIT_REPLY_INPUT_TYPE_INVALID", "Wait for reply inputType must be text, number, email, or phone", {
+        nodeId,
+        field: "config.inputType",
+      });
+    }
+    const timeoutMinutes = Number(config.timeoutMinutes);
+    if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 600) {
+      addIssue(errors, "WAIT_REPLY_TIMEOUT_INVALID", "Wait for reply timeoutMinutes must be between 1 and 600", {
+        nodeId,
+        field: "config.timeoutMinutes",
+      });
+    }
+    if (
+      isNonEmptyString(config.saveToAttribute) &&
+      (String(config.saveToAttribute).includes(".") ||
+        String(config.saveToAttribute).startsWith("$"))
+    ) {
+      addIssue(errors, "WAIT_REPLY_ATTRIBUTE_KEY_INVALID", "Wait for reply save attribute cannot contain dots or start with $", {
+        nodeId,
+        field: "config.saveToAttribute",
+      });
+    }
+    if (!outgoingEdges.some((edge) => String(edge.sourceHandle || "").trim().toLowerCase() === "reply")) {
+      addIssue(errors, "WAIT_REPLY_EDGE_MISSING", "Wait for reply node requires a reply outgoing edge", {
+        nodeId,
+        field: "edges",
+      });
+    }
+  }
+
+  if (node.type === "variable") {
+    if (!VALID_VARIABLE_ACTIONS.has(config.action)) {
+      addIssue(errors, "VARIABLE_ACTION_INVALID", "Variable action must be set or clear", {
+        nodeId,
+        field: "config.action",
+      });
+    }
+    if (!isValidContextKey(config.name)) {
+      addIssue(errors, "VARIABLE_NAME_INVALID", "Variable name must be a valid context key", {
+        nodeId,
+        field: "config.name",
+      });
+    }
+    if (config.action !== "clear" && !VALID_VARIABLE_TYPES.has(config.valueType)) {
+      addIssue(errors, "VARIABLE_VALUE_TYPE_INVALID", "Variable valueType must be string, number, or boolean", {
+        nodeId,
+        field: "config.valueType",
+      });
+    }
+  }
+
+  if (node.type === "fallback") {
+    validateNoVariables(errors, nodeId, "config.message", config.message);
+    validateRequiredString({
+      errors,
+      value: config.message,
+      code: "FALLBACK_MESSAGE_REQUIRED",
+      message: "Fallback node requires config.message",
+      nodeId,
+      field: "config.message",
+    });
   }
 
   if (
@@ -972,6 +1268,24 @@ function validateFlowDraft(flow) {
         `${field} does not reference an existing node`,
         { field }
       );
+    }
+  }
+  if (isNonEmptyString(draft.fallbackNodeId)) {
+    const fallbackNode = draft.nodes.find((node) => String(node?.id || "").trim() === draft.fallbackNodeId.trim());
+    if (fallbackNode && fallbackNode.type !== "fallback") {
+      addIssue(errors, "FALLBACK_NODE_TYPE_INVALID", "Fallback node must reference a Fallback node", {
+        nodeId: draft.fallbackNodeId,
+        field: "draft.fallbackNodeId",
+      });
+    }
+  }
+  if (isNonEmptyString(draft.handoverNodeId)) {
+    const handoverNode = draft.nodes.find((node) => String(node?.id || "").trim() === draft.handoverNodeId.trim());
+    if (handoverNode && handoverNode.type !== "request_intervention") {
+      addIssue(errors, "HANDOVER_NODE_TYPE_INVALID", "Handover node must reference a Human Handover node", {
+        nodeId: draft.handoverNodeId,
+        field: "draft.handoverNodeId",
+      });
     }
   }
 

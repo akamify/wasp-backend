@@ -58,7 +58,7 @@ async function getEmployeeProfile(req, res) {
   const scope = await requireActiveWabaScope(req.workspace.id);
   const employeeId = String(req.params.employeeId || "").trim();
   const employee = await Employee.findOne({ _id: employeeId, workspaceId: req.workspace.id }).select(
-    "_id email name role status permissions assignedChatsCount lastLoginAt lastActivityAt createdAt updatedAt deletedAt"
+    "_id email name role status permissions assignedChatsCount maxActiveLeads lastLoginAt lastActivityAt createdAt updatedAt deletedAt"
   );
   if (!employee) throw new HttpError(404, "Employee not found");
 
@@ -131,6 +131,7 @@ async function getEmployeeProfile(req, res) {
       role: employee.role || "employee",
       status: employee.status,
       assignedChatsCount: Number(employee.assignedChatsCount || 0),
+      maxActiveLeads: employee.maxActiveLeads == null ? null : Number(employee.maxActiveLeads || 0),
       lastLoginAt: employee.lastLoginAt || null,
       lastActivityAt: employee.lastActivityAt || null,
       createdAt: employee.createdAt || null,
@@ -154,6 +155,7 @@ const updateEmployeeSchema = Joi.object({
   name: Joi.string().allow("").max(120).optional(),
   role: Joi.string().valid("employee", "team_leader").allow("").optional(),
   email: Joi.string().email().optional(),
+  maxActiveLeads: Joi.number().integer().min(0).allow(null).optional(),
 });
 
 async function updateEmployeeProfile(req, res) {
@@ -161,7 +163,7 @@ async function updateEmployeeProfile(req, res) {
   const employeeId = String(req.params.employeeId || "").trim();
   const payload = await updateEmployeeSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
 
-  const employee = await Employee.findOne({ _id: employeeId, workspaceId: req.workspace.id }).select("_id email name role status deletedAt");
+  const employee = await Employee.findOne({ _id: employeeId, workspaceId: req.workspace.id }).select("_id email name role status maxActiveLeads deletedAt");
   if (!employee) throw new HttpError(404, "Employee not found");
 
   if (payload.email) {
@@ -187,11 +189,20 @@ async function updateEmployeeProfile(req, res) {
   }
   if (payload.name !== undefined) employee.name = String(payload.name || "");
   if (payload.role !== undefined) employee.role = String(payload.role || "") || "employee";
+  if (payload.maxActiveLeads !== undefined) {
+    employee.maxActiveLeads = payload.maxActiveLeads == null ? null : Number(payload.maxActiveLeads || 0);
+  }
 
   await employee.save();
   res.json({
     success: true,
-    employee: { id: String(employee._id), email: employee.email, name: employee.name || "", role: employee.role || "employee" },
+    employee: {
+      id: String(employee._id),
+      email: employee.email,
+      name: employee.name || "",
+      role: employee.role || "employee",
+      maxActiveLeads: employee.maxActiveLeads == null ? null : Number(employee.maxActiveLeads || 0),
+    },
   });
 }
 

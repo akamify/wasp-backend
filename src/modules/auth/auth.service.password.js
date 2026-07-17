@@ -1,30 +1,32 @@
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
-const { appBaseUrl } = require("@core/config/env");
+const { appBaseUrl, superAdminEmail } = require("@core/config/env");
 const { HttpError } = require("@shared/utils/httpError");
 const { sha256Hex } = require("@shared/utils/hash");
 const { sendEmail } = require("@shared/services/emailService");
 const repo = require("@modules/auth/auth.repository");
 const { base64Url, shouldReturnAuthDebugTokens } = require("@modules/auth/auth.utils");
 
-function maskEmail(email) {
-  const value = String(email || "").trim().toLowerCase();
-  const [name, domain] = value.split("@");
-  if (!name || !domain) return value ? "***" : "";
-  return `${name.slice(0, 2)}***@${domain}`;
-}
-
-async function forgotPassword({ email, resetPath = "/reset-password" }) {
+async function forgotPassword({ email }) {
   const normalized = String(email || "").trim().toLowerCase();
   const user = await repo.findUserForForgotPassword(normalized);
 
   const headers = {};
   if (user) {
-    console.info("[auth.forgot_password] user_found", {
-      email: maskEmail(user.email),
-      role: String(user.role || ""),
-      resetPath: String(resetPath || ""),
-    });
+    if (String(user.role || "") === "admin") {
+      return {
+        headers,
+        body: { success: true, message: "If your email is registered, a reset link has been sent." },
+      };
+    }
+
+    const isSuperAdmin = String(user.role || "") === "super_admin";
+    if (isSuperAdmin && (!superAdminEmail || normalized !== String(superAdminEmail))) {
+      return {
+        headers,
+        body: { success: true, message: "If your email is registered, a reset link has been sent." },
+      };
+    }
 
     const rawToken = base64Url(crypto.randomBytes(32));
     const tokenHash = sha256Hex(rawToken);
@@ -32,10 +34,7 @@ async function forgotPassword({ email, resetPath = "/reset-password" }) {
 
     await repo.setUserPasswordResetToken(user._id, { tokenHash, expiresAt });
 
-    const normalizedResetPath = String(resetPath || "/reset-password").startsWith("/")
-      ? String(resetPath || "/reset-password")
-      : `/${String(resetPath || "reset-password")}`;
-    const resetLink = `${appBaseUrl}${normalizedResetPath}?token=${encodeURIComponent(rawToken)}`;
+    const resetLink = `${appBaseUrl}/reset-password?token=${encodeURIComponent(rawToken)}`;
     const delivery = await sendEmail({
       toEmail: user.email,
       toName: user.name || "",
@@ -51,25 +50,10 @@ async function forgotPassword({ email, resetPath = "/reset-password" }) {
       textContent: `Reset your password using this link: ${resetLink}`,
     });
 
-    console.info("[auth.forgot_password] email_delivery", {
-      email: maskEmail(user.email),
-      role: String(user.role || ""),
-      sent: Boolean(delivery?.sent),
-      skipped: Boolean(delivery?.skipped),
-      failed: Boolean(delivery?.failed),
-      reason: delivery?.reason || null,
-      providerMessage: delivery?.providerMessage || null,
-    });
-
     if (shouldReturnAuthDebugTokens()) {
       headers["X-Debug-Reset-Link"] = resetLink;
       headers["X-Debug-Email-Delivery"] = String(delivery?.sent ? "sent" : delivery?.skipped ? "skipped" : "failed");
     }
-  } else {
-    console.info("[auth.forgot_password] user_not_found", {
-      email: maskEmail(normalized),
-      resetPath: String(resetPath || ""),
-    });
   }
 
   return {

@@ -11,9 +11,30 @@ const {
 } = require("@modules/billing/services/freePlan.service");
 
 const FREE_PLAN_ID = "free-plan";
+const BILLING_CYCLES = Object.freeze(["monthly", "quarterly", "yearly", "lifetime"]);
+const TAX_MODES = Object.freeze(["exclusive", "inclusive", "none"]);
+const BADGE_TYPES = Object.freeze(["none", "popular", "best_value", "recommended", "limited_offer", "enterprise", "coming_soon"]);
+const CARD_COLORS = Object.freeze(["blue", "green", "purple", "gold", "slate"]);
+const PLAN_SLOTS = Object.freeze([
+  { name: "Free", slug: "free", sortOrder: 1 },
+  { name: "Basic", slug: "basic", sortOrder: 2 },
+  { name: "Pro", slug: "pro", sortOrder: 3 },
+  { name: "Premium", slug: "premium", sortOrder: 4 },
+  { name: "Unlimited", slug: "unlimited", sortOrder: 5 },
+]);
 
 function sanitizeSlug(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9-\s]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+}
+
+function resolvePlanSlot(payload = {}) {
+  const requestedSlug = sanitizeSlug(payload.slug || payload.name);
+  const requestedName = String(payload.name || "").trim().toLowerCase();
+  const compactSlug = requestedSlug.replace(/-?plan$/, "").replace(/-/g, "");
+  const compactName = requestedName.replace(/\s+plan$/, "").replace(/\s+/g, "");
+  const slot = PLAN_SLOTS.find((item) => item.slug === requestedSlug || item.slug === compactSlug || item.name.toLowerCase() === requestedName || item.name.toLowerCase() === compactName);
+  if (!slot) throw new HttpError(400, "Only Free, Basic, Pro, Premium, and Unlimited plans can be created.");
+  return slot;
 }
 
 function toPaiseFromRupees(value) {
@@ -33,7 +54,51 @@ function normalizeLimit(value) {
 function normalizeLimitKey(value) {
   const key = String(value || "").trim();
   if (key === "maxExportsPerMonth") return "maxContactsExport";
+  if (key === "maxEmployees") return "maxAgents";
   return key;
+}
+
+function normalizeFeatures(raw = {}) {
+  const features = {};
+  FEATURE_FUNCTIONALITY_KEYS.forEach((key) => {
+    features[key] = Boolean(raw?.[key]);
+  });
+  if (features.campaignsPageAccess) {
+    features.whatsAppBroadcastAccess = true;
+    features.smartCampaignManagerAccess = true;
+  }
+  if (features.crmPageAccess) features.crmAccess = true;
+  if (features.automationPageAccess || features.flowsPageAccess) features.automationAccess = true;
+  if (features.apiReportsPageAccess) features.analyticsAccess = true;
+  if (features.apiKeysPageAccess || features.inboxPageAccess) features.apiKeyAccess = true;
+  if (features.inboxPageAccess) features.liveChatAccess = true;
+  return features;
+}
+
+function normalizeLimits(raw = {}) {
+  const limits = {};
+  LIMIT_KEYS.forEach((key) => {
+    const sourceKey = key === "maxAgents" && raw?.maxAgents === undefined ? "maxEmployees" : key;
+    limits[key] = normalizeLimit(raw?.[sourceKey]);
+  });
+  limits.maxAgents = limits.maxAgents ?? normalizeLimit(raw.maxEmployees) ?? 0;
+  limits.maxEmployees = limits.maxAgents;
+  limits.maxContactsExport = limits.maxContactsExport ?? normalizeLimit(raw.maxExportsPerMonth) ?? 0;
+  return limits;
+}
+
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of value) {
+    const label = String(item || "").trim();
+    const key = label.toLowerCase();
+    if (!label || seen.has(key)) continue;
+    seen.add(key);
+    out.push(label);
+  }
+  return out.slice(0, 80);
 }
 
 function deriveFromFeatureRows(featureRows) {
@@ -95,8 +160,25 @@ function deriveFromFeatureRows(featureRows) {
   if (features.automationPageAccess) features.automationAccess = true;
   if (features.apiReportsPageAccess) features.analyticsAccess = true;
   if (features.inboxPageAccess) features.apiKeyAccess = true;
+  limits.maxAgents = limits.maxAgents ?? limits.maxEmployees ?? 0;
+  limits.maxEmployees = limits.maxAgents;
 
   return { featureRows: sorted, features, limits, displayFeatures, unavailableFeatures };
+}
+
+function buildStructuredEntitlements(payload = {}, fallback = {}) {
+  const hasStructured = Boolean(payload.features || payload.limits || payload.displayFeatures || payload.unavailableFeatures || payload.addonServices);
+  if (!hasStructured) return deriveFromFeatureRows(payload.featureRows || fallback.featureRows || []);
+  const derivedRows = deriveFromFeatureRows(payload.featureRows || fallback.featureRows || []);
+  const displayFeatures = normalizeStringArray(payload.displayFeatures);
+  const unavailableFeatures = normalizeStringArray(payload.unavailableFeatures);
+  return {
+    featureRows: Array.isArray(payload.featureRows) ? payload.featureRows : (fallback.featureRows || []),
+    features: normalizeFeatures({ ...derivedRows.features, ...(fallback.features || {}), ...(payload.features || {}) }),
+    limits: normalizeLimits({ ...derivedRows.limits, ...(fallback.limits || {}), ...(payload.limits || {}) }),
+    displayFeatures: displayFeatures.length ? displayFeatures : derivedRows.displayFeatures,
+    unavailableFeatures: unavailableFeatures.length ? unavailableFeatures : derivedRows.unavailableFeatures,
+  };
 }
 
 function calculatePlanPreview(pricing) {
@@ -127,13 +209,21 @@ function mapPlan(plan) {
       discountedPricePaise: pricing.discountedPricePaise,
       gstPercent: pricing.gstPercent,
       taxMode: pricing.taxMode,
+      billingCycle: pricing.billingCycle || "monthly",
       discountAmountPaise: preview.discountAmountPaise,
       discountPercent: preview.discountPercent,
       gstAmountPaise: preview.gstAmountPaise,
       payableAmountPaise: preview.payableAmountPaise,
     },
+    trial: {
+      enabled: Boolean(plan.trial?.enabled),
+      days: Number(plan.trial?.days || 0),
+    },
     buttonText: plan.buttonText || "",
     badgeText: plan.badgeText || (preview.discountAmountPaise > 0 ? `Save ₹${Math.round(preview.discountAmountPaise / 100).toLocaleString("en-IN")}` : ""),
+    badgeType: plan.badgeType || "none",
+    cardColor: plan.cardColor || "blue",
+    icon: plan.icon || "⭐",
     status: plan.status,
     publicVisible: Boolean(plan.publicVisible),
     purchasable: Boolean(plan.purchasable),
@@ -147,9 +237,11 @@ function mapPlan(plan) {
         (plan.limits || {}).maxContactsExport == null
           ? ((plan.limits || {}).maxExportsPerMonth ?? 0)
           : (plan.limits || {}).maxContactsExport,
+      maxAgents: (plan.limits || {}).maxAgents == null ? ((plan.limits || {}).maxEmployees ?? 0) : (plan.limits || {}).maxAgents,
     },
     displayFeatures: Array.isArray(plan.displayFeatures) ? plan.displayFeatures : [],
     unavailableFeatures: Array.isArray(plan.unavailableFeatures) ? plan.unavailableFeatures : [],
+    addonServices: Array.isArray(plan.addonServices) ? plan.addonServices : [],
     review: plan.review || {},
     version: Number(plan.version || 1),
     createdAt: plan.createdAt,
@@ -169,13 +261,18 @@ function mapFreePlan(freeConfig) {
       discountedPricePaise: null,
       gstPercent: 0,
       taxMode: "exclusive",
+      billingCycle: "monthly",
       discountAmountPaise: 0,
       discountPercent: 0,
       gstAmountPaise: 0,
       payableAmountPaise: 0,
     },
+    trial: { enabled: false, days: 0 },
     buttonText: String(freeConfig?.buttonText || "Current Plan"),
     badgeText: "Free",
+    badgeType: "none",
+    cardColor: "green",
+    icon: "A",
     status: PLAN_STATUSES.PUBLISHED,
     publicVisible: true,
     purchasable: false,
@@ -186,6 +283,7 @@ function mapFreePlan(freeConfig) {
     limits: { ...(freeConfig?.limits || {}) },
     displayFeatures: [...FREE_PLAN_DISPLAY_FEATURES],
     unavailableFeatures: [...FREE_PLAN_UNAVAILABLE_FEATURES],
+    addonServices: [],
     review: {},
     version: 1,
     createdAt: null,
@@ -200,12 +298,44 @@ function mapPricePayload(payload) {
   if (!Number.isFinite(gstPercent) || gstPercent < 0 || gstPercent > 100) {
     throw new HttpError(400, "Invalid GST percent");
   }
+  const taxMode = String(payload.taxMode || "exclusive").trim();
+  if (!TAX_MODES.includes(taxMode)) throw new HttpError(400, "Invalid tax mode");
+  const billingCycle = String(payload.billingCycle || "monthly").trim();
+  if (!BILLING_CYCLES.includes(billingCycle)) throw new HttpError(400, "Invalid billing cycle");
+  const originalPricePaise = toPaiseFromRupees(payload.originalPriceRupees);
+  const discountedPricePaise = toPaiseFromRupees(payload.discountedPriceRupees);
+  if (originalPricePaise == null || discountedPricePaise == null) throw new HttpError(400, "Original and discounted price are required");
+  if (discountedPricePaise > originalPricePaise) throw new HttpError(400, "Discounted price cannot be greater than original price");
   return {
     currency: "INR",
-    originalPricePaise: toPaiseFromRupees(payload.originalPriceRupees),
-    discountedPricePaise: toPaiseFromRupees(payload.discountedPriceRupees),
+    originalPricePaise,
+    discountedPricePaise,
     gstPercent,
-    taxMode: "exclusive",
+    taxMode,
+    billingCycle,
+  };
+}
+
+function normalizePlanMeta(payload, fallback = {}) {
+  const status = String(payload.status ?? fallback.status ?? PLAN_STATUSES.IN_REVIEW).trim();
+  if (!Object.values(PLAN_STATUSES).includes(status)) throw new HttpError(400, "Invalid plan status");
+  const badgeType = String(payload.badgeType ?? fallback.badgeType ?? "none").trim();
+  if (!BADGE_TYPES.includes(badgeType)) throw new HttpError(400, "Invalid badge type");
+  const cardColor = String(payload.cardColor ?? fallback.cardColor ?? "blue").trim();
+  if (!CARD_COLORS.includes(cardColor)) throw new HttpError(400, "Invalid card color");
+  const trialEnabled = Boolean(payload.trial?.enabled ?? payload.trialEnabled ?? fallback.trial?.enabled ?? false);
+  const trialDays = Number(payload.trial?.days ?? payload.trialDays ?? fallback.trial?.days ?? 0);
+  if (!Number.isInteger(trialDays) || trialDays < 0 || trialDays > 365) throw new HttpError(400, "Trial days must be between 0 and 365");
+  if (trialEnabled && trialDays < 1) throw new HttpError(400, "Trial days are required when trial is enabled");
+  return {
+    status,
+    publicVisible: payload.publicVisible === undefined ? Boolean(fallback.publicVisible ?? true) : Boolean(payload.publicVisible),
+    purchasable: payload.purchasable === undefined ? Boolean(fallback.purchasable ?? true) : Boolean(payload.purchasable),
+    recommended: payload.recommended === undefined ? Boolean(fallback.recommended ?? false) : Boolean(payload.recommended),
+    badgeType,
+    cardColor,
+    icon: String(payload.icon ?? fallback.icon ?? "⭐").trim().slice(0, 8) || "⭐",
+    trial: { enabled: trialEnabled, days: trialEnabled ? trialDays : 0 },
   };
 }
 
@@ -228,9 +358,7 @@ async function listPlans({ query = {}, includeArchived = false } = {}) {
   }
   if (!includeArchived && !filter.status) filter.status = { $in: [PLAN_STATUSES.IN_REVIEW, PLAN_STATUSES.PUBLISHED, PLAN_STATUSES.DISABLED] };
   const plans = await Plan.find(filter).sort({ sortOrder: 1, createdAt: -1 });
-  const freeConfig = await getFreePlanConfig();
-  const freeItem = mapFreePlan(freeConfig);
-  const items = [freeItem, ...plans.map(mapPlan)];
+  const items = plans.map(mapPlan);
   items.sort((a, b) => {
     const aOrder = Number(a?.sortOrder ?? 999);
     const bOrder = Number(b?.sortOrder ?? 999);
@@ -269,6 +397,54 @@ async function updateFreePlan({ actorId, payload }) {
       payload?.limits?.maxContactsExport === undefined
         ? current.limits.maxContactsExport
         : normalizeLimit(payload?.limits?.maxContactsExport),
+    maxAgents:
+      payload?.limits?.maxAgents === undefined
+        ? current.limits.maxAgents
+        : normalizeLimit(payload?.limits?.maxAgents),
+    maxTags:
+      payload?.limits?.maxTags === undefined
+        ? current.limits.maxTags
+        : normalizeLimit(payload?.limits?.maxTags),
+    maxCustomAttributes:
+      payload?.limits?.maxCustomAttributes === undefined
+        ? current.limits.maxCustomAttributes
+        : normalizeLimit(payload?.limits?.maxCustomAttributes),
+    maxWebhooks:
+      payload?.limits?.maxWebhooks === undefined
+        ? current.limits.maxWebhooks
+        : normalizeLimit(payload?.limits?.maxWebhooks),
+    messageRatePerSec:
+      payload?.limits?.messageRatePerSec === undefined
+        ? current.limits.messageRatePerSec
+        : normalizeLimit(payload?.limits?.messageRatePerSec),
+    maxFlows:
+      payload?.limits?.maxFlows === undefined
+        ? current.limits.maxFlows
+        : normalizeLimit(payload?.limits?.maxFlows),
+    maxTeams:
+      payload?.limits?.maxTeams === undefined
+        ? current.limits.maxTeams
+        : normalizeLimit(payload?.limits?.maxTeams),
+    maxApiKeys:
+      payload?.limits?.maxApiKeys === undefined
+        ? current.limits.maxApiKeys
+        : normalizeLimit(payload?.limits?.maxApiKeys),
+    maxStorageMb:
+      payload?.limits?.maxStorageMb === undefined
+        ? current.limits.maxStorageMb
+        : normalizeLimit(payload?.limits?.maxStorageMb),
+    maxProjects:
+      payload?.limits?.maxProjects === undefined
+        ? current.limits.maxProjects
+        : normalizeLimit(payload?.limits?.maxProjects),
+    maxMediaSizeMb:
+      payload?.limits?.maxMediaSizeMb === undefined
+        ? current.limits.maxMediaSizeMb
+        : normalizeLimit(payload?.limits?.maxMediaSizeMb),
+    dailyMessageLimit:
+      payload?.limits?.dailyMessageLimit === undefined
+        ? current.limits.dailyMessageLimit
+        : normalizeLimit(payload?.limits?.dailyMessageLimit),
   };
 
   await billingSettingsRepository.upsertSingleton({
@@ -286,18 +462,28 @@ async function updateFreePlan({ actorId, payload }) {
 }
 
 async function createPlan({ actorId, payload }) {
-  const slug = sanitizeSlug(payload.slug || payload.name);
-  if (!slug) throw new HttpError(400, "Slug is required");
-  const exists = await planRepository.findBySlug(slug);
-  if (exists) throw new HttpError(409, "Plan slug already exists");
+  const slot = resolvePlanSlot(payload);
+  const slug = slot.slug;
+  const exists = await Plan.findOne({
+    deletedAt: null,
+    $or: [
+      { slug },
+      { slug: `${slug}plan` },
+      { slug: `${slug}-plan` },
+      { name: slot.name },
+      { name: `${slot.name} Plan` },
+    ],
+  });
+  if (exists) throw new HttpError(409, `${slot.name} plan already exists`);
 
-  const derived = deriveFromFeatureRows(payload.featureRows || []);
+  const derived = buildStructuredEntitlements(payload);
   const pricing = mapPricePayload(payload);
   const computed = calculatePlanPreview(pricing);
+  const meta = normalizePlanMeta(payload);
 
   const doc = await Plan.create({
     slug,
-    name: String(payload.name || "").trim(),
+    name: slot.name,
     description: String(payload.description || "").trim(),
     pricing,
     computedPreviewSnapshot: {
@@ -308,16 +494,21 @@ async function createPlan({ actorId, payload }) {
     },
     buttonText: String(payload.buttonText || "").trim(),
     badgeText: String(payload.badgeText || "").trim(),
-    status: PLAN_STATUSES.IN_REVIEW,
-    publicVisible: true,
-    purchasable: true,
-    recommended: Boolean(payload.recommended),
-    sortOrder: parseSortOrder(payload.sortOrder),
+    status: meta.status,
+    publicVisible: meta.publicVisible,
+    purchasable: meta.purchasable,
+    recommended: meta.recommended,
+    trial: meta.trial,
+    badgeType: meta.badgeType,
+    cardColor: meta.cardColor,
+    icon: meta.icon,
+    sortOrder: parseSortOrder(payload.sortOrder ?? slot.sortOrder),
     featureRows: derived.featureRows,
     features: derived.features,
     limits: derived.limits,
     displayFeatures: derived.displayFeatures,
     unavailableFeatures: derived.unavailableFeatures,
+    addonServices: normalizeStringArray(payload.addonServices),
     review: { submittedAt: new Date(), reviewNote: String(payload.reviewNote || "").trim() },
     createdBy: actorId || null,
     updatedBy: actorId || null,
@@ -332,17 +523,21 @@ async function createPlan({ actorId, payload }) {
 async function updatePlan({ actorId, planId, payload }) {
   const plan = await planRepository.findById(planId);
   if (!plan) throw new HttpError(404, "Plan not found");
+  const slot = resolvePlanSlot({ slug: plan.slug, name: plan.name });
 
-  const derived = deriveFromFeatureRows(payload.featureRows || plan.featureRows || []);
+  const derived = buildStructuredEntitlements(payload, plan);
   const pricing = mapPricePayload({
     originalPriceRupees: payload.originalPriceRupees ?? (plan.pricing?.originalPricePaise == null ? null : Number(plan.pricing.originalPricePaise) / 100),
     discountedPriceRupees: payload.discountedPriceRupees ?? (plan.pricing?.discountedPricePaise == null ? null : Number(plan.pricing.discountedPricePaise) / 100),
     gstPercent: payload.gstPercent ?? plan.pricing?.gstPercent ?? 18,
     taxMode: payload.taxMode ?? plan.pricing?.taxMode ?? "exclusive",
+    billingCycle: payload.billingCycle ?? plan.pricing?.billingCycle ?? "monthly",
   });
   const computed = calculatePlanPreview(pricing);
+  const meta = normalizePlanMeta(payload, plan);
 
-  plan.name = String(payload.name || plan.name || "").trim();
+  plan.slug = slot.slug;
+  plan.name = slot.name;
   plan.description = String(payload.description ?? plan.description ?? "").trim();
   plan.pricing = pricing;
   plan.computedPreviewSnapshot = {
@@ -353,17 +548,22 @@ async function updatePlan({ actorId, planId, payload }) {
   };
   plan.buttonText = String(payload.buttonText ?? plan.buttonText ?? "").trim();
   plan.badgeText = String(payload.badgeText ?? "").trim();
-  plan.publicVisible = true;
-  plan.purchasable = true;
-  plan.recommended = payload.recommended === undefined ? plan.recommended : Boolean(payload.recommended);
-  plan.sortOrder = payload.sortOrder === undefined ? plan.sortOrder : parseSortOrder(payload.sortOrder, plan.sortOrder || 1);
+  plan.publicVisible = meta.publicVisible;
+  plan.purchasable = meta.purchasable;
+  plan.recommended = meta.recommended;
+  plan.trial = meta.trial;
+  plan.badgeType = meta.badgeType;
+  plan.cardColor = meta.cardColor;
+  plan.icon = meta.icon;
+  plan.sortOrder = payload.sortOrder === undefined ? (plan.sortOrder || slot.sortOrder) : parseSortOrder(payload.sortOrder, plan.sortOrder || slot.sortOrder);
   plan.featureRows = derived.featureRows;
   plan.features = derived.features;
   plan.limits = derived.limits;
   plan.displayFeatures = derived.displayFeatures;
   plan.unavailableFeatures = derived.unavailableFeatures;
+  plan.addonServices = payload.addonServices === undefined ? (Array.isArray(plan.addonServices) ? plan.addonServices : []) : normalizeStringArray(payload.addonServices);
 
-  plan.status = PLAN_STATUSES.IN_REVIEW;
+  plan.status = meta.status;
 
   plan.updatedBy = actorId || null;
   await plan.save();
@@ -399,9 +599,6 @@ async function publishPlan({ actorId, planId, payload }) {
 }
 
 async function disablePlan({ actorId, planId }) {
-  if (String(planId) === FREE_PLAN_ID) {
-    throw new HttpError(400, "Free plan cannot be disabled.");
-  }
   const plan = await planRepository.findById(planId);
   if (!plan) throw new HttpError(404, "Plan not found");
   plan.status = PLAN_STATUSES.DISABLED;
@@ -410,6 +607,21 @@ async function disablePlan({ actorId, planId }) {
   plan.updatedBy = actorId || null;
   await plan.save();
   return { success: true, message: "Plan disabled.", data: { item: mapPlan(plan) } };
+}
+
+async function deletePlan({ actorId, planId }) {
+  const plan = await planRepository.findById(planId);
+  if (!plan) return { success: true, message: "Plan already deleted.", data: { item: { id: String(planId || ""), deleted: true } } };
+  const originalSlug = plan.slug;
+  plan.deletedAt = new Date();
+  plan.deletedBy = actorId || null;
+  plan.slug = `${String(plan.slug || "plan")}-deleted-${Date.now()}`;
+  plan.publicVisible = false;
+  plan.purchasable = false;
+  plan.recommended = false;
+  plan.updatedBy = actorId || null;
+  await plan.save();
+  return { success: true, message: "Plan deleted.", data: { item: { id: String(plan._id), slug: originalSlug } } };
 }
 
 async function getBillingSettings() {
@@ -443,6 +655,7 @@ module.exports = {
   submitReview,
   publishPlan,
   disablePlan,
+  deletePlan,
   getBillingSettings,
   updateBillingSettings,
   pricePreview,

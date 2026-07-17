@@ -6,6 +6,7 @@ const { CAMPAIGN_STATUSES } = require("@modules/campaigns/constants/campaign.con
 const { emitCampaignEvent, CAMPAIGN_EVENTS } = require("@modules/campaigns/events/campaign.events");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 const { campaignRunsRepository } = require("@modules/campaigns/repositories/index");
+const { waitForCampaignSendSlot } = require("@modules/campaigns/services/campaignRateLimit.service");
 
 function buildStoredSendError(err) {
     const metaError = err?.metaDebug?.meta || err?.metaDebug?.raw?.error || err?.response?.data?.error || {};
@@ -188,6 +189,7 @@ async function sendCampaignMessageJob(job) {
         return { ok: true, skipped: true, reason: "campaign_run_recipient_already_processed" };
     }
     try {
+        await waitForCampaignSendSlot({ workspaceId, wabaId: campaign.wabaId });
         await sendTemplateMessageForUser({
             userId: workspaceId,
             campaignId,

@@ -276,11 +276,37 @@ async function updateTemplate(req) {
   }
 
   const normalized = normalizeTemplate({ ...existing.toObject(), ...req.body });
+  let metaResponse = null;
+  if (existing.metaTemplateId) {
+    try {
+      metaResponse = await submitTemplate({
+        accessToken: connection.accessToken,
+        wabaId: connection.wabaId,
+        template: normalized,
+        metaTemplateId: existing.metaTemplateId,
+        graphApiVersion: connection.graphApiVersion,
+      });
+    } catch (err) {
+      const message = permissionSubmitMessage(err);
+      throw new HttpError(400, message, {
+        message,
+        metaDebug: err.metaDebug || null,
+        tokenDebug: err.tokenDebug || null,
+      });
+    }
+  }
+
   existing.name = normalized.name;
   existing.language = normalized.language;
   existing.languageCode = normalized.language;
   existing.components = normalized.components;
-  return { success: true, template: await existing.save() };
+  if (metaResponse) {
+    existing.status = normalizeRemoteStatus(metaResponse?.status || existing.status);
+    existing.source = "local";
+    existing.syncedAt = new Date();
+    existing.lastSyncedAt = new Date();
+  }
+  return { success: true, template: await existing.save(), ...(metaResponse ? { meta: metaResponse } : {}) };
 }
 
 async function deleteTemplate(req) {

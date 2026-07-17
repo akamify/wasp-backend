@@ -140,7 +140,7 @@ async function findApprovedTemplate({ workspaceId, name, languageCode }) {
     isActive: { $ne: false },
     deletedAt: null,
   })
-    .select("_id")
+    .select("_id components")
     .lean();
 }
 

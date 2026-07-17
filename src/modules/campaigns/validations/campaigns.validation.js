@@ -70,6 +70,9 @@ const scheduleSchema = Joi.object({
             if (value.timeOfDay !== undefined || value.weekdays !== undefined) {
                 return helpers.error("any.custom", { message: "Once schedule only accepts runAt" });
             }
+            if (value.endAt !== undefined || value.maxOccurrences !== undefined) {
+                return helpers.error("any.custom", { message: "End date and max runs are only available for recurring schedules" });
+            }
         }
         if (value.type === "daily") {
             if (!value.timeOfDay) return helpers.error("any.custom", { message: "schedule.timeOfDay is required" });

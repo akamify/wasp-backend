@@ -2,6 +2,7 @@ const { HttpError } = require("@shared/utils/httpError");
 const { sha256Hex } = require("@shared/utils/hash");
 const { encryptString, decryptString } = require("@shared/utils/crypto");
 const { sendEmail } = require("@shared/services/emailService");
+const { Workspace } = require("@infra/database/Workspace");
 const repo = require("@modules/auth/auth.repository");
 const apiKeyRepo = require("@modules/api-keys/repositories/apiKey.repository");
 const { generateApiKeyRaw } = require("@modules/api-keys/utils/generateApiKey");
@@ -14,6 +15,36 @@ const {
   isProdEnv,
   shouldReturnAuthDebugTokens,
 } = require("@modules/auth/auth.utils");
+
+const CHAT_ACCESS_SCOPES = [
+  "contacts:read",
+  "contacts:write",
+  "conversations:read",
+  "messages:read",
+  "messages:send",
+  "webhooks:write",
+];
+
+async function resolveApiKeyPermissions({ workspaceId, user }) {
+  const workspace = await Workspace.findOne({ _id: workspaceId, isActive: true }).select(
+    "allowedApiPermissions features"
+  );
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+
+  const campaignSend =
+    Boolean(user?.allowedApiPermissions?.campaignSend !== false) &&
+    Boolean(workspace?.allowedApiPermissions?.campaignSend !== false);
+  const chatAccess =
+    Boolean(user?.allowedApiPermissions?.chatAccess) &&
+    Boolean(workspace?.allowedApiPermissions?.chatAccess) &&
+    Boolean(workspace?.features?.externalChatApiAccess);
+
+  return {
+    campaignSend,
+    chatAccess,
+    scopes: chatAccess ? CHAT_ACCESS_SCOPES : [],
+  };
+}
 
 async function ensureMetaSetupForWorkspace(workspaceId) {
   const hasValid = await repo.hasValidMetaCredentials(workspaceId);
@@ -123,15 +154,14 @@ async function verifyApiKeyOtp({ workspaceId, userId, purpose, otp }) {
   if (normalizedPurpose === "rotate") {
     const apiKey = generateApiKeyRaw();
     const keyEnc = encryptString(apiKey);
+    const permissions = await resolveApiKeyPermissions({ workspaceId, user });
     user.apiKeys = Array.isArray(user.apiKeys) ? user.apiKeys : [];
     for (const key of user.apiKeys) {
       if (!key.revoked && String(key.workspaceId || "") === scope.workspaceId && String(key.wabaId || "") === scope.wabaId) {
         key.revoked = true;
         key.revokedAt = new Date();
-        key.status = "disabled";
       }
     }
-    const chatAccess = Boolean(user?.allowedApiPermissions?.chatAccess);
     user.apiKeys.push({
       workspaceId: scope.workspaceId,
       wabaId: scope.wabaId,
@@ -139,22 +169,9 @@ async function verifyApiKeyOtp({ workspaceId, userId, purpose, otp }) {
       keyPrefix: apiKey.slice(0, 8),
       keyHash: sha256Hex(apiKey),
       keyEnc,
-      permissions: {
-        campaignSend: user?.allowedApiPermissions?.campaignSend !== false,
-        chatAccess,
-        scopes: chatAccess
-          ? [
-              "contacts:read",
-              "contacts:write",
-              "conversations:read",
-              "messages:read",
-              "messages:send",
-              "webhooks:write",
-            ]
-          : [],
-      },
-      revoked: false,
+      permissions,
       status: "active",
+      revoked: false,
     });
     await user.save();
     return { success: true, message: "API key generated successfully.", apiKey };

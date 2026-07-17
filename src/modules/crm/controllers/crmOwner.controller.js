@@ -10,6 +10,7 @@ const { sendEmail } = require("@shared/services/emailService");
 const { writeAuditLog } = require("@shared/services/auditLog.service");
 const { sha256Hex } = require("@shared/utils/hash");
 const employeeRepo = require("@modules/crm/repositories/employee.repository");
+const { getWorkspaceEntitlements } = require("@modules/workspaces/services/workspaceEntitlement.service");
 
 function randomPassword() {
   return crypto.randomBytes(18).toString("base64url").slice(0, 12);
@@ -33,7 +34,7 @@ const assignmentLockSchema = Joi.object({
 
 const assignmentModeSchema = Joi.object({
   autoAssignEnabled: Joi.boolean().required(),
-  assignmentMode: Joi.string().valid("ROUND ROBIN", "LEAST ACTIVE", "FIXED LIMIT", "MANUAL").required(),
+  assignmentMode: Joi.string().valid("ROUND_ROBIN", "LEAST_ACTIVE", "FIXED_LIMIT", "MANUAL", "ROUND ROBIN", "LEAST ACTIVE", "FIXED LIMIT").required(),
 });
 
 const assignmentScheduleSchema = Joi.object({
@@ -45,8 +46,13 @@ const createEmployeeSchema = Joi.object({
   email: Joi.string().email().required(),
   name: Joi.string().allow("").max(100).optional(),
   role: Joi.string().valid("employee", "team_leader").allow("").optional(),
+  maxActiveLeads: Joi.number().integer().min(0).allow(null).optional(),
   permissions: Joi.object().unknown(true).optional(),
 });
+
+function normalizeAssignmentMode(value) {
+  return String(value || "ROUND_ROBIN").trim().toUpperCase().replace(/\s+/g, "_");
+}
 
 const updateEmployeeStatusSchema = Joi.object({
   status: Joi.string().valid("ACTIVE", "BLOCKED", "DISABLED", "DELETED").required(),
@@ -108,9 +114,13 @@ async function setAssignmentLockMinutes(req, res) {
 async function setAssignmentMode(req, res) {
   const payload = await assignmentModeSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
   const workspace = await requireActiveCrmWorkspaceForOwner({ workspaceId: req.workspace.id, ownerId: req.user.id });
+  const entitlements = await getWorkspaceEntitlements(req.workspace.id);
+  if (payload.autoAssignEnabled && !entitlements.features?.smartAgentRoutingAccess && !entitlements.features?.leadDistributionAccess) {
+    throw new HttpError(403, "Your current plan does not allow smart agent routing");
+  }
   workspace.crmSettings = workspace.crmSettings || {};
   workspace.crmSettings.autoAssignEnabled = Boolean(payload.autoAssignEnabled);
-  workspace.crmSettings.assignmentMode = String(payload.assignmentMode);
+  workspace.crmSettings.assignmentMode = normalizeAssignmentMode(payload.assignmentMode);
   await workspace.save();
 
   await writeAuditLog(req, {
@@ -156,7 +166,7 @@ async function listEmployees(req, res) {
   await requireActiveCrmWorkspaceForOwner({ workspaceId: req.workspace.id, ownerId: req.user.id });
   const items = await Employee.find({ workspaceId: req.workspace.id, status: { $ne: "DELETED" } })
     .sort({ createdAt: -1 })
-    .select("_id email name role status permissions assignedChatsCount lastLoginAt lastActivityAt createdAt");
+    .select("_id email name role status permissions assignedChatsCount maxActiveLeads lastLoginAt lastActivityAt createdAt");
   res.json({
     success: true,
     items: items.map((e) => ({
@@ -167,6 +177,7 @@ async function listEmployees(req, res) {
       status: e.status,
       permissions: e.permissions || {},
       assignedChatsCount: Number(e.assignedChatsCount || 0),
+      maxActiveLeads: e.maxActiveLeads == null ? null : Number(e.maxActiveLeads || 0),
       lastLoginAt: e.lastLoginAt || null,
       lastActivityAt: e.lastActivityAt || null,
       createdAt: e.createdAt,
@@ -178,6 +189,18 @@ async function createEmployee(req, res) {
   const payload = await createEmployeeSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
   const workspace = await requireActiveCrmWorkspaceForOwner({ workspaceId: req.workspace.id, ownerId: req.user.id });
   if (!workspace.crmEnabled) throw new HttpError(403, "CRM is disabled for this workspace");
+  const entitlements = await getWorkspaceEntitlements(req.workspace.id);
+  if (!entitlements.features?.employeeAccess && !entitlements.features?.multiAgentInboxAccess) {
+    throw new HttpError(403, "Your current plan does not allow agent seats");
+  }
+  const maxAgents = entitlements.limits?.maxAgents ?? entitlements.limits?.maxEmployees;
+  const agentLimit = maxAgents == null ? null : Number(maxAgents || 0);
+  if (agentLimit !== null) {
+    const activeAgents = await Employee.countDocuments({ workspaceId: req.workspace.id, status: { $nin: ["DELETED", "DISABLED"] } });
+    if (agentLimit <= 0 || activeAgents >= agentLimit) {
+      throw new HttpError(403, "Agent seat limit reached for your current plan", { limitKey: "maxAgents", limit: agentLimit, currentUsage: activeAgents });
+    }
+  }
 
   const owner = await User.findById(workspace.ownerId).select("email name");
   if (!owner) throw new HttpError(404, "Workspace owner not found");
@@ -219,6 +242,7 @@ async function createEmployee(req, res) {
     passwordHash,
     name: payload.name || "",
     role: payload.role || "employee",
+    maxActiveLeads: payload.maxActiveLeads == null ? null : Number(payload.maxActiveLeads || 0),
     twoFactorEnabled: true,
     permissions: payload.permissions || undefined,
     createdBy: req.user.id,
@@ -285,6 +309,20 @@ async function updateEmployeeStatus(req, res) {
   const employeeId = String(req.params.employeeId || "").trim();
   const employee = await Employee.findOne({ _id: employeeId, workspaceId: req.workspace.id }).select("_id status deletedAt");
   if (!employee) throw new HttpError(404, "Employee not found");
+  if (payload.status === "ACTIVE") {
+    const entitlements = await getWorkspaceEntitlements(req.workspace.id);
+    if (!entitlements.features?.employeeAccess && !entitlements.features?.multiAgentInboxAccess) {
+      throw new HttpError(403, "Your current plan does not allow agent seats");
+    }
+    const maxAgents = entitlements.limits?.maxAgents ?? entitlements.limits?.maxEmployees;
+    const agentLimit = maxAgents == null ? null : Number(maxAgents || 0);
+    if (agentLimit !== null) {
+      const activeAgents = await Employee.countDocuments({ workspaceId: req.workspace.id, _id: { $ne: employee._id }, status: "ACTIVE" });
+      if (agentLimit <= 0 || activeAgents >= agentLimit) {
+        throw new HttpError(403, "Agent seat limit reached for your current plan", { limitKey: "maxAgents", limit: agentLimit, currentUsage: activeAgents });
+      }
+    }
+  }
 
   employee.status = payload.status;
   if (payload.status === "DELETED") employee.deletedAt = new Date();

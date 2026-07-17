@@ -2,11 +2,20 @@ const express = require("express");
 const { asyncHandler } = require("@shared/utils/asyncHandler");
 const { buildMemoryUpload } = require("@shared/utils/multerUpload");
 const { getPublicPage, createSupportTicket, createDocsFeedback, applyCareer, getPublicPlatformBrand } = require("@modules/public/controllers/publicContent.controller");
+const { pixelScript, publicCollect, publicOptions } = require("@modules/conversions/controllers/conversion.controller");
+const { academyHome, academyArticle, academySearch, academyRelated } = require("@modules/public/controllers/publicDocs.controller");
 
 const router = express.Router();
 
 router.get("/pages/:slug", asyncHandler(getPublicPage));
 router.get("/platform-brand", asyncHandler(getPublicPlatformBrand));
+router.get("/academy", asyncHandler(academyHome));
+router.get("/academy/search", asyncHandler(academySearch));
+router.get("/academy/:categorySlug/:articleSlug", asyncHandler(academyArticle));
+router.get("/academy/:categorySlug/:articleSlug/related", asyncHandler(academyRelated));
+router.options("/conversions/collect", publicOptions);
+router.get("/pixel.js", asyncHandler(pixelScript));
+router.post("/conversions/collect", asyncHandler(publicCollect));
 router.post("/docs/feedback", asyncHandler(createDocsFeedback));
 router.post("/support-tickets", asyncHandler(createSupportTicket));
 

@@ -1,4 +1,4 @@
-const { subscriptionRepository, billingRepository } = require("@modules/billing/repositories");
+const { subscriptionRepository, billingRepository, invoiceRepository } = require("@modules/billing/repositories");
 const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 
@@ -6,8 +6,16 @@ function normalizeLimits(raw = {}) {
   return {
     maxContacts: raw.maxContacts ?? 0,
     maxTemplates: raw.maxTemplates ?? 0,
-    maxEmployees: raw.maxEmployees ?? 0,
+    maxEmployees: raw.maxAgents ?? raw.maxEmployees ?? 0,
+    maxAgents: raw.maxAgents ?? raw.maxEmployees ?? 0,
     maxCampaignsPerMonth: raw.maxCampaignsPerMonth ?? 0,
+    maxContactsExport: raw.maxContactsExport ?? raw.maxExportsPerMonth ?? 0,
+    maxTags: raw.maxTags ?? 0,
+    maxCustomAttributes: raw.maxCustomAttributes ?? 0,
+    maxWebhooks: raw.maxWebhooks ?? 0,
+    messageRatePerSec: raw.messageRatePerSec ?? 0,
+    maxFlows: raw.maxFlows ?? 0,
+    maxTeams: raw.maxTeams ?? 0,
   };
 }
 
@@ -22,6 +30,8 @@ function usageMetric(used, limit) {
 async function currentSubscription(req) {
   const planRestrictionsEnabled = isPlanRestrictionsEnabled();
   const active = await subscriptionRepository.findActiveByWorkspace(req.workspace.id);
+  const paymentDue = await subscriptionRepository.findPaymentDueByWorkspace(req.workspace.id);
+  const renewalInvoice = paymentDue?.renewalInvoiceId ? await invoiceRepository.findById(paymentDue.renewalInvoiceId) : null;
   const usageCounts = await billingRepository.countWorkspaceUsage(req.workspace.id);
   if (!active) {
     const freeConfig = await getFreePlanConfig();
@@ -29,8 +39,15 @@ async function currentSubscription(req) {
       maxContacts: freeConfig?.limits?.maxContacts ?? 0,
       maxTemplates: freeConfig?.limits?.maxTemplates ?? 0,
       maxEmployees: 0,
+      maxAgents: freeConfig?.limits?.maxAgents ?? 0,
       maxCampaignsPerMonth: freeConfig?.limits?.maxCampaignsPerMonth ?? 0,
       maxContactsExport: freeConfig?.limits?.maxContactsExport ?? 0,
+      maxTags: freeConfig?.limits?.maxTags ?? 10,
+      maxCustomAttributes: freeConfig?.limits?.maxCustomAttributes ?? 5,
+      maxWebhooks: freeConfig?.limits?.maxWebhooks ?? 0,
+      messageRatePerSec: freeConfig?.limits?.messageRatePerSec ?? 5,
+      maxFlows: freeConfig?.limits?.maxFlows ?? 0,
+      maxTeams: freeConfig?.limits?.maxTeams ?? 0,
     };
     return {
       success: true,
@@ -48,7 +65,7 @@ async function currentSubscription(req) {
       usage: {
         contacts: usageMetric(usageCounts.contactsCount, freeLimits.maxContacts),
         templates: usageMetric(usageCounts.templatesCount, freeLimits.maxTemplates),
-        employees: usageMetric(usageCounts.employeesCount, 0),
+        employees: usageMetric(usageCounts.employeesCount, freeLimits.maxAgents),
         campaigns: usageMetric(usageCounts.campaignsCount, freeLimits.maxCampaignsPerMonth),
       },
     };
@@ -67,10 +84,52 @@ async function currentSubscription(req) {
       currentPeriodStart: active.currentPeriodStart,
       currentPeriodEnd: active.currentPeriodEnd,
       autoRenewEnabled: Boolean(active.autoRenewEnabled),
+      renewalMethod: active.renewalMethod || "",
+      renewalStatus: active.renewalStatus || "",
+      renewalAttempts: Number(active.renewalAttempts || 0),
+      nextRenewalDate: active.nextBillingAt || active.currentPeriodEnd || null,
+      lastRenewalDate: active.lastRenewalAt || null,
+      lastRenewalAttemptAt: active.lastRenewalAttemptAt || null,
+      nextRenewalAttemptAt: active.nextRenewalAttemptAt || null,
+      mandateStatus: active.mandateStatus || "not_setup",
+      paymentMethod: active.paymentMethodSnapshot || null,
       cancelAtPeriodEnd: Boolean(active.cancelAtPeriodEnd),
+      scheduledChange: active.scheduledChange?.planId
+        ? {
+            type: active.scheduledChange.type,
+            planId: String(active.scheduledChange.planId),
+            planSlug: active.scheduledChange.planSlug,
+            planName: active.scheduledChange.planName,
+            effectiveAt: active.scheduledChange.effectiveAt,
+            requestedAt: active.scheduledChange.requestedAt,
+          }
+        : null,
       features: active?.snapshot?.features || {},
       limits: limits,
     },
+    renewal: paymentDue
+      ? {
+          status: "payment_due",
+          gracePeriodEndsAt: active?.gracePeriodEndsAt || paymentDue.gracePeriodEndsAt || null,
+          paymentDueAt: active?.paymentDueAt || paymentDue.paymentDueAt || null,
+          targetPlan: {
+            id: String(paymentDue.planId),
+            slug: paymentDue.planSlug,
+            name: paymentDue.planName,
+          },
+          invoice: renewalInvoice
+            ? {
+                id: String(renewalInvoice._id),
+                invoiceNumber: renewalInvoice.invoiceNumber,
+                status: renewalInvoice.status,
+                paymentStatus: renewalInvoice.paymentStatus,
+                dueDate: renewalInvoice.dueDate,
+                totalPaise: Number(renewalInvoice.amounts?.totalPaise || 0),
+                currency: renewalInvoice.amounts?.currency || "INR",
+              }
+            : null,
+        }
+      : null,
     effective: {
       plan: active.planSlug,
       features: active?.snapshot?.features || {},
@@ -82,7 +141,7 @@ async function currentSubscription(req) {
     usage: {
       contacts: usageMetric(usageCounts.contactsCount, limits.maxContacts),
       templates: usageMetric(usageCounts.templatesCount, limits.maxTemplates),
-      employees: usageMetric(usageCounts.employeesCount, limits.maxEmployees),
+      employees: usageMetric(usageCounts.employeesCount, limits.maxAgents ?? limits.maxEmployees),
       campaigns: usageMetric(usageCounts.campaignsCount, limits.maxCampaignsPerMonth),
     },
   };

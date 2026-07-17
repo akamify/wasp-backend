@@ -35,4 +35,3 @@ function startCleanupWorker() {
 }
 
 module.exports = { startCleanupWorker };
-

@@ -63,6 +63,7 @@ router.post(
       url: Joi.string().required(),
       templateId: Joi.string().optional(),
       messageId: Joi.string().optional(),
+      title: Joi.string().max(120).allow("").optional(),
     })
   ),
   asyncHandler(createLink)

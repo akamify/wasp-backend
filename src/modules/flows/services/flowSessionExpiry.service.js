@@ -7,7 +7,14 @@ const {
 } = require("@modules/flows/constants/flowRuntimeSettings");
 const {
   buildScope,
+  defaultEdge,
+  edgeForHandle,
+  moveSession,
+  writeEvent,
 } = require("@modules/flows/services/flowRuntime.utils");
+const {
+  executeSession,
+} = require("@modules/flows/services/flowRuntime.service");
 const {
   resolveTemplateRuntimeValues,
 } = require("@modules/flows/services/flowMessageNodes.service");
@@ -278,6 +285,67 @@ async function sweepExpiredSessions({
     await flowSessionRepository.findTimedOutActiveSessions({ now, limit });
   let expiredCount = 0;
   for (const candidate of candidates) {
+    const waitingType = String(candidate?.waitingFor?.type || "");
+    if (waitingType === "delay" || waitingType.startsWith("reply:")) {
+      const version = await flowSessionRepository.findFlowVersionById({
+        workspaceId: candidate.workspaceId,
+        flowVersionId: candidate.flowVersionId,
+      });
+      const targetNodeId =
+        waitingType === "delay"
+          ? candidate.waitingFor?.attributeKey
+          : edgeForHandle(version, candidate.waitingFor?.nodeId, "timeout")?.target;
+      if (version && targetNodeId) {
+        const resumed = await moveSession({
+          workspaceId: candidate.workspaceId,
+          session: candidate,
+          nodeId: targetNodeId,
+          updates: {
+            waitingFor: { type: null, attributeKey: null, nodeId: null },
+            expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+          },
+        });
+        await writeEvent({
+          workspaceId: candidate.workspaceId,
+          session: resumed,
+          eventType: waitingType === "delay" ? "delay_resumed" : "wait_for_reply_timeout",
+          nodeId: candidate.waitingFor?.nodeId || candidate.currentNodeId,
+          data: { targetNodeId },
+        });
+        await executeSession({
+          workspaceId: candidate.workspaceId,
+          sessionId: resumed._id,
+          inboundMessage: null,
+          businessInitiated: true,
+        }).catch((error) => {
+          flowLog("[FLOW_DELAY_OR_TIMEOUT_RESUME_FAILED]", {
+            sessionId: String(candidate._id),
+            reason: error?.message || "Unknown error",
+          });
+        });
+        continue;
+      }
+      if (version && waitingType === "delay") {
+        const edge = defaultEdge(version, candidate.waitingFor?.nodeId);
+        if (edge?.target) {
+          const resumed = await moveSession({
+            workspaceId: candidate.workspaceId,
+            session: candidate,
+            nodeId: edge.target,
+            updates: {
+              waitingFor: { type: null, attributeKey: null, nodeId: null },
+            },
+          });
+          await executeSession({
+            workspaceId: candidate.workspaceId,
+            sessionId: resumed._id,
+            inboundMessage: null,
+            businessInitiated: true,
+          }).catch(() => {});
+          continue;
+        }
+      }
+    }
     const expired = await expireActiveSession({
       workspaceId: candidate.workspaceId,
       session: candidate,

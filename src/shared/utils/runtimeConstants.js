@@ -1,7 +1,7 @@
 const { appBrandName } = require("@core/config/env");
 
 function BRAND_NAME_FALLBACK() {
-  return String(appBrandName || "AiWizChat").trim() || "AiWizChat";
+  return String(appBrandName || "Waspakamify").trim() || "Waspakamify";
 }
 
 module.exports = { BRAND_NAME_FALLBACK };

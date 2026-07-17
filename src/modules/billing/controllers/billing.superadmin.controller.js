@@ -26,9 +26,7 @@ async function createPlan(req, res) {
 }
 
 async function updatePlan(req, res) {
-  const out = String(req.params.id) === String(svc.FREE_PLAN_ID)
-    ? await svc.updateFreePlan({ actorId: req.user?.id, payload: req.body || {} })
-    : await svc.updatePlan({ actorId: req.user?.id, planId: req.params.id, payload: req.body || {} });
+  const out = await svc.updatePlan({ actorId: req.user?.id, planId: req.params.id, payload: req.body || {} });
   const item = out?.data?.item || {};
   await log(req, "plan.updated", { planId: item.id, slug: item.slug, status: item.status, actorId: req.user?.id || null });
   res.json(out);
@@ -55,6 +53,13 @@ async function disablePlan(req, res) {
   res.json(out);
 }
 
+async function deletePlan(req, res) {
+  const out = await svc.deletePlan({ actorId: req.user?.id, planId: req.params.id });
+  const item = out?.data?.item || {};
+  await log(req, "plan.deleted", { planId: item.id || req.params.id, slug: item.slug, actorId: req.user?.id || null });
+  res.json(out);
+}
+
 async function getBillingSettings(req, res) {
   res.json(await svc.getBillingSettings());
 }
@@ -77,6 +82,7 @@ module.exports = {
   reviewPlan,
   publishPlan,
   disablePlan,
+  deletePlan,
   getBillingSettings,
   updateBillingSettings,
   pricePreview,

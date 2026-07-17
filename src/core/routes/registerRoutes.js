@@ -46,6 +46,7 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/messages`, require("@core/routes/messageRoutes"));
   app.use(`${basePath}/media`, require("@modules/media/routes/media.routes"));
   app.use(`${basePath}/analytics`, require("@core/routes/analyticsRoutes"));
+  app.use(`${basePath}/conversions`, require("@modules/conversions/routes/conversion.routes"));
   app.use(`${basePath}/reports`, require("@core/routes/reportsRoutes"));
   app.use(`${basePath}/links`, require("@core/routes/linkRoutes"));
   app.use(`${basePath}/conversations`, require("@core/routes/conversationRoutes"));
@@ -54,6 +55,7 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/billing`, require("@modules/billing/routes/billing.routes"));
   app.use(`${basePath}/campaigns`, require("@core/routes/campaignRoutes"));
   app.use(`${basePath}/flows`, require("@modules/flows/routes/flows.routes"));
+  app.use(`${basePath}/ai-agents`, require("@modules/ai-agents/routes/aiAgents.routes"));
   app.use(`${basePath}/preferences`, require("@modules/preferences/routes/preferences.routes"));
   app.use(`${basePath}/wallet`, require("@core/routes/walletRoutes"));
   app.use(`${basePath}/integrations`, require("@core/routes/integrationRoutes"));

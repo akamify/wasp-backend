@@ -1,10 +1,12 @@
 const Joi = require("joi");
 const mongoose = require("mongoose");
 const { DocPage } = require("@infra/database/DocPage");
+const { DocCategory } = require("@infra/database/DocCategory");
 const { DocFeedback } = require("@infra/database/DocFeedback");
 const { DocSetting } = require("@infra/database/DocSetting");
 const { HttpError } = require("@shared/utils/httpError");
 const { uploadBufferToCloudinary } = require("@shared/services/cloudinaryService");
+const { ensureAcademySeedData, slugify: academySlugify } = require("@modules/public/docsAcademy.seed");
 
 const DOC_PREFIX = "docs-";
 const DOC_BRAND_KEY = "brand";
@@ -18,11 +20,21 @@ const docSchema = Joi.object({
   slug: Joi.string().trim().lowercase().pattern(/^[a-z0-9-]+$/).required(),
   description: Joi.string().allow("").max(500).default(""),
   content: Joi.string().allow("").default(""),
+  contentBlocks: Joi.array().items(Joi.object().unknown(true)).default([]),
+  tags: Joi.alternatives().try(Joi.array().items(Joi.string().trim().max(80)), Joi.string().allow("")),
   keywords: Joi.alternatives().try(Joi.array().items(Joi.string().trim().max(80)), Joi.string().allow("")),
+  audience: Joi.alternatives().try(Joi.array().items(Joi.string().trim().max(60)), Joi.string().allow("")),
   category: Joi.string().trim().allow("").default("general"),
   categoryRenameFrom: Joi.string().trim().allow("").default(""),
   order: Joi.number().min(0).default(0),
   status: Joi.string().valid("draft", "published").default("draft"),
+  readingTime: Joi.number().min(0).default(0),
+  hero: Joi.object({
+    title: Joi.string().allow("").default(""),
+    subtitle: Joi.string().allow("").default(""),
+    icon: Joi.string().allow("").default(""),
+    imageUrl: Joi.string().allow("").default(""),
+  }).default(),
   sidebar: Joi.object({
     section: Joi.string().allow("").default(""),
     sectionOrder: Joi.number().default(0),
@@ -34,6 +46,24 @@ const docSchema = Joi.object({
     ogImage: Joi.string().allow("").default(""),
     noIndex: Joi.boolean().default(false),
   }).default(),
+  relatedArticleSlugs: Joi.alternatives().try(Joi.array().items(Joi.string().trim().max(160)), Joi.string().allow("")),
+  videoMeta: Joi.object({
+    url: Joi.string().allow("").default(""),
+    thumbnail: Joi.string().allow("").default(""),
+    duration: Joi.string().allow("").default(""),
+  }).default(),
+  isPopular: Joi.boolean().default(false),
+  isFeatured: Joi.boolean().default(false),
+});
+
+const categorySchema = Joi.object({
+  name: Joi.string().trim().min(2).max(120).required(),
+  slug: Joi.string().trim().lowercase().pattern(/^[a-z0-9-]+$/).allow("").default(""),
+  order: Joi.number().min(0).default(0),
+  icon: Joi.string().trim().allow("").default("BookOpen"),
+  description: Joi.string().trim().allow("").max(500).default(""),
+  audience: Joi.alternatives().try(Joi.array().items(Joi.string().trim().max(60)), Joi.string().allow("")),
+  isPublished: Joi.boolean().default(true),
 });
 
 function normalizeFeedback(doc) {
@@ -41,7 +71,10 @@ function normalizeFeedback(doc) {
     id: String(doc?._id || ""),
     slug: String(doc?.slug || ""),
     docTitle: String(doc?.docTitle || ""),
+    articleId: String(doc?.articleId || ""),
+    userId: String(doc?.userId || ""),
     helpful: !!doc?.helpful,
+    feedback: String(doc?.feedback || ""),
     pagePath: String(doc?.pagePath || ""),
     visitorId: String(doc?.visitorId || ""),
     ipAddress: String(doc?.ipAddress || ""),
@@ -50,6 +83,53 @@ function normalizeFeedback(doc) {
     createdAt: doc?.createdAt || null,
     updatedAt: doc?.updatedAt || null,
   };
+}
+
+function normalizeStringArray(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function estimateReadingTimeFromDoc(doc) {
+  const content = String(doc?.content || "").trim();
+  const blockText = Array.isArray(doc?.contentBlocks)
+    ? doc.contentBlocks
+        .map((block) =>
+          [block?.value, block?.description, block?.caption, ...(Array.isArray(block?.items) ? block.items : [])]
+            .filter(Boolean)
+            .join(" ")
+        )
+        .join(" ")
+    : "";
+  const words = `${content} ${blockText}`
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+  return Math.max(1, Math.ceil(words / 180));
+}
+
+async function ensureDocCategory(payload, updatedByAdminId = "") {
+  const name = normalizeCategoryName(payload?.name);
+  const slug = String(payload?.slug || academySlugify(name)).trim().toLowerCase();
+  return DocCategory.findOneAndUpdate(
+    { slug },
+    {
+      $set: {
+        name,
+        slug,
+        order: Number(payload?.order || 0),
+        icon: String(payload?.icon || "BookOpen").trim() || "BookOpen",
+        description: String(payload?.description || "").trim(),
+        audience: normalizeStringArray(payload?.audience),
+        isPublished: payload?.isPublished !== false,
+        updatedByAdminId: String(updatedByAdminId || ""),
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
 }
 
 function normalizeCategoryName(value) {
@@ -213,7 +293,10 @@ function normalizeDocFromPage(page) {
     slug: String(d.slug || normalizedSlug),
     description: normalizedDescription,
     content: normalizedContent,
+    contentBlocks: Array.isArray(d.contentBlocks) ? d.contentBlocks : [],
+    tags: Array.isArray(d.tags) ? d.tags : [],
     keywords: Array.isArray(keywordsCandidate) ? keywordsCandidate : [],
+    audience: Array.isArray(d.audience) ? d.audience : [],
     category: normalizedCategory,
     order: getDocItemOrder({
       order: objects.find((obj) => typeof obj?.order === "number")?.order,
@@ -222,6 +305,8 @@ function normalizeDocFromPage(page) {
       },
     }),
     status: normalizedStatus,
+    readingTime: Number(d.readingTime || 0),
+    hero: d.hero || null,
     sidebar: {
       section: String(objects.find((obj) => typeof obj?.sidebar?.section === "string")?.sidebar?.section || normalizedCategory || "general"),
       sectionOrder: Number(objects.find((obj) => typeof obj?.sidebar?.sectionOrder === "number")?.sidebar?.sectionOrder || 0),
@@ -233,6 +318,11 @@ function normalizeDocFromPage(page) {
       ogImage: String(seoImageCandidate || ""),
       noIndex: noIndexCandidate,
     },
+    relatedArticleSlugs: Array.isArray(d.relatedArticleSlugs) ? d.relatedArticleSlugs : [],
+    videoMeta: d.videoMeta || null,
+    isPopular: !!d.isPopular,
+    isFeatured: !!d.isFeatured,
+    analytics: d.analytics || { views: 0, lastViewedAt: null, searchHits: 0 },
     createdAt: page.createdAt,
     updatedAt: page.updatedAt,
   };
@@ -278,7 +368,9 @@ function isDocPage(page) {
 }
 
 async function adminDocsList(req, res) {
+  await ensureAcademySeedData();
   const pages = await DocPage.find({}).sort({ updatedAt: -1 });
+  const categories = await DocCategory.find({}).sort({ order: 1, name: 1 }).lean();
   const docs = pages
     .filter(isDocPage)
     .map(normalizeDocFromPage)
@@ -302,10 +394,21 @@ async function adminDocsList(req, res) {
       brandName: String(brand?.data?.brandName || ""),
       brandLogoUrl: String(brand?.data?.brandLogoUrl || ""),
     },
+    categories: categories.map((category) => ({
+      id: String(category._id),
+      name: category.name,
+      slug: category.slug,
+      order: Number(category.order || 0),
+      icon: category.icon,
+      description: category.description,
+      audience: category.audience || [],
+      isPublished: category.isPublished !== false,
+    })),
   });
 }
 
 async function adminDocsGet(req, res) {
+  await ensureAcademySeedData();
   const id = String(req.params.id || "").trim();
   const page = await resolveDocPageByIdentifier(id);
   if (!page) throw new HttpError(404, "Doc not found");
@@ -335,22 +438,45 @@ async function assertAvailableDocSortOrder({ category, itemOrder, excludeId, ren
 }
 
 async function assertAvailableCategorySortOrder({ category, sectionOrder, renameFrom }) {
-  const pages = await DocPage.find({}).select("_id slug title data");
   const normalizedCategory = normalizeCategoryName(category);
-  const allowedCategories = new Set([normalizedCategory]);
-  if (renameFrom) allowedCategories.add(normalizeCategoryName(renameFrom));
   const normalizedSectionOrder = Number(sectionOrder || 0);
-  const conflict = pages
-    .filter(isDocPage)
-    .map((page) => normalizeDocFromPage(page))
-    .find((doc) => !allowedCategories.has(getDocCategory(doc)) && getDocSectionOrder(doc) === normalizedSectionOrder);
+  const normalizedRenameFrom = normalizeCategoryName(renameFrom);
+  const conflict = await DocCategory.findOne({
+    order: normalizedSectionOrder,
+    name: { $nin: [normalizedCategory, normalizedRenameFrom].filter(Boolean) },
+  })
+    .select("name")
+    .lean();
 
   if (conflict) {
-    throw new HttpError(
-      409,
-      `Category sort order ${normalizedSectionOrder} is already used by ${getDocCategory(conflict)}.`
-    );
+    throw new HttpError(409, `Category sort order ${normalizedSectionOrder} is already used by ${conflict.name}.`);
   }
+}
+
+async function resolveDocItemOrder({ category, requestedItemOrder, excludeId, existingDoc }) {
+  const numericRequested = Number(requestedItemOrder);
+  if (Number.isFinite(numericRequested) && numericRequested > 0) return numericRequested;
+
+  if (existingDoc) {
+    const existingCategory = getDocCategory(existingDoc);
+    const existingOrder = getDocItemOrder(existingDoc);
+    if (existingCategory === normalizeCategoryName(category) && Number.isFinite(existingOrder) && existingOrder > 0) {
+      return existingOrder;
+    }
+  }
+
+  const pages = await DocPage.find({}).select("_id slug title data");
+  const normalizedCategory = normalizeCategoryName(category);
+  const maxOrder = pages
+    .filter(isDocPage)
+    .map((page) => ({ page, doc: normalizeDocFromPage(page) }))
+    .filter(({ page, doc }) => {
+      if (excludeId && String(page._id) === String(excludeId)) return false;
+      return getDocCategory(doc) === normalizedCategory;
+    })
+    .reduce((max, { doc }) => Math.max(max, Number(getDocItemOrder(doc) || 0)), 0);
+
+  return maxOrder + 1;
 }
 
 async function assertAvailableCategoryName({ category, renameFrom }) {
@@ -404,6 +530,25 @@ async function syncCategoryIdentity({ fromCategory, toCategory, sectionOrder }) 
   );
 }
 
+async function resolveCategorySectionOrder({ category, requestedSectionOrder }) {
+  const normalizedCategory = normalizeCategoryName(category);
+  const numericRequested = Number(requestedSectionOrder);
+  if (Number.isFinite(numericRequested) && numericRequested > 0) return numericRequested;
+
+  const existingCategory = await DocCategory.findOne({
+    $or: [{ name: normalizedCategory }, { slug: academySlugify(normalizedCategory) }],
+  })
+    .select("order")
+    .lean();
+
+  if (existingCategory && Number.isFinite(Number(existingCategory.order))) {
+    return Number(existingCategory.order);
+  }
+
+  const lastCategory = await DocCategory.findOne({}).sort({ order: -1, name: -1 }).select("order").lean();
+  return Math.max(0, Number(lastCategory?.order || 0) + 1);
+}
+
 async function adminDocsCreate(req, res) {
   const payload = await docSchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
   const docSlug = String(payload.slug || "").trim().toLowerCase();
@@ -413,8 +558,11 @@ async function adminDocsCreate(req, res) {
   const exists = await DocPage.findOne({ slug }).select("_id");
   if (exists) throw new HttpError(409, "Doc slug already exists");
   const category = normalizeCategoryName(payload?.sidebar?.section || payload.category || "general");
-  const sectionOrder = Number(payload?.sidebar?.sectionOrder || 0);
-  const itemOrder = Number(payload?.sidebar?.itemOrder ?? payload.order ?? 0);
+  const sectionOrder = await resolveCategorySectionOrder({ category, requestedSectionOrder: payload?.sidebar?.sectionOrder });
+  const itemOrder = await resolveDocItemOrder({
+    category,
+    requestedItemOrder: payload?.sidebar?.itemOrder ?? payload.order ?? 0,
+  });
   await assertAvailableCategorySortOrder({ category, sectionOrder });
   await assertAvailableDocSortOrder({ category, itemOrder });
 
@@ -422,9 +570,11 @@ async function adminDocsCreate(req, res) {
     ...payload,
     category,
     order: itemOrder,
-    keywords: Array.isArray(payload.keywords)
-      ? payload.keywords
-      : String(payload.keywords || "").split(",").map((x) => String(x).trim()).filter(Boolean),
+    tags: normalizeStringArray(payload.tags),
+    keywords: normalizeStringArray(payload.keywords),
+    audience: normalizeStringArray(payload.audience),
+    relatedArticleSlugs: normalizeStringArray(payload.relatedArticleSlugs),
+    readingTime: Number(payload.readingTime || estimateReadingTimeFromDoc(payload)),
     sidebar: {
       ...(payload.sidebar || {}),
       section: category,
@@ -441,6 +591,18 @@ async function adminDocsCreate(req, res) {
     data,
     updatedByAdminId: String(req.user?.id || ""),
   });
+  await ensureDocCategory(
+    {
+      name: category,
+      slug: academySlugify(category),
+      order: sectionOrder,
+      icon: payload?.hero?.icon || "BookOpen",
+      description: payload?.description || "",
+      audience: payload?.audience || [],
+      isPublished: true,
+    },
+    req.user?.id
+  );
   await syncCategorySectionOrder({ category, sectionOrder });
 
   return res.json({ success: true, doc: normalizeDocFromPage(page) });
@@ -460,10 +622,16 @@ async function adminDocsUpdate(req, res) {
     const conflict = await DocPage.findOne({ slug: nextSlug, _id: { $ne: existing._id } }).select("_id");
     if (conflict) throw new HttpError(409, "Doc slug already exists");
   }
+  const existingDoc = normalizeDocFromPage(existing);
   const category = normalizeCategoryName(payload?.sidebar?.section || payload.category || "general");
   const categoryRenameFrom = String(payload.categoryRenameFrom || "").trim();
-  const sectionOrder = Number(payload?.sidebar?.sectionOrder || 0);
-  const itemOrder = Number(payload?.sidebar?.itemOrder ?? payload.order ?? 0);
+  const sectionOrder = await resolveCategorySectionOrder({ category, requestedSectionOrder: payload?.sidebar?.sectionOrder });
+  const itemOrder = await resolveDocItemOrder({
+    category,
+    requestedItemOrder: payload?.sidebar?.itemOrder ?? payload.order ?? 0,
+    excludeId: existing._id,
+    existingDoc,
+  });
   await assertAvailableCategoryName({ category, renameFrom: categoryRenameFrom });
   await assertAvailableCategorySortOrder({ category, sectionOrder, renameFrom: categoryRenameFrom });
   await assertAvailableDocSortOrder({ category, itemOrder, excludeId: existing._id, renameFrom: categoryRenameFrom });
@@ -474,9 +642,11 @@ async function adminDocsUpdate(req, res) {
     ...payload,
     category,
     order: itemOrder,
-    keywords: Array.isArray(payload.keywords)
-      ? payload.keywords
-      : String(payload.keywords || "").split(",").map((x) => String(x).trim()).filter(Boolean),
+    tags: normalizeStringArray(payload.tags),
+    keywords: normalizeStringArray(payload.keywords),
+    audience: normalizeStringArray(payload.audience),
+    relatedArticleSlugs: normalizeStringArray(payload.relatedArticleSlugs),
+    readingTime: Number(payload.readingTime || estimateReadingTimeFromDoc(payload)),
     sidebar: {
       ...(payload.sidebar || {}),
       section: category,
@@ -488,6 +658,18 @@ async function adminDocsUpdate(req, res) {
   delete existing.data.categoryRenameFrom;
   existing.updatedByAdminId = String(req.user?.id || "");
   await existing.save();
+  await ensureDocCategory(
+    {
+      name: category,
+      slug: academySlugify(category),
+      order: sectionOrder,
+      icon: payload?.hero?.icon || "BookOpen",
+      description: payload?.description || "",
+      audience: payload?.audience || [],
+      isPublished: true,
+    },
+    req.user?.id
+  );
   if (categoryRenameFrom && normalizeCategoryName(categoryRenameFrom) !== category) {
     await syncCategoryIdentity({ fromCategory: categoryRenameFrom, toCategory: category, sectionOrder });
   } else {
@@ -546,13 +728,108 @@ async function adminDocsBrandUploadLogo(req, res) {
     buffer: file.buffer,
     mimeType: file.mimetype,
     originalName: file.originalname,
-    folder: "waspakamify/docs-brand",
+    folder: "aiwizchat/docs-brand",
   });
 
   const logoUrl = String(uploaded?.secure_url || uploaded?.url || "").trim();
   if (!logoUrl) throw new HttpError(500, "Failed to upload logo");
 
   return res.json({ success: true, logoUrl });
+}
+
+async function adminDocsCategories(req, res) {
+  await ensureAcademySeedData();
+  const categories = await DocCategory.find({}).sort({ order: 1, name: 1 }).lean();
+  return res.json({
+    success: true,
+    items: categories.map((category) => ({
+      id: String(category._id),
+      name: category.name,
+      slug: category.slug,
+      order: Number(category.order || 0),
+      icon: category.icon,
+      description: category.description,
+      audience: category.audience || [],
+      isPublished: category.isPublished !== false,
+    })),
+  });
+}
+
+async function adminDocsCategoryCreate(req, res) {
+  const payload = await categorySchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
+  const slug = String(payload.slug || academySlugify(payload.name)).trim().toLowerCase();
+  const existing = await DocCategory.findOne({ slug }).select("_id");
+  if (existing) throw new HttpError(409, "Category slug already exists");
+  await assertAvailableCategorySortOrder({ category: payload.name, sectionOrder: payload.order });
+  const category = await ensureDocCategory({ ...payload, slug }, req.user?.id);
+  return res.status(201).json({ success: true, item: category });
+}
+
+async function adminDocsCategoryUpdate(req, res) {
+  const id = String(req.params.id || "").trim();
+  if (!mongoose.Types.ObjectId.isValid(id)) throw new HttpError(400, "Invalid category id");
+  const payload = await categorySchema.validateAsync(req.body, { abortEarly: false, stripUnknown: true });
+  const current = await DocCategory.findById(id);
+  if (!current) throw new HttpError(404, "Category not found");
+  const oldName = String(current.name || "");
+  const slug = String(payload.slug || academySlugify(payload.name)).trim().toLowerCase();
+  const conflict = await DocCategory.findOne({ slug, _id: { $ne: current._id } }).select("_id");
+  if (conflict) throw new HttpError(409, "Category slug already exists");
+  await assertAvailableCategorySortOrder({ category: payload.name, sectionOrder: payload.order, renameFrom: oldName });
+
+  current.name = normalizeCategoryName(payload.name);
+  current.slug = slug;
+  current.order = Number(payload.order || 0);
+  current.icon = String(payload.icon || "BookOpen").trim() || "BookOpen";
+  current.description = String(payload.description || "").trim();
+  current.audience = normalizeStringArray(payload.audience);
+  current.isPublished = payload.isPublished !== false;
+  current.updatedByAdminId = String(req.user?.id || "");
+  await current.save();
+
+  await DocPage.updateMany(
+    { "data.__type": "doc", $or: [{ "data.category": oldName }, { "data.sidebar.section": oldName }] },
+    {
+      $set: {
+        "data.category": current.name,
+        "data.sidebar.section": current.name,
+        "data.sidebar.sectionOrder": current.order,
+      },
+    }
+  );
+
+  return res.json({ success: true, item: current });
+}
+
+async function adminDocsCategoryDelete(req, res) {
+  const id = String(req.params.id || "").trim();
+  if (!mongoose.Types.ObjectId.isValid(id)) throw new HttpError(400, "Invalid category id");
+  const category = await DocCategory.findById(id);
+  if (!category) throw new HttpError(404, "Category not found");
+  const usage = await DocPage.countDocuments({
+    "data.__type": "doc",
+    "data.status": { $in: ["draft", "published"] },
+    $or: [{ "data.category": category.name }, { "data.sidebar.section": category.name }],
+  });
+  if (usage > 0) throw new HttpError(409, "Category is still used by docs");
+  await DocCategory.deleteOne({ _id: category._id });
+  return res.json({ success: true });
+}
+
+async function adminDocsMediaUpload(req, res) {
+  const file = req.file;
+  if (!file?.buffer) throw new HttpError(400, "Media file is required");
+
+  const uploaded = await uploadBufferToCloudinary({
+    buffer: file.buffer,
+    mimeType: file.mimetype,
+    originalName: file.originalname,
+    folder: "aiwizchat/docs-media",
+  });
+
+  const url = String(uploaded?.secure_url || uploaded?.url || "").trim();
+  if (!url) throw new HttpError(500, "Failed to upload media");
+  return res.json({ success: true, url, mimeType: String(file.mimetype || ""), originalName: String(file.originalname || "") });
 }
 
 async function adminDocsFeedbacks(req, res) {
@@ -589,15 +866,52 @@ async function adminDocsFeedbackGet(req, res) {
   return res.json({ success: true, feedback: normalizeFeedback(feedback) });
 }
 
+async function adminDocsFeedbackSummary(req, res) {
+  const rows = await DocFeedback.aggregate([
+    {
+      $group: {
+        _id: "$slug",
+        total: { $sum: 1 },
+        helpfulYes: { $sum: { $cond: [{ $eq: ["$helpful", true] }, 1, 0] } },
+        helpfulNo: { $sum: { $cond: [{ $eq: ["$helpful", false] }, 1, 0] } },
+      },
+    },
+    { $sort: { total: -1, _id: 1 } },
+    { $limit: 25 },
+  ]);
+  const negativeFeedback = await DocFeedback.find({ helpful: false, feedback: { $ne: "" } })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .lean();
+
+  return res.json({
+    success: true,
+    summary: rows.map((row) => ({
+      slug: String(row._id || ""),
+      total: Number(row.total || 0),
+      helpfulYes: Number(row.helpfulYes || 0),
+      helpfulNo: Number(row.helpfulNo || 0),
+      helpfulPct: row.total ? Number(((row.helpfulYes / row.total) * 100).toFixed(1)) : 0,
+    })),
+    negativeFeedback: negativeFeedback.map(normalizeFeedback),
+  });
+}
+
 module.exports = {
   adminDocsList,
   adminDocsGet,
   adminDocsCreate,
   adminDocsUpdate,
   adminDocsDelete,
+  adminDocsCategories,
+  adminDocsCategoryCreate,
+  adminDocsCategoryUpdate,
+  adminDocsCategoryDelete,
   adminDocsBrandGet,
   adminDocsBrandUpdate,
   adminDocsBrandUploadLogo,
+  adminDocsMediaUpload,
   adminDocsFeedbacks,
   adminDocsFeedbackGet,
+  adminDocsFeedbackSummary,
 };

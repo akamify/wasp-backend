@@ -84,11 +84,89 @@ function draftSpecialNodeIdsChanged(before, after) {
   );
 }
 
+function placeholderIndexes(text) {
+  const indexes = new Set();
+  for (const match of String(text || "").matchAll(/\{\{(\d+)\}\}/g)) {
+    const index = Number(match[1]);
+    if (Number.isFinite(index) && index > 0) indexes.add(index);
+  }
+  return Array.from(indexes).sort((a, b) => a - b);
+}
+
+function requiredTemplateMappingKeys(components = []) {
+  const required = [];
+  for (const rawComponent of components || []) {
+    const component = rawComponent && typeof rawComponent === "object" ? rawComponent : {};
+    const type = String(component.type || "").toLowerCase();
+    if (type === "header") {
+      for (const index of placeholderIndexes(component.text)) {
+        required.push({ type: "header", index, buttonIndex: null });
+      }
+    }
+    if (type === "body") {
+      for (const index of placeholderIndexes(component.text)) {
+        required.push({ type: "body", index, buttonIndex: null });
+      }
+    }
+    if (type === "buttons") {
+      const buttons = Array.isArray(component.buttons) ? component.buttons : [];
+      buttons.forEach((button, buttonIndex) => {
+        for (const index of placeholderIndexes(button?.url)) {
+          required.push({ type: "button", index, buttonIndex });
+        }
+      });
+    }
+  }
+  return required;
+}
+
+function configuredTemplateMappingKeys(config = {}) {
+  const components = Array.isArray(config.templateConfig?.components)
+    ? config.templateConfig.components
+    : Array.isArray(config.components)
+      ? config.components
+      : [];
+  const keys = new Set();
+  for (const component of components) {
+    const type = String(component?.type || "").toLowerCase();
+    const variables = Array.isArray(component?.variables) ? component.variables : [];
+    for (const mapping of variables) {
+      const index = Math.max(1, Number(mapping?.index || 1));
+      const buttonIndex =
+        type === "button" || type === "button_url" || type === "buttons"
+          ? Math.max(0, Number(mapping?.buttonIndex ?? component?.buttonIndex ?? 0))
+          : null;
+      keys.add(`${type === "button_url" || type === "buttons" ? "button" : type}:${index}:${buttonIndex ?? ""}`);
+    }
+  }
+  return keys;
+}
+
+function addTemplateMappingCompletenessErrors({ validation, node, approved }) {
+  const required = requiredTemplateMappingKeys(approved?.components || []);
+  if (!required.length) return;
+  const configured = configuredTemplateMappingKeys(node.config || {});
+  for (const item of required) {
+    const key = `${item.type}:${item.index}:${item.buttonIndex ?? ""}`;
+    if (configured.has(key)) continue;
+    validation.errors.push({
+      code: "TEMPLATE_MAPPING_REQUIRED",
+      message:
+        item.type === "button"
+          ? `Template button ${item.buttonIndex + 1} variable {{${item.index}}} must be mapped`
+          : `Template ${item.type} variable {{${item.index}}} must be mapped`,
+      nodeId: node.id,
+      field: "config.templateConfig.components",
+    });
+  }
+}
+
 async function addApprovedTemplateErrors({ workspaceId, flow, validation }) {
   const templateChecks = (flow?.draft?.nodes || [])
     .filter((node) => node?.type === "template")
     .map((node) => ({
       nodeId: node.id,
+      node,
       templateName: String(node.config?.templateName || "").trim(),
       languageCode: String(node.config?.languageCode || "").trim(),
     }));
@@ -116,6 +194,12 @@ async function addApprovedTemplateErrors({ workspaceId, flow, validation }) {
         field: check.nodeId
           ? "config.templateName"
           : "runtimeSettings.onSessionExpired.templateName",
+      });
+    } else if (check.node) {
+      addTemplateMappingCompletenessErrors({
+        validation,
+        node: check.node,
+        approved,
       });
     }
   }

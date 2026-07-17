@@ -4,7 +4,10 @@ const DocFeedbackSchema = new mongoose.Schema(
   {
     slug: { type: String, required: true, trim: true, index: true },
     docTitle: { type: String, default: "", trim: true },
+    articleId: { type: String, default: "", trim: true, index: true },
+    userId: { type: String, default: "", trim: true, index: true },
     helpful: { type: Boolean, required: true },
+    feedback: { type: String, default: "", trim: true },
     pagePath: { type: String, default: "", trim: true },
     visitorId: { type: String, default: "", trim: true },
     ipAddress: { type: String, default: "", trim: true },
@@ -16,6 +19,7 @@ const DocFeedbackSchema = new mongoose.Schema(
 
 DocFeedbackSchema.index({ slug: 1, createdAt: -1 });
 DocFeedbackSchema.index({ visitorId: 1, slug: 1, createdAt: -1 });
+DocFeedbackSchema.index({ articleId: 1, createdAt: -1 });
 
 const DocFeedback = mongoose.models.DocFeedback || mongoose.model("DocFeedback", DocFeedbackSchema);
 

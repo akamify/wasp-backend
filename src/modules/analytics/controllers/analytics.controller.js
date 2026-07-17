@@ -1,8 +1,11 @@
 const { Message } = require("@infra/database/Message");
 const { ClickLog } = require("@infra/database/ClickLog");
+const { ConversionEvent } = require("@infra/database/ConversionEvent");
 const { Template } = require("@infra/database/Template");
 const { Contact } = require("@infra/database/Contact");
 const { Campaign } = require("@infra/database/Campaign");
+const { Conversation } = require("@infra/database/Conversation");
+const { Employee } = require("@infra/database/Employee");
 const { HttpError } = require("@shared/utils/httpError");
 const { resolveActiveConnection } = require("@shared/services/whatsappConnectionService");
 const mongoose = require("mongoose");
@@ -272,7 +275,7 @@ async function overview(req, res) {
     status: { $in: ["sent", "delivered", "read"] },
   };
 
-  const [messages, sent, delivered, read, failed, clicks] = await Promise.all([
+  const [messages, sent, delivered, read, failed, clicks, clicked, converted, revenueRow, spendRow] = await Promise.all([
     Message.countDocuments(msgBase),
     Message.countDocuments(sentBase),
     Message.countDocuments({
@@ -285,6 +288,16 @@ async function overview(req, res) {
     }),
     Message.countDocuments({ ...msgBase, status: "failed" }),
     ClickLog.countDocuments({ workspaceId }),
+    Message.countDocuments({ ...msgBase, "tracking.clicked": true }),
+    Message.countDocuments({ ...msgBase, "conversion.converted": true }),
+    Message.aggregate([
+      { $match: msgBase },
+      { $group: { _id: null, totalRevenue: { $sum: "$conversion.totalRevenue" } } },
+    ]),
+    Message.aggregate([
+      { $match: msgBase },
+      { $group: { _id: null, totalSpend: { $sum: "$chargeAmount" } } },
+    ]),
   ]);
 
   // Growth: Monthly message sent (this month vs last month)
@@ -331,6 +344,11 @@ async function overview(req, res) {
 
   const deliveryRatePct = clampPct(sent ? (delivered / sent) * 100 : 0);
   const readRatePct = clampPct(sent ? (read / sent) * 100 : 0);
+  const clickRatePct = clampPct(sent ? (clicked / sent) * 100 : 0);
+  const conversionRatePct = clampPct(clicked ? (converted / clicked) * 100 : 0);
+  const revenue = Number(revenueRow?.[0]?.totalRevenue || 0);
+  const spend = Number(spendRow?.[0]?.totalSpend || 0);
+  const roi = spend > 0 ? Number(((revenue - spend) / spend).toFixed(4)) : null;
   const monthlyGrowthPct = pctChange(thisMonthSent, lastMonthSent);
   const contactGrowthPct = pctChange(contactsThisWeek, contactsLastWeek);
   const series = await buildSeries({ workspaceId, wabaId, range });
@@ -338,8 +356,8 @@ async function overview(req, res) {
   res.json({
     success: true,
     range,
-    overview: { messages, sent, delivered, read, failed, clicks },
-    rates: { deliveryRatePct, readRatePct },
+    overview: { messages, sent, delivered, read, failed, clicks, clicked, converted, revenue, spend, roi },
+    rates: { deliveryRatePct, readRatePct, clickRatePct, conversionRatePct },
     growth: {
       monthly: { thisMonth: thisMonthSent, lastMonth: lastMonthSent, pct: monthlyGrowthPct },
       contacts: { thisWeek: contactsThisWeek, lastWeek: contactsLastWeek, pct: contactGrowthPct },
@@ -367,7 +385,7 @@ async function templatePerformance(req, res) {
   );
   if (!template) throw new HttpError(404, "Template not found");
 
-  const [sent, delivered, read, failed, clicks] = await Promise.all([
+  const [sent, delivered, read, failed, clicks, clicked, converted, revenueRow, spendRow] = await Promise.all([
     Message.countDocuments({
       workspaceId,
       wabaId: activeConnection.wabaId,
@@ -391,14 +409,192 @@ async function templatePerformance(req, res) {
     }),
     Message.countDocuments({ workspaceId, wabaId: activeConnection.wabaId, direction: "outbound", templateId, status: "failed" }),
     ClickLog.countDocuments({ workspaceId, templateId }),
+    Message.countDocuments({ workspaceId, wabaId: activeConnection.wabaId, direction: "outbound", templateId, "tracking.clicked": true }),
+    Message.countDocuments({ workspaceId, wabaId: activeConnection.wabaId, direction: "outbound", templateId, "conversion.converted": true }),
+    Message.aggregate([
+      { $match: { workspaceId, wabaId: activeConnection.wabaId, direction: "outbound", templateId } },
+      { $group: { _id: null, totalRevenue: { $sum: "$conversion.totalRevenue" }, totalSpend: { $sum: "$chargeAmount" } } },
+    ]),
+    Message.aggregate([
+      { $match: { workspaceId, wabaId: activeConnection.wabaId, direction: "outbound", templateId } },
+      { $group: { _id: null, totalSpend: { $sum: "$chargeAmount" } } },
+    ]),
   ]);
+
+  const revenue = Number(revenueRow?.[0]?.totalRevenue || 0);
+  const spend = Number(spendRow?.[0]?.totalSpend || 0);
 
   res.json({
     success: true,
     template: { id: template._id, name: template.name, status: template.status },
-    metrics: { sent, delivered, read, failed, clicks },
+    metrics: { sent, delivered, read, failed, clicks, clicked, converted, revenue, spend },
+    rates: {
+      deliveryRatePct: clampPct(sent ? (delivered / sent) * 100 : 0),
+      readRatePct: clampPct(sent ? (read / sent) * 100 : 0),
+      clickRatePct: clampPct(sent ? (clicked / sent) * 100 : 0),
+      conversionRatePct: clampPct(clicked ? (converted / clicked) * 100 : 0),
+    },
+    qualityInsights: {
+      status: template.status,
+      rejectedReason: template.rejectedReason || null,
+      staleReason: template.staleReason || null,
+    },
   });
 }
 
-module.exports = { overview, templatePerformance };
+async function campaignPerformance(req, res) {
+  const campaignId = req.params.id;
+  if (!mongoose.Types.ObjectId.isValid(String(campaignId))) throw new HttpError(400, "Invalid campaign id");
+
+  const workspaceId = req.workspace.id;
+  const activeConnection = await resolveActiveConnection(workspaceId);
+  const campaign = await Campaign.findOne({ _id: campaignId, workspaceId, wabaId: activeConnection?.wabaId || null })
+    .select("_id name status type totals")
+    .lean();
+  if (!campaign) throw new HttpError(404, "Campaign not found");
+
+  const baseMatch = {
+    workspaceId,
+    wabaId: activeConnection?.wabaId || "__no_active_waba__",
+    direction: "outbound",
+    campaignId: campaign._id,
+  };
+  const [sent, delivered, read, failed, clicked, converted, revenueAgg, spendAgg] = await Promise.all([
+    Message.countDocuments({ ...baseMatch, "statusTimestamps.sentAt": { $exists: true } }),
+    Message.countDocuments({ ...baseMatch, "statusTimestamps.deliveredAt": { $exists: true } }),
+    Message.countDocuments({ ...baseMatch, "statusTimestamps.readAt": { $exists: true } }),
+    Message.countDocuments({ ...baseMatch, status: "failed" }),
+    Message.countDocuments({ ...baseMatch, "tracking.clicked": true }),
+    Message.countDocuments({ ...baseMatch, "conversion.converted": true }),
+    Message.aggregate([{ $match: baseMatch }, { $group: { _id: null, totalRevenue: { $sum: "$conversion.totalRevenue" } } }]),
+    Message.aggregate([{ $match: baseMatch }, { $group: { _id: null, totalSpend: { $sum: "$chargeAmount" } } }]),
+  ]);
+
+  const revenue = Number(revenueAgg?.[0]?.totalRevenue || 0);
+  const spend = Number(spendAgg?.[0]?.totalSpend || 0);
+  res.json({
+    success: true,
+    campaign: { id: String(campaign._id), name: campaign.name, status: campaign.status, type: campaign.type },
+    metrics: {
+      sent,
+      delivered,
+      read,
+      failed,
+      clicked,
+      converted,
+      revenue,
+      ctr: clampPct(sent ? (clicked / sent) * 100 : 0),
+      conversionRate: clampPct(clicked ? (converted / clicked) * 100 : 0),
+      roi: spend > 0 ? Number(((revenue - spend) / spend).toFixed(4)) : null,
+      spend,
+    },
+  });
+}
+
+async function customerAnalytics(req, res) {
+  const workspaceId = req.workspace.id;
+  const activeConnection = await resolveActiveConnection(workspaceId);
+  const contact = await Contact.findOne({
+    _id: req.params.id,
+    workspaceId,
+    wabaId: activeConnection?.wabaId || null,
+  }).lean();
+  if (!contact) throw new HttpError(404, "Contact not found");
+
+  const [received, outbound, clicked, conversionAgg, recentEvents] = await Promise.all([
+    Message.countDocuments({ workspaceId, contactId: contact._id, direction: "inbound" }),
+    Message.countDocuments({ workspaceId, contactId: contact._id, direction: "outbound" }),
+    Message.countDocuments({ workspaceId, contactId: contact._id, direction: "outbound", "tracking.clicked": true }),
+    ConversionEvent.aggregate([
+      { $match: { workspaceId: new mongoose.Types.ObjectId(String(workspaceId)), contactId: contact._id } },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: "$value" },
+          purchaseCount: { $sum: { $cond: [{ $eq: ["$eventName", "purchase"] }, 1, 0] } },
+          lastConversionAt: { $max: "$timestamp" },
+        },
+      },
+    ]),
+    ConversionEvent.find({ workspaceId, contactId: contact._id })
+      .sort({ timestamp: -1 })
+      .limit(20)
+      .select("eventName value currency source timestamp metadata")
+      .lean(),
+  ]);
+
+  res.json({
+    success: true,
+    customer: {
+      id: String(contact._id),
+      phone: contact.phone,
+      name: contact.name || "",
+      lastActivity: contact?.engagement?.lastActivityAt || contact.lastInboundAt || contact.lastOutboundAt || null,
+      messagesReceived: received,
+      messagesSent: outbound,
+      clickedCount: Number(contact?.engagement?.clickCount || clicked || 0),
+      purchaseHistory: {
+        purchaseCount: Number(conversionAgg?.[0]?.purchaseCount || 0),
+        totalRevenue: Number(conversionAgg?.[0]?.totalRevenue || 0),
+        lastConversionAt: conversionAgg?.[0]?.lastConversionAt || null,
+      },
+      profile: {
+        interest: Array.isArray(contact?.engagement?.interests) ? contact.engagement.interests : [],
+        engagementScore: Number(contact?.engagement?.engagementScore || 0),
+        behaviour: Array.isArray(contact?.engagement?.behaviour) ? contact.engagement.behaviour : [],
+      },
+      recentEvents,
+    },
+  });
+}
+
+async function agentAnalytics(req, res) {
+  const workspaceId = req.workspace.id;
+  const employees = await Employee.find({ workspaceId, status: "ACTIVE" })
+    .select("_id name email")
+    .lean();
+  const employeeIds = employees.map((employee) => employee._id);
+
+  const [assignedRows, handledRows, conversionRows] = await Promise.all([
+    Conversation.aggregate([
+      { $match: { workspaceId: new mongoose.Types.ObjectId(String(workspaceId)), assignedEmployeeId: { $in: employeeIds } } },
+      { $group: { _id: "$assignedEmployeeId", assignedConversations: { $sum: 1 } } },
+    ]),
+    Message.aggregate([
+      { $match: { workspaceId: new mongoose.Types.ObjectId(String(workspaceId)), lastAssignedEmployeeId: { $in: employeeIds } } },
+      { $group: { _id: "$lastAssignedEmployeeId", handledChats: { $sum: 1 } } },
+    ]),
+    ConversionEvent.aggregate([
+      { $match: { workspaceId: new mongoose.Types.ObjectId(String(workspaceId)), assignedEmployeeId: { $in: employeeIds } } },
+      {
+        $group: {
+          _id: "$assignedEmployeeId",
+          conversionCount: { $sum: 1 },
+          generatedRevenue: { $sum: "$value" },
+        },
+      },
+    ]),
+  ]);
+
+  const assignedMap = new Map(assignedRows.map((row) => [String(row._id), Number(row.assignedConversations || 0)]));
+  const handledMap = new Map(handledRows.map((row) => [String(row._id), Number(row.handledChats || 0)]));
+  const conversionMap = new Map(conversionRows.map((row) => [String(row._id), row]));
+
+  res.json({
+    success: true,
+    agents: employees.map((employee) => {
+      const conversion = conversionMap.get(String(employee._id));
+      return {
+        id: String(employee._id),
+        name: employee.name || employee.email || "Agent",
+        assignedConversations: assignedMap.get(String(employee._id)) || 0,
+        handledChats: handledMap.get(String(employee._id)) || 0,
+        conversionCount: Number(conversion?.conversionCount || 0),
+        generatedRevenue: Number(conversion?.generatedRevenue || 0),
+      };
+    }),
+  });
+}
+
+module.exports = { overview, templatePerformance, campaignPerformance, customerAnalytics, agentAnalytics };
 

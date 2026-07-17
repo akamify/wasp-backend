@@ -4,5 +4,48 @@ async function createIntent(payload) {
   return BillingCheckoutIntent.create(payload);
 }
 
-module.exports = { createIntent };
+async function findByRazorpayOrderId(orderId) {
+  return BillingCheckoutIntent.findOne({ razorpayOrderId: String(orderId || "") });
+}
+
+async function claimProcessingByRazorpayOrderId(orderId) {
+  return BillingCheckoutIntent.findOneAndUpdate(
+    { razorpayOrderId: String(orderId || ""), status: "payment_pending" },
+    { $set: { status: "processing" } },
+    { new: true }
+  );
+}
+
+async function markPaymentPending(id, patch = {}) {
+  return BillingCheckoutIntent.findByIdAndUpdate(
+    id,
+    { $set: { ...patch, status: "payment_pending" } },
+    { new: true }
+  );
+}
+
+async function markPaid(id, patch = {}, options = {}) {
+  return BillingCheckoutIntent.findByIdAndUpdate(
+    id,
+    { $set: { ...patch, status: "paid" } },
+    { new: true, session: options.session }
+  );
+}
+
+async function markFailed(id, patch = {}, options = {}) {
+  return BillingCheckoutIntent.findByIdAndUpdate(
+    id,
+    { $set: { ...patch, status: "failed" } },
+    { new: true, session: options.session }
+  );
+}
+
+module.exports = {
+  createIntent,
+  findByRazorpayOrderId,
+  claimProcessingByRazorpayOrderId,
+  markPaymentPending,
+  markPaid,
+  markFailed,
+};
 

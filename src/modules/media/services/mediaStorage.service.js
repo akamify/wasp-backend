@@ -4,7 +4,7 @@ const { uploadBufferToCloudinary } = require("@shared/services/cloudinaryService
 
 async function uploadMediaObject({ workspaceId, buffer, mimeType, originalName, extension }) {
   const checksum = crypto.createHash("sha256").update(buffer).digest("hex");
-  const folder = `waspakamify/media/${workspaceId}`;
+  const folder = `aiwizchat/media/${workspaceId}`;
   const safeOriginalName =
     path
       .basename(String(originalName || `media${extension || ""}`))

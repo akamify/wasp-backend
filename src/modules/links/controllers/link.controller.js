@@ -1,9 +1,11 @@
 const { trackingBaseUrl } = require("@core/config/env");
 const { ClickLog } = require("@infra/database/ClickLog");
+const { Message } = require("@infra/database/Message");
 const { TrackedLink } = require("@infra/database/TrackedLink");
 const { createTrackingCode, verifyAndDecodeTrackingCode } = require("@shared/utils/tracking");
 const { HttpError } = require("@shared/utils/httpError");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
+const { syncContactEngagement } = require("@modules/analytics/services/customerEngagement.service");
 const axios = require("axios");
 const QRCode = require("qrcode");
 const crypto = require("crypto");
@@ -26,9 +28,81 @@ function assertHttpUrl(url) {
   }
 }
 
+function detectClientPlatform(userAgent) {
+  const ua = String(userAgent || "").toLowerCase();
+  const device = /ipad|tablet/.test(ua)
+    ? "tablet"
+    : /mobile|android|iphone/.test(ua)
+      ? "mobile"
+      : "desktop";
+  let browser = "unknown";
+  if (ua.includes("edg/")) browser = "edge";
+  else if (ua.includes("chrome/")) browser = "chrome";
+  else if (ua.includes("firefox/")) browser = "firefox";
+  else if (ua.includes("safari/") && !ua.includes("chrome/")) browser = "safari";
+  return { device, browser };
+}
+
+function appendTrackingQueryParam(url, trackingToken) {
+  const parsed = new URL(url);
+  if (!parsed.searchParams.get("aiwiz_tid")) {
+    parsed.searchParams.set("aiwiz_tid", trackingToken);
+  }
+  return parsed.toString();
+}
+
+function trackedLinkUrl(link) {
+  if (String(link?.kind || "") === "redirect" && link?.trackingToken) {
+    return `${trackingBaseUrl}/r/${link.trackingToken}`;
+  }
+  return `${trackingBaseUrl}/t/${link.slug}`;
+}
+
 async function createLink(req, res) {
   const url = assertHttpUrl(req.body.url);
   if (!url) throw new HttpError(400, "Invalid url (must be http/https)");
+
+  const messageId = String(req.body.messageId || "").trim();
+  if (messageId) {
+    const message = await Message.findOne({
+      _id: messageId,
+      workspaceId: req.workspace.id,
+    }).select("_id workspaceId campaignId contactId templateId tracking");
+    if (!message) throw new HttpError(404, "Message not found");
+
+    const trackingToken = String(message?.tracking?.trackingToken || "").trim();
+    if (!trackingToken) {
+      throw new HttpError(409, "Message tracking token is missing");
+    }
+
+    await TrackedLink.findOneAndUpdate(
+      { workspaceId: req.workspace.id, trackingToken },
+      {
+        $set: {
+          kind: "redirect",
+          title: String(req.body.title || "").trim(),
+          trackingToken,
+          campaignId: message.campaignId || null,
+          contactId: message.contactId || null,
+          messageId: message._id,
+          templateId: message.templateId || null,
+          originalUrl: url,
+          redirectUrl: url,
+          isDeleted: false,
+        },
+        $setOnInsert: {
+          slug: randomSlug(),
+        },
+      },
+      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
+    );
+
+    return res.json({
+      success: true,
+      trackedUrl: `${trackingBaseUrl}/r/${trackingToken}`,
+      trackingToken,
+    });
+  }
 
   const payload = {
     workspaceId: req.workspace.id,
@@ -91,7 +165,7 @@ async function createWhatsAppTrackedLink(req, res) {
   res.status(201).json({
     success: true,
     link,
-    trackedUrl: `${trackingBaseUrl}/t/${slug}`,
+    trackedUrl: trackedLinkUrl({ ...link.toObject(), slug }),
   });
 }
 
@@ -101,7 +175,7 @@ async function listTrackedLinks(req, res) {
     .lean();
   res.json({
     success: true,
-    links: (links || []).map((l) => ({ ...l, trackedUrl: `${trackingBaseUrl}/t/${l.slug}` })),
+    links: (links || []).map((l) => ({ ...l, trackedUrl: trackedLinkUrl(l) })),
   });
 }
 
@@ -124,7 +198,7 @@ async function updateTrackedLink(req, res) {
   link.redirectUrl = redirectUrl;
   await link.save();
 
-  res.json({ success: true, link, trackedUrl: `${trackingBaseUrl}/t/${link.slug}` });
+  res.json({ success: true, link, trackedUrl: trackedLinkUrl(link) });
 }
 
 async function deleteTrackedLink(req, res) {
@@ -172,7 +246,7 @@ async function getTrackedLinkAnalytics(req, res) {
     { clicks: 0, scans: 0 }
   );
 
-  res.json({ success: true, link: { ...link, trackedUrl: `${trackingBaseUrl}/t/${link.slug}` }, totals, series });
+  res.json({ success: true, link: { ...link, trackedUrl: trackedLinkUrl(link) }, totals, series });
 }
 
 async function qrSvg(req, res) {
@@ -238,6 +312,7 @@ async function redirect(req, res) {
     workspaceId,
     templateId: payload.templateId,
     messageId: payload.messageId,
+    trackingToken: null,
     url,
     ip: req.ip,
     userAgent: req.headers["user-agent"],
@@ -248,9 +323,70 @@ async function redirect(req, res) {
   return res.redirect(302, url);
 }
 
+async function redirectTrackedMessage(req, res) {
+  const trackingToken = String(req.params.trackingToken || "").trim();
+  if (!trackingToken) throw new HttpError(400, "Missing tracking token");
+
+  const link = await TrackedLink.findOne({
+    trackingToken,
+    kind: "redirect",
+    isDeleted: false,
+  }).lean();
+  if (!link) throw new HttpError(404, "Invalid link");
+
+  const message = await Message.findOne({
+    workspaceId: link.workspaceId,
+    _id: link.messageId,
+    "tracking.trackingToken": trackingToken,
+  })
+    .select("_id workspaceId campaignId contactId templateId tracking")
+    .lean();
+  if (!message) throw new HttpError(404, "Tracked message not found");
+
+  const clickedAt = new Date();
+  const { device, browser } = detectClientPlatform(req.headers["user-agent"]);
+
+  await ClickLog.create({
+    workspaceId: link.workspaceId,
+    linkId: link._id,
+    campaignId: link.campaignId || message.campaignId || null,
+    contactId: link.contactId || message.contactId || null,
+    templateId: link.templateId || message.templateId || null,
+    messageId: link.messageId || message._id,
+    trackingToken,
+    url: link.redirectUrl,
+    ip: req.ip,
+    userAgent: req.headers["user-agent"],
+    referer: req.headers.referer || null,
+    source: "link",
+    device,
+    browser,
+    clickedAt,
+  });
+
+  await Message.updateOne(
+    { _id: message._id, workspaceId: link.workspaceId },
+    {
+      $set: {
+        "tracking.clicked": true,
+        "tracking.firstClickedAt": message?.tracking?.firstClickedAt || clickedAt,
+        "tracking.lastClickedAt": clickedAt,
+      },
+      $inc: { "tracking.clickCount": 1 },
+    }
+  );
+
+  if (message?.contactId) {
+    await syncContactEngagement(message.contactId).catch(() => {});
+  }
+
+  return res.redirect(302, appendTrackingQueryParam(link.redirectUrl, trackingToken));
+}
+
 module.exports = {
   createLink,
   redirect,
+  redirectTrackedMessage,
   createWhatsAppTrackedLink,
   listTrackedLinks,
   updateTrackedLink,
