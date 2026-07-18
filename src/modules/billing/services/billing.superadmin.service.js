@@ -22,6 +22,7 @@ const PLAN_SLOTS = Object.freeze([
   { name: "Premium", slug: "premium", sortOrder: 4 },
   { name: "Unlimited", slug: "unlimited", sortOrder: 5 },
 ]);
+const DEFAULT_CURRENCY_SYMBOL = process.env.CURRENCY_SYMBOL || "\u20b9";
 
 function sanitizeSlug(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9-\s]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
@@ -220,7 +221,7 @@ function mapPlan(plan) {
       days: Number(plan.trial?.days || 0),
     },
     buttonText: plan.buttonText || "",
-    badgeText: plan.badgeText || (preview.discountAmountPaise > 0 ? `Save ₹${Math.round(preview.discountAmountPaise / 100).toLocaleString("en-IN")}` : ""),
+    badgeText: plan.badgeText || (preview.discountAmountPaise > 0 ? `Save ${DEFAULT_CURRENCY_SYMBOL}${Math.round(preview.discountAmountPaise / 100).toLocaleString("en-IN")}` : ""),
     badgeType: plan.badgeType || "none",
     cardColor: plan.cardColor || "blue",
     icon: plan.icon || "⭐",
