@@ -11,7 +11,7 @@ const createLiveDemoSchema = Joi.object({
 });
 
 const updateLiveDemoStatusSchema = Joi.object({
-  status: Joi.string().valid("Confirmed", "Completed", "Cancelled").required(),
+  status: Joi.string().valid("Completed").required(),
 });
 
 module.exports = {

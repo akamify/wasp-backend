@@ -1,5 +1,10 @@
 const { LiveDemoEnquiry } = require("@infra/database/LiveDemoEnquiry");
 const { HttpError } = require("@shared/utils/httpError");
+const { sendEmail } = require("@shared/services/emailService");
+const {
+  buildLiveDemoCreatedEmailHtml,
+  buildLiveDemoCompletedEmailHtml,
+} = require("@shared/utils/emailTemplates");
 
 const TIME_ZONE = "Asia/Kolkata";
 const SLOT_START_MINUTES = 9 * 60;
@@ -117,7 +122,15 @@ async function createEnquiry(payload) {
   };
   try {
     const created = await LiveDemoEnquiry.create(doc);
-    return toAdminDto(created);
+    const dto = toAdminDto(created);
+    void sendLiveDemoEmail({
+      enquiry: dto,
+      subject: "Your live demo request has been received",
+      htmlContent: buildLiveDemoCreatedEmailHtml(dto),
+      textContent: `Hi ${dto.name}, your live demo request was received. Platform: ${dto.platform}. Date: ${dto.date}. Time: ${dto.slot}. Status: Pending.`,
+      event: "created",
+    });
+    return dto;
   } catch (err) {
     if (Number(err?.code) === 11000) {
       throw new HttpError(409, "This demo slot is already booked", { code: "LIVE_DEMO_SLOT_BOOKED" });
@@ -178,7 +191,7 @@ async function listAdminEnquiries({ page = 1, limit = 25, q = "", status = "all"
 }
 
 async function updateStatus({ id, status }) {
-  if (!STATUSES.includes(status) || status === "Pending") {
+  if (status !== "Completed") {
     throw new HttpError(400, "Valid status is required", { code: "LIVE_DEMO_STATUS_INVALID" });
   }
   const updated = await LiveDemoEnquiry.findOneAndUpdate(
@@ -187,7 +200,43 @@ async function updateStatus({ id, status }) {
     { returnDocument: "after" }
   );
   if (!updated) throw new HttpError(404, "Live demo enquiry not found", { code: "LIVE_DEMO_NOT_FOUND" });
-  return toAdminDto(updated);
+  const dto = toAdminDto(updated);
+  void sendLiveDemoEmail({
+    enquiry: dto,
+    subject: "Your live demo has been completed",
+    htmlContent: buildLiveDemoCompletedEmailHtml(dto),
+    textContent: `Hi ${dto.name}, your live demo has been marked as completed. Platform: ${dto.platform}. Date: ${dto.date}. Time: ${dto.slot}.`,
+    event: "completed",
+  });
+  return dto;
+}
+
+async function sendLiveDemoEmail({ enquiry, subject, htmlContent, textContent, event }) {
+  if (!enquiry?.email) return;
+  try {
+    const result = await sendEmail({
+      toEmail: enquiry.email,
+      toName: enquiry.name || "",
+      subject,
+      htmlContent,
+      textContent,
+    });
+    if (result?.skipped || result?.failed) {
+      console.warn("[live-demo] email not sent", {
+        event,
+        enquiryId: enquiry.id,
+        skipped: !!result.skipped,
+        failed: !!result.failed,
+        reason: result.reason || result.providerMessage || "unknown",
+      });
+    }
+  } catch (err) {
+    console.warn("[live-demo] email send failed", {
+      event,
+      enquiryId: enquiry.id,
+      message: err?.message || "unknown",
+    });
+  }
 }
 
 module.exports = {

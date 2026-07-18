@@ -69,9 +69,45 @@ function buildCareerApplicationEmailHtml({ applicantName, applyingRole }) {
   });
 }
 
+function buildLiveDemoCreatedEmailHtml({ name, platform, date, slot }) {
+  return wrapSimpleEmail({
+    title: "Live demo request received",
+    preheader: `Your live demo request for ${date} at ${slot} was received`,
+    bodyHtml: `
+      <p style="margin:0 0 10px;color:#334155;">Hi ${escapeHtml(name)},</p>
+      <p style="margin:0 0 14px;color:#334155;">We received your live demo request. Our team will review it and contact you if any coordination is needed.</p>
+      <div style="font-size: 13px; line-height: 1.6; color: #0f172a;">
+        <div><b>Platform:</b> ${escapeHtml(platform)}</div>
+        <div><b>Date:</b> ${escapeHtml(date)}</div>
+        <div><b>Time:</b> ${escapeHtml(slot)}</div>
+        <div><b>Status:</b> Pending</div>
+      </div>
+    `,
+  });
+}
+
+function buildLiveDemoCompletedEmailHtml({ name, platform, date, slot }) {
+  return wrapSimpleEmail({
+    title: "Live demo completed",
+    preheader: `Your live demo for ${date} at ${slot} has been completed`,
+    bodyHtml: `
+      <p style="margin:0 0 10px;color:#334155;">Hi ${escapeHtml(name)},</p>
+      <p style="margin:0 0 14px;color:#334155;">Your live demo has been marked as completed. Thanks for taking the time to connect with us.</p>
+      <div style="font-size: 13px; line-height: 1.6; color: #0f172a;">
+        <div><b>Platform:</b> ${escapeHtml(platform)}</div>
+        <div><b>Date:</b> ${escapeHtml(date)}</div>
+        <div><b>Time:</b> ${escapeHtml(slot)}</div>
+        <div><b>Status:</b> Completed</div>
+      </div>
+    `,
+  });
+}
+
 module.exports = {
   buildTicketCreatedEmailHtml,
   buildTicketResolvedEmailHtml,
   buildCareerApplicationEmailHtml,
+  buildLiveDemoCreatedEmailHtml,
+  buildLiveDemoCompletedEmailHtml,
 };
 
