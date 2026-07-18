@@ -12,6 +12,8 @@ const {
 const { storeBufferToUploads } = require("@shared/utils/fileStorage");
 const { isCloudinaryConfigured, uploadBufferToCloudinary } = require("@shared/services/cloudinaryService");
 const { appBrandName, appBrandLogoUrl } = require("@core/config/env");
+const platformSettingsResolver = require("@modules/platform-settings/services/platformSettingsResolver.service");
+const { PLATFORM_SETTING_KEYS } = require("@modules/platform-settings/constants/platformSettingKeys");
 
 const PLATFORM_BRAND_SLUG = "__platform_brand__";
 
@@ -275,11 +277,20 @@ async function applyCareer(req, res) {
 
 async function getPublicPlatformBrand(req, res) {
   const page = await PublicPage.findOne({ slug: PLATFORM_BRAND_SLUG }).select("data updatedAt");
+  const socialLinks = {
+    twitter: String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.SOCIAL_TWITTER_URL, "") || ""),
+    linkedin: String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.SOCIAL_LINKEDIN_URL, "") || ""),
+    whatsapp: String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.SOCIAL_WHATSAPP_URL, "") || ""),
+    facebook: String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.SOCIAL_FACEBOOK_URL, "") || ""),
+    instagram: String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.SOCIAL_INSTAGRAM_URL, "") || ""),
+    youtube: String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.SOCIAL_YOUTUBE_URL, "") || ""),
+  };
   return res.json({
     success: true,
     settings: {
       brandName: String(page?.data?.brandName || appBrandName || "DigitalWasp"),
       brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
+      socialLinks,
     },
     meta: {
       source: page ? "db" : "env",
