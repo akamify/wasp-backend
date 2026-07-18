@@ -1,4 +1,5 @@
 const { HttpError } = require("@shared/utils/httpError");
+const RUPEE_SYMBOL = "\u20b9";
 
 function isAllowedHost(hostname, allowedHosts) {
   const host = String(hostname || "").toLowerCase();
@@ -46,7 +47,7 @@ function parseHttpsPublicUrl(raw, def) {
 
 function parseCurrencySymbol(raw) {
   const value = String(raw ?? "").trim();
-  if (!value) return "₹";
+  if (!value) return RUPEE_SYMBOL;
   if (value.length > 8) {
     throw new HttpError(400, "Currency symbol must be 8 characters or fewer");
   }

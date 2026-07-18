@@ -14,6 +14,7 @@ const { isCloudinaryConfigured, uploadBufferToCloudinary } = require("@shared/se
 const { appBrandName, appBrandLogoUrl } = require("@core/config/env");
 const platformSettingsResolver = require("@modules/platform-settings/services/platformSettingsResolver.service");
 const { PLATFORM_SETTING_KEYS } = require("@modules/platform-settings/constants/platformSettingKeys");
+const RUPEE_SYMBOL = "\u20b9";
 
 const PLATFORM_BRAND_SLUG = "__platform_brand__";
 
@@ -277,7 +278,7 @@ async function applyCareer(req, res) {
 
 async function getPublicPlatformBrand(req, res) {
   const page = await PublicPage.findOne({ slug: PLATFORM_BRAND_SLUG }).select("data updatedAt");
-  const currencySymbol = String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.CURRENCY_SYMBOL, process.env.CURRENCY_SYMBOL || "₹") || "₹");
+  const currencySymbol = String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.CURRENCY_SYMBOL, process.env.CURRENCY_SYMBOL || RUPEE_SYMBOL) || RUPEE_SYMBOL);
   const socialLinks = {
     twitter: String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.SOCIAL_TWITTER_URL, "") || ""),
     linkedin: String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.SOCIAL_LINKEDIN_URL, "") || ""),

@@ -53,7 +53,7 @@ const PLATFORM_SETTING_DEFS = {
     masked: false,
     runtimeEffect: "LIVE",
     format: "currency_symbol",
-    description: "Currency symbol used in platform UI. Default is ₹.",
+    description: "Currency symbol used in platform UI. Default is rupee.",
   },
   [PLATFORM_SETTING_KEYS.SOCIAL_TWITTER_URL]: {
     category: PLATFORM_SETTING_CATEGORIES.BRAND,
