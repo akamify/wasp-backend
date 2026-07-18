@@ -10,6 +10,8 @@ const { buildTicketResolvedEmailHtml } = require("@shared/utils/emailTemplates")
 const { normalizeSlug } = require("@modules/public/controllers/publicContent.controller");
 const { uploadBufferToCloudinary } = require("@shared/services/cloudinaryService");
 const { appBrandName, appBrandLogoUrl } = require("@core/config/env");
+const platformSettingsResolver = require("@modules/platform-settings/services/platformSettingsResolver.service");
+const { PLATFORM_SETTING_KEYS } = require("@modules/platform-settings/constants/platformSettingKeys");
 const DOC_PREFIX = "docs-";
 const LEGACY_DOC_PATH_PREFIX = "docs/";
 const DOC_BRAND_SLUG = "__docs_brand__";
@@ -294,11 +296,13 @@ async function adminDownloadResume(req, res) {
 
 async function adminGetPlatformBrand(req, res) {
   const page = await PublicPage.findOne({ slug: PLATFORM_BRAND_SLUG }).select("data updatedAt");
+  const currencySymbol = String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.CURRENCY_SYMBOL, process.env.CURRENCY_SYMBOL || "₹") || "₹");
   return res.json({
     success: true,
     settings: {
       brandName: String(page?.data?.brandName || appBrandName || "DigitalWhasp"),
       brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
+      currencySymbol,
     },
     meta: { source: page ? "db" : "env", updatedAt: page?.updatedAt || null },
   });
@@ -333,6 +337,7 @@ async function adminUpdatePlatformBrand(req, res) {
     settings: {
       brandName: String(page?.data?.brandName || appBrandName || "DigitalWhasp"),
       brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
+      currencySymbol: String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.CURRENCY_SYMBOL, process.env.CURRENCY_SYMBOL || "₹") || "₹"),
     },
     meta: { source: "db", updatedAt: page?.updatedAt || null },
   });

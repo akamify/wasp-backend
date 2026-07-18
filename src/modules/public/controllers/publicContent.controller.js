@@ -277,6 +277,7 @@ async function applyCareer(req, res) {
 
 async function getPublicPlatformBrand(req, res) {
   const page = await PublicPage.findOne({ slug: PLATFORM_BRAND_SLUG }).select("data updatedAt");
+  const currencySymbol = String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.CURRENCY_SYMBOL, process.env.CURRENCY_SYMBOL || "₹") || "₹");
   const socialLinks = {
     twitter: String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.SOCIAL_TWITTER_URL, "") || ""),
     linkedin: String(await platformSettingsResolver.getSetting(PLATFORM_SETTING_KEYS.SOCIAL_LINKEDIN_URL, "") || ""),
@@ -290,6 +291,7 @@ async function getPublicPlatformBrand(req, res) {
     settings: {
       brandName: String(page?.data?.brandName || appBrandName || "DigitalWasp"),
       brandLogoUrl: String(page?.data?.brandLogoUrl || appBrandLogoUrl || ""),
+      currencySymbol,
       socialLinks,
     },
     meta: {

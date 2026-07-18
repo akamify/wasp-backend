@@ -3,6 +3,7 @@ const { PLATFORM_SETTING_CATEGORIES } = require("@modules/platform-settings/cons
 const PLATFORM_SETTING_KEYS = {
   APP_BRAND_NAME: "APP_BRAND_NAME",
   APP_BRAND_LOGO_URL: "APP_BRAND_LOGO_URL",
+  CURRENCY_SYMBOL: "CURRENCY_SYMBOL",
   SOCIAL_TWITTER_URL: "SOCIAL_TWITTER_URL",
   SOCIAL_LINKEDIN_URL: "SOCIAL_LINKEDIN_URL",
   SOCIAL_WHATSAPP_URL: "SOCIAL_WHATSAPP_URL",
@@ -46,6 +47,14 @@ const PLATFORM_SETTING_KEYS = {
 const PLATFORM_SETTING_DEFS = {
   [PLATFORM_SETTING_KEYS.APP_BRAND_NAME]: { category: PLATFORM_SETTING_CATEGORIES.BRAND, valueType: "string", masked: false, runtimeEffect: "LIVE" },
   [PLATFORM_SETTING_KEYS.APP_BRAND_LOGO_URL]: { category: PLATFORM_SETTING_CATEGORIES.BRAND, valueType: "string", masked: false, runtimeEffect: "LIVE" },
+  [PLATFORM_SETTING_KEYS.CURRENCY_SYMBOL]: {
+    category: PLATFORM_SETTING_CATEGORIES.BRAND,
+    valueType: "string",
+    masked: false,
+    runtimeEffect: "LIVE",
+    format: "currency_symbol",
+    description: "Currency symbol used in platform UI. Default is ₹.",
+  },
   [PLATFORM_SETTING_KEYS.SOCIAL_TWITTER_URL]: {
     category: PLATFORM_SETTING_CATEGORIES.BRAND,
     valueType: "string",

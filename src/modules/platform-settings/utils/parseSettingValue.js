@@ -44,10 +44,23 @@ function parseHttpsPublicUrl(raw, def) {
   return parsed.toString();
 }
 
+function parseCurrencySymbol(raw) {
+  const value = String(raw ?? "").trim();
+  if (!value) return "₹";
+  if (value.length > 8) {
+    throw new HttpError(400, "Currency symbol must be 8 characters or fewer");
+  }
+  if (/[<>]/.test(value)) {
+    throw new HttpError(400, "Currency symbol contains unsupported characters");
+  }
+  return value;
+}
+
 function parseSettingValue(raw, def) {
   const valueType = String(def?.valueType || "string");
   if (valueType === "string" || valueType === "secret") {
     if (def?.format === "social_url") return parseHttpsPublicUrl(raw, def);
+    if (def?.format === "currency_symbol") return parseCurrencySymbol(raw);
     return String(raw ?? "").trim();
   }
   if (valueType === "number") {
