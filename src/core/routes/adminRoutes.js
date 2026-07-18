@@ -72,6 +72,8 @@ const docsController = require("@modules/admin/controllers/adminDocs.controller"
 const { buildMemoryUpload } = require("@shared/utils/multerUpload");
 const superAdminBillingRoutes = require("@modules/billing/routes/superAdminBilling.routes");
 const { getMetaSecretFingerprint } = require("@modules/meta/controllers/metaAdmin.controller");
+const liveDemoController = require("@modules/live-demo/controllers/liveDemo.controller");
+const { updateLiveDemoStatusSchema } = require("@modules/live-demo/validations/liveDemo.validation");
 
 const router = express.Router();
 const docsBrandUpload = buildMemoryUpload({
@@ -217,6 +219,13 @@ router.post(
 router.get("/career-applications", p("/admin/career-applications"), asyncHandler(adminCareerApplications));
 router.patch("/career-applications/:id", c("careers.edit"), asyncHandler(adminUpdateCareerApplication));
 router.get("/career-applications/:id/resume", p("/admin/career-applications"), asyncHandler(adminDownloadResume));
+router.get("/live-demo-enquiries", p("/admin/live-demo-enquiries"), asyncHandler(liveDemoController.adminList));
+router.patch(
+  "/live-demo-enquiries/:id/status",
+  c("live-demo.edit"),
+  validate(updateLiveDemoStatusSchema),
+  asyncHandler(liveDemoController.adminUpdateStatus)
+);
 
 // CRM (workspace-level toggles + employee management)
 router.get("/crm/workspaces/:workspaceId", p("/admin/workspaces"), asyncHandler(crmAdminController.getWorkspaceCrm));
