@@ -32,7 +32,8 @@ const estimateSchema = Joi.object({
     templateId: Joi.string().required(),
     recipients: Joi.array().items(recipientSchema).min(1).max(50000).optional(),
     audience: Joi.object({
-        mode: Joi.string().valid("manual", "tags", "attributes").default("manual"),
+        mode: Joi.string().valid("manual", "tags", "attributes", "list").default("manual"),
+        listId: Joi.string().trim().optional(),
         tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
         tagMatch: Joi.string().valid("all", "any").default("all"),
         attributeFilters: Joi.array().items(attributeFilterSchema).max(10).optional(),
@@ -95,7 +96,8 @@ const scheduleSchema = Joi.object({
     .optional();
 
 const audienceSchema = Joi.object({
-    mode: Joi.string().valid("manual", "tags", "attributes").default("manual"),
+    mode: Joi.string().valid("manual", "tags", "attributes", "list").default("manual"),
+    listId: Joi.string().trim().optional(),
     tags: Joi.array().items(Joi.string().trim().max(40)).max(25).optional(),
     tagMatch: Joi.string().valid("all", "any").default("all"),
     attributeFilters: Joi.array().items(attributeFilterSchema).max(10).optional(),

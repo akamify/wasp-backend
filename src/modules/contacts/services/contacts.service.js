@@ -11,6 +11,7 @@ const {
   normalizeAttributesMap,
   removeAttributeKeys,
 } = require("@modules/contacts/utils/attributes.utils");
+const { previewContacts } = require("@modules/audiences/services/filterEngine.service");
 
 function parseListPaging(req) {
   const page = Math.max(Number(req.query.page || 1), 1);
@@ -374,6 +375,38 @@ async function exportContactsCsv(req) {
   };
 }
 
+async function filterPreview(req) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const preview = await previewContacts({
+    workspaceId: req.workspace.id,
+    wabaId: scope.wabaId,
+    filterTree: req.body?.filterTree,
+    page: req.body?.page || req.query.page,
+    limit: req.body?.limit || req.query.limit,
+  });
+  return { success: true, ...preview };
+}
+
+async function exportContacts(req) {
+  if (Array.isArray(req.body?.contactIds) && req.body.contactIds.length) {
+    return exportContactsCsv(req);
+  }
+  if (!req.body?.filterTree) {
+    throw new HttpError(400, "Provide contactIds or filterTree to export contacts");
+  }
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const preview = await previewContacts({
+    workspaceId: req.workspace.id,
+    wabaId: scope.wabaId,
+    filterTree: req.body.filterTree,
+    page: 1,
+    limit: 100,
+  });
+  if (!preview.total) throw new HttpError(404, "No contacts found for selected filters");
+  req.body.contactIds = preview.contacts.map((contact) => String(contact._id));
+  return exportContactsCsv(req);
+}
+
 module.exports = {
   listContacts,
   listContactTags,
@@ -384,6 +417,8 @@ module.exports = {
   updateContact,
   deleteContact,
   exportContactsCsv,
+  filterPreview,
+  exportContacts,
 };
 
 

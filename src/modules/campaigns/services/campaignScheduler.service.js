@@ -11,6 +11,9 @@ const {
     campaignRunsRepository,
     contactsRepository,
 } = require("@modules/campaigns/repositories/index");
+const { contactListsRepository } = require("@modules/contacts/repositories");
+const { audiencesRepository } = require("@modules/audiences/repositories");
+const { previewContacts } = require("@modules/audiences/services/filterEngine.service");
 const { getNextRunAt } = require("@modules/campaigns/utils/schedule");
 const {
     enqueueCampaignRecipients,
@@ -86,6 +89,42 @@ async function resolveCampaignRecipients(campaign) {
             wabaId: campaign.wabaId,
             filters,
         });
+    } else if (audience.mode === CAMPAIGN_AUDIENCE_MODES.LIST) {
+        const storedAudience = audience.listId
+            ? await audiencesRepository.getAudienceLean({
+                id: audience.listId,
+                workspaceId: campaign.workspaceId,
+                wabaId: campaign.wabaId,
+            })
+            : null;
+        if (storedAudience?.type === "dynamic") {
+            const preview = await previewContacts({
+                workspaceId: campaign.workspaceId,
+                wabaId: campaign.wabaId,
+                filterTree: storedAudience.filterTree,
+                page: 1,
+                limit: 100,
+            });
+            contacts = preview.contacts || [];
+        } else if (storedAudience) {
+            contacts = await contactsRepository.findContactsByIds({
+                workspaceId: campaign.workspaceId,
+                wabaId: campaign.wabaId,
+                contactIds: storedAudience.contactIds || [],
+            });
+        } else {
+            const list = await contactListsRepository.getContactListLean({
+                id: audience.listId,
+                workspaceId: campaign.workspaceId,
+                wabaId: campaign.wabaId,
+            });
+            if (!list) return [];
+            contacts = await contactsRepository.findContactsByIds({
+                workspaceId: campaign.workspaceId,
+                wabaId: campaign.wabaId,
+                contactIds: list.contactIds || [],
+            });
+        }
     }
 
     const mappings = {

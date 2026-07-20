@@ -91,6 +91,44 @@ const contactAttributesSchema = Joi.object({
   attributes: Joi.object().max(50).required(),
 });
 
+const contactListSchema = Joi.object({
+  name: Joi.string().trim().min(2).max(120).required(),
+  description: Joi.string().trim().allow("").max(500).optional(),
+  contactIds: Joi.array().items(Joi.string().trim().min(1)).min(1).max(5000).required(),
+});
+
+const updateContactListSchema = Joi.object({
+  name: Joi.string().trim().min(2).max(120).optional(),
+  description: Joi.string().trim().allow("").max(500).optional(),
+  contactIds: Joi.array().items(Joi.string().trim().min(1)).min(1).max(5000).optional(),
+}).min(1);
+
+const filterConditionSchema = Joi.object({
+  kind: Joi.string().valid("condition").default("condition"),
+  field: Joi.string().trim().min(1).max(120).required(),
+  fieldType: Joi.string().trim().valid("text", "number", "date", "boolean", "multi_select").optional(),
+  operator: Joi.string().trim().min(1).max(40).required(),
+  value: Joi.any().optional(),
+  secondaryValue: Joi.any().optional(),
+});
+
+const filterTreeSchema = Joi.object({
+  kind: Joi.string().valid("group").default("group"),
+  operator: Joi.string().valid("and", "or").default("and"),
+  conditions: Joi.array().items(Joi.object().unknown(true)).max(100).default([]),
+});
+
+const filterPreviewSchema = Joi.object({
+  filterTree: filterTreeSchema.required(),
+  page: Joi.number().integer().min(1).max(100000).optional(),
+  limit: Joi.number().integer().min(1).max(100).optional(),
+});
+
+const exportContactsSchema = Joi.object({
+  contactIds: Joi.array().items(Joi.string().trim().min(1)).max(5000).optional(),
+  filterTree: filterTreeSchema.optional(),
+});
+
 module.exports = {
   contactSchema,
   updateContactSchema,
@@ -99,5 +137,9 @@ module.exports = {
   attributeDefinitionCreateSchema,
   attributeDefinitionUpdateSchema,
   contactAttributesSchema,
+  contactListSchema,
+  updateContactListSchema,
+  filterPreviewSchema,
+  exportContactsSchema,
 };
 
