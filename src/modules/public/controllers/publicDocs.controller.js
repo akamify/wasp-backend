@@ -124,6 +124,51 @@ function scoreMatch(article, query) {
   return score;
 }
 
+function slugHeading(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function headingItemsFromDocData(data) {
+  const blocks = contentBlocks(data);
+  const blockHeadings = blocks.flatMap((block) => {
+    if (block?.type === "heading" && Number(block?.level || 2) >= 2) {
+      const title = String(block?.value || "").trim();
+      return title ? [{ id: slugHeading(title), title, level: Number(block?.level || 2) }] : [];
+    }
+
+    if (block?.type === "text") {
+      return String(block?.value || "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => /^##\s+|^###\s+/.test(line))
+        .map((line) => {
+          const level = line.startsWith("###") ? 3 : 2;
+          const title = line.replace(/^#{2,3}\s+/, "").trim();
+          return title ? { id: slugHeading(title), title, level } : null;
+        })
+        .filter(Boolean);
+    }
+
+    return [];
+  });
+
+  if (blockHeadings.length) return blockHeadings;
+
+  return plainContent(data)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^##\s+|^###\s+/.test(line))
+    .map((line) => {
+      const level = line.startsWith("###") ? 3 : 2;
+      const title = line.replace(/^#{2,3}\s+/, "").trim();
+      return title ? { id: slugHeading(title), title, level } : null;
+    })
+    .filter(Boolean);
+}
+
 async function getPublishedDocsAndCategories() {
   await ensureAcademySeedData();
   const [categories, pages] = await Promise.all([
@@ -133,6 +178,34 @@ async function getPublishedDocsAndCategories() {
   const categoryMap = new Map(categories.map((category) => [category.slug, category]));
   const docs = pages.map((page) => normalizeDoc(page, categoryMap));
   return { categories, docs, categoryMap };
+}
+
+async function docsLinkIndex(req, res) {
+  const pages = await DocPage.find({ "data.__type": "doc", "data.status": "published" })
+    .select("slug title data updatedAt")
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  const docs = pages.map((page) => {
+    const data = page?.data || {};
+    return {
+      slug: String(data?.slug || page?.slug || ""),
+      title: String(data?.title || page?.title || ""),
+      description: String(data?.description || ""),
+      category: String(data?.category || data?.sidebar?.section || ""),
+      sections: headingItemsFromDocData(data).map((item) => ({
+        id: item.id,
+        title: item.title,
+        level: item.level,
+      })),
+      updatedAt: page?.updatedAt || null,
+    };
+  }).filter((doc) => doc.slug && doc.title);
+
+  return res.json({
+    success: true,
+    docs,
+  });
 }
 
 async function buildFeedbackSummary(slug) {
@@ -288,4 +361,5 @@ module.exports = {
   academyArticle,
   academySearch,
   academyRelated,
+  docsLinkIndex,
 };
