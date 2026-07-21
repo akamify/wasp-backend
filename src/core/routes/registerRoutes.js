@@ -64,6 +64,7 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/integrations/whatsapp`, require("@core/routes/whatsappIntegrationRoutes"));
   app.use(`${basePath}/realtime`, require("@core/routes/realtimeRoutes"));
   app.use(`${basePath}/external/chat`, require("@modules/external-chat/routes/externalChat.routes"));
+  app.use(`${basePath}/ecommerce`, require("@modules/ecommerce/routes/ecommerce.routes"));
   app.use(`${basePath}/crm`, require("@core/routes/crmRoutes"));
   app.use(`${basePath}`, require("@core/routes/automationRoutes"));
 }

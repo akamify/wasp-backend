@@ -30,6 +30,11 @@ function isMetaWebhookPath(pathname) {
   ].includes(normalized);
 }
 
+function isEcommerceWebhookPath(pathname) {
+  const normalized = String(pathname || "").split("?")[0];
+  return /^\/(?:api\/)?ecommerce\/webhooks\/woocommerce\/[^/]+$/.test(normalized);
+}
+
 // If you're behind a reverse proxy (Render, Heroku, Nginx), this helps IP-based rate limits/logging.
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
@@ -48,6 +53,11 @@ app.use(
     "/api/webhook",
   ],
   express.raw({ type: "application/json", limit: "10mb" }),
+);
+
+app.use(
+  ["/ecommerce/webhooks/woocommerce", "/api/ecommerce/webhooks/woocommerce"],
+  express.raw({ type: "application/json", limit: "1mb" }),
 );
 
 const isProd =
@@ -73,14 +83,14 @@ if (!startupMetaAppSecret || startupMetaAppSecret.length < 12) {
 const jsonParser = express.json({
   limit: "10mb",
   verify: (req, res, buf) => {
-    if (!isMetaWebhookPath(req.originalUrl || req.url)) return;
+    if (!isMetaWebhookPath(req.originalUrl || req.url) && !isEcommerceWebhookPath(req.originalUrl || req.url)) return;
     if (!buf || !buf.length) return;
     req.rawBody = Buffer.from(buf);
   },
 });
 
 app.use((req, res, next) => {
-  if (isMetaWebhookPath(req.originalUrl || req.url)) return next();
+  if (isMetaWebhookPath(req.originalUrl || req.url) || isEcommerceWebhookPath(req.originalUrl || req.url)) return next();
   return jsonParser(req, res, next);
 });
 

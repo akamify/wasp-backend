@@ -27,6 +27,12 @@ const externalChatUploadWindowMs = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT
 const externalChatUploadLimit = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT_UPLOAD_MAX, isProd ? 10 : 100);
 const externalChatTokenWindowMs = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT_TOKEN_WINDOW_MS, 60 * 60 * 1000);
 const externalChatTokenLimit = toNumber(process.env.RATE_LIMIT_EXTERNAL_CHAT_TOKEN_MAX, isProd ? 12 : 120);
+const ecommerceReadWindowMs = toNumber(process.env.RATE_LIMIT_ECOMMERCE_READ_WINDOW_MS, 60 * 1000);
+const ecommerceReadLimit = toNumber(process.env.RATE_LIMIT_ECOMMERCE_READ_MAX, isProd ? 120 : 1200);
+const ecommerceConnectWindowMs = toNumber(process.env.RATE_LIMIT_ECOMMERCE_CONNECT_WINDOW_MS, 15 * 60 * 1000);
+const ecommerceConnectLimit = toNumber(process.env.RATE_LIMIT_ECOMMERCE_CONNECT_MAX, isProd ? 10 : 100);
+const ecommerceWebhookWindowMs = toNumber(process.env.RATE_LIMIT_ECOMMERCE_WEBHOOK_WINDOW_MS, 60 * 1000);
+const ecommerceWebhookLimit = toNumber(process.env.RATE_LIMIT_ECOMMERCE_WEBHOOK_MAX, isProd ? 300 : 3000);
 
 function authKeyFromHeader(header = "") {
   const token = String(header || "").trim();
@@ -134,6 +140,9 @@ const externalChatRead = externalChatLimiter(externalChatReadWindowMs, externalC
 const externalChatSend = externalChatLimiter(externalChatSendWindowMs, externalChatSendLimit);
 const externalChatUpload = externalChatLimiter(externalChatUploadWindowMs, externalChatUploadLimit);
 const externalChatRealtimeToken = externalChatLimiter(externalChatTokenWindowMs, externalChatTokenLimit);
+const ecommerceRead = externalChatLimiter(ecommerceReadWindowMs, ecommerceReadLimit);
+const ecommerceConnect = externalChatLimiter(ecommerceConnectWindowMs, ecommerceConnectLimit);
+const ecommerceWebhook = externalChatLimiter(ecommerceWebhookWindowMs, ecommerceWebhookLimit);
 
 module.exports = {
   general,
@@ -146,4 +155,7 @@ module.exports = {
   externalChatSend,
   externalChatUpload,
   externalChatRealtimeToken,
+  ecommerceRead,
+  ecommerceConnect,
+  ecommerceWebhook,
 };

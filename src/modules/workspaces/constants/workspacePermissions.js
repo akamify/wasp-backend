@@ -27,6 +27,8 @@ const WORKSPACE_PERMISSIONS = [
   "automation.update",
   "automation.manage",
   "analytics.view",
+  "ecommerce.view",
+  "ecommerce.manage",
   "settings.view",
   "settings.update",
 ];
@@ -55,10 +57,12 @@ const ROLE_PERMISSIONS = {
     "automation.update",
     "automation.manage",
     "analytics.view",
+    "ecommerce.view",
+    "ecommerce.manage",
     "settings.view",
   ],
   agent: ["workspace.view", "templates.view", "inbox.view", "inbox.reply", "contacts.view", "contacts.create", "contacts.update"],
-  viewer: ["workspace.view", "templates.view", "inbox.view", "contacts.view", "campaigns.view", "automation.view", "analytics.view"],
+  viewer: ["workspace.view", "templates.view", "inbox.view", "contacts.view", "campaigns.view", "automation.view", "analytics.view", "ecommerce.view"],
 };
 
 module.exports = { ROLE_PERMISSIONS, WORKSPACE_PERMISSIONS };
