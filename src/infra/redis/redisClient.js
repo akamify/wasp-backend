@@ -12,7 +12,7 @@ function isRedisQuotaExceededError(err) {
     const msg = String(err?.message || err || "").toLowerCase();
     return msg.includes("max requests limit exceeded");
 }
-
+ 
 function logRedisErrorOnce(err) {
     const code = err?.code || "";
     const msg = err?.message || String(err || "");
