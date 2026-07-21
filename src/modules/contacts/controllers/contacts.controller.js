@@ -40,6 +40,17 @@ async function exportContactsCsv(req, res) {
   res.status(200).send(body.csv);
 }
 
+async function filterPreview(req, res) {
+  res.json(await contactsService.filterPreview(req));
+}
+
+async function exportContacts(req, res) {
+  const body = await contactsService.exportContacts(req);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${body.filename}"`);
+  res.status(200).send(body.csv);
+}
+
 module.exports = {
   listContacts,
   listContactTags,
@@ -50,5 +61,7 @@ module.exports = {
   updateContact,
   deleteContact,
   exportContactsCsv,
+  filterPreview,
+  exportContacts,
 };
 

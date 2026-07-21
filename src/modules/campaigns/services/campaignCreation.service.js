@@ -20,6 +20,9 @@ const { validateBeforeSend } = require("@shared/utils/templateStructure");
 const { buildAttributeAudienceClauses } = require("@modules/campaigns/utils/attributeAudience");
 const { resolveRecipientRuntime } = require("@modules/campaigns/utils/templateVariableResolver");
 const { contactAttributesRepository } = require("@modules/contacts/repositories");
+const { contactListsRepository } = require("@modules/contacts/repositories");
+const { audiencesRepository } = require("@modules/audiences/repositories");
+const { previewContacts } = require("@modules/audiences/services/filterEngine.service");
 
 function buildStoredSendError(err) {
     const metaError = err?.metaDebug?.meta || err?.metaDebug?.raw?.error || err?.response?.data?.error || {};
@@ -44,7 +47,9 @@ function normalizeAudience(input) {
     const mode = String(input?.mode || CAMPAIGN_AUDIENCE_MODES.MANUAL).toLowerCase();
     const tags = Array.from(new Set((input?.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)));
     return {
-        mode: [CAMPAIGN_AUDIENCE_MODES.TAGS, CAMPAIGN_AUDIENCE_MODES.ATTRIBUTES].includes(mode) ? mode : CAMPAIGN_AUDIENCE_MODES.MANUAL,
+        mode: [CAMPAIGN_AUDIENCE_MODES.TAGS, CAMPAIGN_AUDIENCE_MODES.ATTRIBUTES, CAMPAIGN_AUDIENCE_MODES.LIST, CAMPAIGN_AUDIENCE_MODES.AUDIENCE].includes(mode) ? mode : CAMPAIGN_AUDIENCE_MODES.MANUAL,
+        listId: input?.listId || null,
+        audienceId: input?.audienceId || input?.listId || null,
         tags,
         tagMatch: String(input?.tagMatch || "all").toLowerCase() === "any" ? "any" : "all",
         attributeFilters: Array.isArray(input?.attributeFilters) ? input.attributeFilters : [],
@@ -73,6 +78,25 @@ async function resolveTagRecipients({ workspaceId, wabaId, audience }) {
 async function resolveAttributeRecipients({ workspaceId, wabaId, audience }) {
     const filters = await buildAttributeAudienceClauses({ workspaceId, filters: audience.attributeFilters });
     const contacts = await contactsRepository.findContactsByAttributeFilters({ workspaceId, wabaId, filters });
+    return (contacts || []).map((contact) => ({ contact, recipient: buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime) }));
+}
+
+async function resolveListRecipients({ workspaceId, wabaId, audience }) {
+    const audienceId = audience.audienceId || audience.listId;
+    const storedAudience = audienceId
+        ? await audiencesRepository.getAudienceLean({ id: audienceId, workspaceId, wabaId })
+        : null;
+    if (storedAudience) {
+        if (storedAudience.type === "dynamic") {
+            const preview = await previewContacts({ workspaceId, wabaId, filterTree: storedAudience.filterTree, page: 1, limit: 100 });
+            return (preview.contacts || []).map((contact) => ({ contact, recipient: buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime) }));
+        }
+        const contacts = await contactsRepository.findContactsByIds({ workspaceId, wabaId, contactIds: storedAudience.contactIds || [] });
+        return (contacts || []).map((contact) => ({ contact, recipient: buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime) }));
+    }
+    const list = await contactListsRepository.getContactListLean({ id: audienceId, workspaceId, wabaId });
+    if (!list) throw new HttpError(404, "Saved audience not found");
+    const contacts = await contactsRepository.findContactsByIds({ workspaceId, wabaId, contactIds: list.contactIds || [] });
     return (contacts || []).map((contact) => ({ contact, recipient: buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime) }));
 }
 
@@ -132,11 +156,16 @@ async function createCampaign(req) {
     if (audience.mode === CAMPAIGN_AUDIENCE_MODES.ATTRIBUTES && !audience.attributeFilters.length) {
         throw new HttpError(400, "Select at least one attribute filter");
     }
+    if ((audience.mode === CAMPAIGN_AUDIENCE_MODES.LIST || audience.mode === CAMPAIGN_AUDIENCE_MODES.AUDIENCE) && !audience.audienceId) {
+        throw new HttpError(400, "Select a saved audience");
+    }
     let audienceContactRecipients = null;
     let normalizedRecipients = audience.mode === CAMPAIGN_AUDIENCE_MODES.TAGS
         ? await resolveTagRecipients({ workspaceId: req.workspace.id, wabaId: template.wabaId, audience })
         : audience.mode === CAMPAIGN_AUDIENCE_MODES.ATTRIBUTES
             ? (audienceContactRecipients = await resolveAttributeRecipients({ workspaceId: req.workspace.id, wabaId: template.wabaId, audience })).map((item) => item.recipient)
+            : audience.mode === CAMPAIGN_AUDIENCE_MODES.LIST || audience.mode === CAMPAIGN_AUDIENCE_MODES.AUDIENCE
+                ? (audienceContactRecipients = await resolveListRecipients({ workspaceId: req.workspace.id, wabaId: template.wabaId, audience })).map((item) => item.recipient)
             : normalizeRecipients(recipients);
     const mappings = {
         body: req.body.templateVariableMappings || [],
@@ -158,7 +187,7 @@ async function createCampaign(req) {
     normalizedRecipients = mappingResult.recipients;
     const normalizedType = String(type || CAMPAIGN_TYPES.BROADCAST).toLowerCase();
     if (audience.mode !== CAMPAIGN_AUDIENCE_MODES.MANUAL && normalizedType !== CAMPAIGN_TYPES.BROADCAST) {
-        throw new HttpError(400, "Tag and attribute audiences are only supported for broadcast campaigns");
+        throw new HttpError(400, "Saved audiences, tags, and attribute audiences are only supported for broadcast campaigns");
     }
     const normalizedSchedule = normalizeScheduleInput({ scheduledAt, schedule });
     if (normalizedSchedule.isScheduled && isPlanRestrictionsEnabled()) {
@@ -215,6 +244,7 @@ async function createCampaign(req) {
         scheduledAt: normalizedSchedule.isScheduled ? normalizedSchedule.nextRunAt : undefined,
         audience: {
             mode: audience.mode,
+            listId: audience.audienceId || audience.listId || undefined,
             tags: audience.tags,
             tagMatch: audience.tagMatch,
             attributeFilters: audience.attributeFilters,

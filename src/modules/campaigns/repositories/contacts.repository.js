@@ -4,6 +4,14 @@ function findContactsByPhones({ workspaceId, wabaId, phones, select }) {
     return Contact.find({ workspaceId, wabaId, phone: { $in: phones } }).select(select || undefined);
 }
 
+function findContactsByIds({ workspaceId, wabaId, contactIds, select, limit }) {
+    return Contact.find({ workspaceId, wabaId, _id: { $in: contactIds } })
+        .select(select || "_id phone name email company language attributes tags")
+        .sort({ updatedAt: -1, _id: 1 })
+        .limit(Math.min(Math.max(Number(limit || 50000), 1), 50000))
+        .lean();
+}
+
 function findContactsByTags({ workspaceId, wabaId, tags, tagMatch, select, limit }) {
     const normalizedTags = Array.from(new Set((tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)));
     if (!normalizedTags.length) return [];
@@ -25,4 +33,4 @@ function findContactsByAttributeFilters({ workspaceId, wabaId, filters, limit })
         .lean();
 }
 
-module.exports = { findContactsByPhones, findContactsByTags, findContactsByAttributeFilters };
+module.exports = { findContactsByPhones, findContactsByIds, findContactsByTags, findContactsByAttributeFilters };

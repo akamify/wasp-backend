@@ -5,16 +5,38 @@ const { contactsRepository, templatesRepository } = require("@modules/campaigns/
 const { getOrCreateWallet, roundCurrency } = require("@modules/wallet/services/wallet.core.service");
 const { assertTemplateBelongsToCurrentWaba } = require("@shared/services/templateOwnershipService");
 const { buildAttributeAudienceClauses } = require("@modules/campaigns/utils/attributeAudience");
+const { contactListsRepository } = require("@modules/contacts/repositories");
+const { audiencesRepository } = require("@modules/audiences/repositories");
+const { previewContacts } = require("@modules/audiences/services/filterEngine.service");
 
 function normalizeAudience(input) {
     const tags = Array.from(new Set((input?.tags || []).map((tag) => String(tag || "").trim()).filter(Boolean)));
     return {
-        mode: ["tags", "attributes"].includes(String(input?.mode || "").toLowerCase()) ? String(input.mode).toLowerCase() : "manual",
+        mode: ["tags", "attributes", "list", "audience"].includes(String(input?.mode || "").toLowerCase()) ? String(input.mode).toLowerCase() : "manual",
+        listId: input?.listId || null,
+        audienceId: input?.audienceId || input?.listId || null,
         tags,
         tagMatch: String(input?.tagMatch || "all").toLowerCase() === "any" ? "any" : "all",
         attributeFilters: Array.isArray(input?.attributeFilters) ? input.attributeFilters : [],
         runtime: input?.runtime && typeof input.runtime === "object" ? input.runtime : {},
     };
+}
+
+async function resolveAudienceRecipients({ workspaceId, wabaId, audience }) {
+    if (!audience.audienceId) throw new HttpError(400, "Select a saved audience");
+    const storedAudience = await audiencesRepository.getAudienceLean({ id: audience.audienceId, workspaceId, wabaId });
+    if (storedAudience) {
+        if (storedAudience.type === "dynamic") {
+            const preview = await previewContacts({ workspaceId, wabaId, filterTree: storedAudience.filterTree, page: 1, limit: 100 });
+            return (preview.contacts || []).map((contact) => buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime));
+        }
+        const contacts = await contactsRepository.findContactsByIds({ workspaceId, wabaId, contactIds: storedAudience.contactIds || [] });
+        return (contacts || []).map((contact) => buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime));
+    }
+    const legacyList = await contactListsRepository.getContactListLean({ id: audience.audienceId, workspaceId, wabaId });
+    if (!legacyList) throw new HttpError(404, "Saved audience not found");
+    const contacts = await contactsRepository.findContactsByIds({ workspaceId, wabaId, contactIds: legacyList.contactIds || [] });
+    return (contacts || []).map((contact) => buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime));
 }
 
 function buildRecipientFromRuntime(to, runtime) {
@@ -44,6 +66,8 @@ async function estimateCampaign(req) {
             tags: audience.tags,
             tagMatch: audience.tagMatch,
         })).map((contact) => buildRecipientFromRuntime(String(contact.phone || ""), audience.runtime))
+        : audience.mode === "list" || audience.mode === "audience"
+            ? await resolveAudienceRecipients({ workspaceId: req.workspace.id, wabaId: template.wabaId, audience })
         : audience.mode === "attributes"
             ? (await contactsRepository.findContactsByAttributeFilters({
                 workspaceId: req.workspace.id,

@@ -51,6 +51,8 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/links`, require("@core/routes/linkRoutes"));
   app.use(`${basePath}/conversations`, require("@core/routes/conversationRoutes"));
   app.use(`${basePath}/contacts`, require("@core/routes/contactRoutes"));
+  app.use(`${basePath}/audiences`, require("@modules/audiences/routes/audiences.routes"));
+  app.use(`${basePath}/saved-filters`, require("@modules/audiences/routes/savedFilters.routes"));
   app.use(`${basePath}/meta`, require("@core/routes/metaRoutes"));
   app.use(`${basePath}/billing`, require("@modules/billing/routes/billing.routes"));
   app.use(`${basePath}/campaigns`, require("@core/routes/campaignRoutes"));

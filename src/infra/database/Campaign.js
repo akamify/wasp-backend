@@ -76,10 +76,11 @@ const CampaignSchema = new mongoose.Schema(
     audience: {
       mode: {
         type: String,
-        enum: ["manual", "tags", "attributes"],
+        enum: ["manual", "tags", "attributes", "list"],
         default: "manual",
         index: true,
       },
+      listId: { type: mongoose.Schema.Types.ObjectId, ref: "ContactList", default: null, index: true },
       tags: [{ type: String, trim: true }],
       tagMatch: {
         type: String,
