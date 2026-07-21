@@ -44,6 +44,8 @@ function normalizeDoc(page, categoryMap = new Map()) {
   const category = categoryMap.get(categorySlug) || null;
   return {
     id: String(page?._id || ""),
+    pageKey: String(page?.pageKey || data?.pageKey || ""),
+    targetSectionId: String(page?.targetSectionId || data?.targetSectionId || ""),
     slug: String(data?.slug || page?.slug || ""),
     title: String(data?.title || page?.title || ""),
     description: String(data?.description || ""),
@@ -124,10 +126,12 @@ function scoreMatch(article, query) {
   return score;
 }
 
-function slugHeading(value) {
-  return String(value || "")
+function stableSectionId(block) {
+  return String(block?.sectionId || block?.anchorId || block?.id || "")
+    .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 }
 
@@ -136,7 +140,8 @@ function headingItemsFromDocData(data) {
   const blockHeadings = blocks.flatMap((block) => {
     if (block?.type === "heading" && Number(block?.level || 2) >= 2) {
       const title = String(block?.value || "").trim();
-      return title ? [{ id: slugHeading(title), title, level: Number(block?.level || 2) }] : [];
+      const id = stableSectionId(block);
+      return title && id ? [{ id, title, level: Number(block?.level || 2) }] : [];
     }
 
     if (block?.type === "text") {
@@ -147,9 +152,9 @@ function headingItemsFromDocData(data) {
         .map((line) => {
           const level = line.startsWith("###") ? 3 : 2;
           const title = line.replace(/^#{2,3}\s+/, "").trim();
-          return title ? { id: slugHeading(title), title, level } : null;
+          return title ? { id: "", title, level } : null;
         })
-        .filter(Boolean);
+        .filter((item) => item?.id);
     }
 
     return [];
@@ -164,9 +169,9 @@ function headingItemsFromDocData(data) {
     .map((line) => {
       const level = line.startsWith("###") ? 3 : 2;
       const title = line.replace(/^#{2,3}\s+/, "").trim();
-      return title ? { id: slugHeading(title), title, level } : null;
+      return title ? { id: "", title, level } : null;
     })
-    .filter(Boolean);
+    .filter((item) => item?.id);
 }
 
 async function getPublishedDocsAndCategories() {
@@ -182,13 +187,15 @@ async function getPublishedDocsAndCategories() {
 
 async function docsLinkIndex(req, res) {
   const pages = await DocPage.find({ "data.__type": "doc", "data.status": "published" })
-    .select("slug title data updatedAt")
+    .select("slug title pageKey targetSectionId data updatedAt")
     .sort({ updatedAt: -1 })
     .lean();
 
   const docs = pages.map((page) => {
     const data = page?.data || {};
     return {
+      pageKey: String(page?.pageKey || data?.pageKey || ""),
+      targetSectionId: String(page?.targetSectionId || data?.targetSectionId || ""),
       slug: String(data?.slug || page?.slug || ""),
       title: String(data?.title || page?.title || ""),
       description: String(data?.description || ""),

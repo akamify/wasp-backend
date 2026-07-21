@@ -18,6 +18,8 @@ const KNOWN_DOC_SLUGS = new Set(["introduction", "quick-start", "authentication"
 const docSchema = Joi.object({
   title: Joi.string().trim().min(1).max(200).required(),
   slug: Joi.string().trim().lowercase().pattern(/^[a-z0-9-]+$/).required(),
+  pageKey: Joi.string().trim().lowercase().pattern(/^[a-z0-9-]+$/).allow("").default(""),
+  targetSectionId: Joi.string().trim().lowercase().pattern(/^[a-z0-9-]+$/).allow("").default(""),
   description: Joi.string().allow("").max(500).default(""),
   content: Joi.string().allow("").default(""),
   contentBlocks: Joi.array().items(Joi.object().unknown(true)).default([]),
@@ -291,6 +293,8 @@ function normalizeDocFromPage(page) {
     id: String(page._id),
     title: String(titleCandidate || page?.title || ""),
     slug: String(d.slug || normalizedSlug),
+    pageKey: String(page?.pageKey || d.pageKey || ""),
+    targetSectionId: String(page?.targetSectionId || d.targetSectionId || ""),
     description: normalizedDescription,
     content: normalizedContent,
     contentBlocks: Array.isArray(d.contentBlocks) ? d.contentBlocks : [],
@@ -437,6 +441,26 @@ async function assertAvailableDocSortOrder({ category, itemOrder, excludeId, ren
   }
 }
 
+async function assertAvailablePublishedPageKey({ pageKey, excludeId }) {
+  const normalizedPageKey = String(pageKey || "").trim().toLowerCase();
+  if (!normalizedPageKey) return;
+
+  const pages = await DocPage.find({
+    $or: [{ pageKey: normalizedPageKey }, { "data.pageKey": normalizedPageKey }],
+    "data.status": "published",
+  }).select("_id slug title pageKey data");
+
+  const conflict = pages.find((page) => {
+    if (excludeId && String(page._id) === String(excludeId)) return false;
+    return isDocPage(page);
+  });
+
+  if (conflict) {
+    const doc = normalizeDocFromPage(conflict);
+    throw new HttpError(409, `Dashboard page key "${normalizedPageKey}" is already used by "${doc.title || conflict.title}".`);
+  }
+}
+
 async function assertAvailableCategorySortOrder({ category, sectionOrder, renameFrom }) {
   const normalizedCategory = normalizeCategoryName(category);
   const normalizedSectionOrder = Number(sectionOrder || 0);
@@ -565,6 +589,9 @@ async function adminDocsCreate(req, res) {
   });
   await assertAvailableCategorySortOrder({ category, sectionOrder });
   await assertAvailableDocSortOrder({ category, itemOrder });
+  if (payload.status === "published") {
+    await assertAvailablePublishedPageKey({ pageKey: payload.pageKey });
+  }
 
   const data = {
     ...payload,
@@ -587,8 +614,10 @@ async function adminDocsCreate(req, res) {
 
   const page = await DocPage.create({
     slug,
+    pageKey: payload.pageKey,
+    targetSectionId: payload.targetSectionId,
     title: payload.title,
-    data,
+    data: { ...data, pageKey: payload.pageKey, targetSectionId: payload.targetSectionId },
     updatedByAdminId: String(req.user?.id || ""),
   });
   await ensureDocCategory(
@@ -635,8 +664,13 @@ async function adminDocsUpdate(req, res) {
   await assertAvailableCategoryName({ category, renameFrom: categoryRenameFrom });
   await assertAvailableCategorySortOrder({ category, sectionOrder, renameFrom: categoryRenameFrom });
   await assertAvailableDocSortOrder({ category, itemOrder, excludeId: existing._id, renameFrom: categoryRenameFrom });
+  if (payload.status === "published") {
+    await assertAvailablePublishedPageKey({ pageKey: payload.pageKey, excludeId: existing._id });
+  }
 
   existing.slug = nextSlug;
+  existing.pageKey = payload.pageKey;
+  existing.targetSectionId = payload.targetSectionId;
   existing.title = payload.title;
   existing.data = {
     ...payload,
@@ -654,6 +688,8 @@ async function adminDocsUpdate(req, res) {
       itemOrder,
     },
     __type: "doc",
+    pageKey: payload.pageKey,
+    targetSectionId: payload.targetSectionId,
   };
   delete existing.data.categoryRenameFrom;
   existing.updatedByAdminId = String(req.user?.id || "");
