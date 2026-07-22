@@ -1,7 +1,7 @@
 const Joi = require("joi");
 
 const platformQuerySchema = Joi.object({
-  platform: Joi.string().valid("woocommerce").optional(),
+  platform: Joi.string().valid("woocommerce", "shopify").optional(),
 });
 
 const createStoreSchema = Joi.object({
@@ -18,8 +18,14 @@ const updateStoreSchema = Joi.object({
   consumerSecret: Joi.string().trim().min(8).max(200).optional(),
 }).min(1);
 
+const shopifyConnectStartSchema = Joi.object({
+  shop: Joi.string().trim().min(3).max(255).required(),
+  storeId: Joi.string().trim().optional(),
+});
+
 module.exports = {
   createStoreSchema,
   platformQuerySchema,
+  shopifyConnectStartSchema,
   updateStoreSchema,
 };

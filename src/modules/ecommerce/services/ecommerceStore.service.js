@@ -5,6 +5,7 @@ const { HttpError } = require("@shared/utils/httpError");
 const repository = require("@modules/ecommerce/repositories/ecommerceStore.repository");
 const { validatePublicStoreUrl } = require("@modules/ecommerce/utils/ecommerceUrlSafety");
 const woo = require("@modules/ecommerce/services/woocommerceClient.service");
+const shopify = require("@modules/ecommerce/services/shopifyClient.service");
 
 function sanitizeStore(store) {
   const row = typeof store?.toObject === "function" ? store.toObject() : store;
@@ -20,7 +21,10 @@ function sanitizeStore(store) {
     credentialMetadata: {
       keyPrefix: row.credentials?.keyPrefix || "",
       lastUpdatedAt: row.credentials?.lastUpdatedAt || null,
+      tokenStatus: row.provider?.tokenStatus || "",
+      grantedScopes: row.provider?.grantedScopes || [],
     },
+    provider: row.provider || {},
     connectionHealth: row.connectionHealth || {},
     webhooks: Array.isArray(row.webhooks) ? row.webhooks.map((webhook) => ({
       externalWebhookId: webhook.externalWebhookId || "",
@@ -51,6 +55,7 @@ function platformSummary(stores) {
 async function listPlatforms({ workspaceId }) {
   const stores = await repository.listStores({ workspaceId });
   const wooStores = stores.filter((store) => store.platform === "woocommerce");
+  const shopifyStores = stores.filter((store) => store.platform === "shopify");
   return [
     {
       platform: "woocommerce",
@@ -58,6 +63,13 @@ async function listPlatforms({ workspaceId }) {
       description: "Connect WooCommerce stores and prepare order, product and webhook event sync.",
       connectedStores: wooStores.length,
       statusSummary: platformSummary(wooStores),
+    },
+    {
+      platform: "shopify",
+      name: "Shopify",
+      description: "Authorize Shopify stores and manage ecommerce webhook event sync.",
+      connectedStores: shopifyStores.length,
+      statusSummary: platformSummary(shopifyStores),
     },
   ];
 }
@@ -81,6 +93,157 @@ function encryptedCredentials({ consumerKey, consumerSecret, webhookSecret }) {
     keyPrefix: String(consumerKey || "").slice(0, 8),
     lastUpdatedAt: new Date(),
   };
+}
+
+function hashState(state) {
+  return crypto.createHash("sha256").update(String(state || "")).digest("hex");
+}
+
+function oauthCallbackUrl() {
+  const base = String(
+    process.env.SHOPIFY_APP_URL ||
+      process.env.API_URL ||
+      process.env.BACKEND_URL ||
+      process.env.APP_BASE_URL ||
+      ""
+  ).replace(/\/+$/, "");
+  if (!base) throw new HttpError(503, "Shopify callback base URL is not configured");
+  return `${base}/api/ecommerce/shopify/callback`;
+}
+
+function frontendRedirectUrl(params) {
+  const base = String(process.env.FRONTEND_BASE_URL || process.env.APP_BASE_URL || "").replace(/\/+$/, "");
+  const fallback = base || "http://localhost:5173";
+  const search = new URLSearchParams(params);
+  return `${fallback}/app/ecommerce/shopify?${search.toString()}`;
+}
+
+async function startShopifyAuth({ workspaceId, userId, payload }) {
+  const shopDomain = shopify.normalizeShopDomain(payload.shop || payload.shopDomain || "");
+  const purpose = payload.storeId ? "reconnect" : "connect";
+  if (payload.storeId) {
+    const existing = await getStoreOrThrow({ workspaceId, storeId: payload.storeId });
+    if (existing.platform !== "shopify") throw new HttpError(400, "Reconnect authorization is only available for Shopify stores");
+    if (existing.storeDomain !== shopDomain) throw new HttpError(400, "Shopify reconnect store domain does not match the connected store");
+  }
+  const rawState = crypto.randomBytes(32).toString("base64url");
+  await repository.createAuthState({
+    stateHash: hashState(rawState),
+    workspaceId,
+    userId,
+    platform: "shopify",
+    shopDomain,
+    purpose,
+    storeId: payload.storeId || null,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+  });
+  return {
+    authorizationUrl: shopify.buildAuthorizeUrl({
+      shopDomain,
+      state: rawState,
+      redirectUri: oauthCallbackUrl(),
+    }),
+    shopDomain,
+  };
+}
+
+function encryptedShopifyCredentials({ accessToken }) {
+  return {
+    accessTokenEnc: encryptString(accessToken),
+    keyPrefix: accessToken ? `${String(accessToken).slice(0, 6)}...` : "",
+    lastUpdatedAt: new Date(),
+  };
+}
+
+async function completeShopifyAuth({ query }) {
+  const shopDomain = shopify.normalizeShopDomain(query.shop || "");
+  if (!shopify.verifyCallbackHmac(query)) throw new HttpError(401, "Invalid Shopify authorization signature");
+  const authState = await repository.consumeAuthState({ stateHash: hashState(query.state || "") });
+  if (!authState) throw new HttpError(401, "Invalid or expired Shopify authorization state");
+  if (authState.platform !== "shopify" || authState.shopDomain !== shopDomain) {
+    throw new HttpError(401, "Shopify authorization state does not match store");
+  }
+
+  const token = await shopify.exchangeCode({ shopDomain, code: query.code });
+  if (!token.accessToken) throw new HttpError(400, "Shopify did not return an access token");
+  shopify.assertRequiredScopes(token.grantedScopes);
+
+  const metadata = await shopify.fetchShop({ shopDomain, accessToken: token.accessToken });
+  if (metadata.shopDomain !== shopDomain) throw new HttpError(400, "Shopify store identity mismatch");
+
+  const duplicate = await repository.findByPlatformDomain({
+    workspaceId: authState.workspaceId,
+    platform: "shopify",
+    storeDomain: shopDomain,
+    excludeId: authState.storeId || undefined,
+  });
+  if (duplicate && !authState.storeId) throw new HttpError(409, "This Shopify store is already connected");
+
+  const webhooks = await shopify.reconcileWebhooks({ shopDomain, accessToken: token.accessToken });
+  const now = new Date();
+  const existing = authState.storeId
+    ? await getStoreOrThrow({ workspaceId: authState.workspaceId, storeId: authState.storeId })
+    : null;
+  const target = existing || duplicate;
+  if (target) {
+    target.storeName = metadata.shopName || target.storeName;
+    target.storeUrl = `https://${shopDomain}`;
+    target.storeDomain = shopDomain;
+    target.externalStoreId = metadata.shopifyShopId;
+    target.status = "connected";
+    target.credentials = { ...target.credentials, ...encryptedShopifyCredentials(token) };
+    target.provider = {
+      ...(target.provider || {}),
+      shopDomain,
+      shopName: metadata.shopName,
+      shopifyShopId: metadata.shopifyShopId,
+      grantedScopes: token.grantedScopes,
+      tokenStatus: "valid",
+      tokenExpiresAt: null,
+    };
+    target.connectionHealth = {
+      apiCredentialsValid: true,
+      apiAccessValid: true,
+      webhooksConfigured: webhooks.length === shopify.WEBHOOK_TOPICS.length,
+      lastStatusCode: 200,
+      lastError: "",
+    };
+    target.webhooks = webhooks;
+    target.lastConnectedAt = now;
+    target.lastSuccessfulCheckAt = now;
+    await target.save();
+    return sanitizeStore(target);
+  }
+
+  const store = await repository.createStore({
+    workspaceId: authState.workspaceId,
+    platform: "shopify",
+    storeName: metadata.shopName || shopDomain,
+    storeUrl: `https://${shopDomain}`,
+    storeDomain: shopDomain,
+    externalStoreId: metadata.shopifyShopId,
+    status: "connected",
+    credentials: encryptedShopifyCredentials(token),
+    provider: {
+      shopDomain,
+      shopName: metadata.shopName,
+      shopifyShopId: metadata.shopifyShopId,
+      grantedScopes: token.grantedScopes,
+      tokenStatus: "valid",
+    },
+    connectionHealth: {
+      apiCredentialsValid: true,
+      apiAccessValid: true,
+      webhooksConfigured: webhooks.length === shopify.WEBHOOK_TOPICS.length,
+      lastStatusCode: 200,
+      lastError: "",
+    },
+    webhooks,
+    lastConnectedAt: now,
+    lastSuccessfulCheckAt: now,
+    createdBy: authState.userId,
+  });
+  return sanitizeStore(store);
 }
 
 async function connectStore({ workspaceId, userId, payload }) {
@@ -137,6 +300,10 @@ async function connectStore({ workspaceId, userId, payload }) {
 async function updateStore({ workspaceId, storeId, payload }) {
   const store = await getStoreOrThrow({ workspaceId, storeId });
   if (payload.storeName) store.storeName = payload.storeName;
+  if (store.platform === "shopify") {
+    await store.save();
+    return sanitizeStore(store);
+  }
   if (payload.consumerKey || payload.consumerSecret) {
     if (!payload.consumerKey || !payload.consumerSecret) throw new HttpError(400, "Consumer key and secret are both required to update credentials");
     await woo.verifyCredentials({ storeUrl: store.storeUrl, consumerKey: payload.consumerKey, consumerSecret: payload.consumerSecret });
@@ -154,8 +321,15 @@ async function updateStore({ workspaceId, storeId, payload }) {
   return sanitizeStore(store);
 }
 
-async function reconnectStore({ workspaceId, storeId }) {
+async function reconnectStore({ workspaceId, storeId, userId }) {
   const store = await getStoreOrThrow({ workspaceId, storeId });
+  if (store.platform === "shopify") {
+    return {
+      requiresAuthorization: true,
+      store: sanitizeStore(store),
+      authorization: await startShopifyAuth({ workspaceId, userId, payload: { storeId, shop: store.storeDomain } }),
+    };
+  }
   store.status = "reconnecting";
   await store.save();
   const consumerKey = decryptString(store.credentials?.consumerKeyEnc || "");
@@ -180,6 +354,16 @@ async function setPaused({ workspaceId, storeId, paused }) {
 
 async function cleanupRemoteManagedWebhooks(store) {
   try {
+    if (store.platform === "shopify") {
+      const accessToken = decryptString(store.credentials?.accessTokenEnc || "");
+      if (!accessToken) return;
+      await shopify.cleanupManagedWebhooks({
+        shopDomain: store.storeDomain,
+        accessToken,
+        webhooks: store.webhooks || [],
+      });
+      return;
+    }
     const consumerKey = decryptString(store.credentials?.consumerKeyEnc || "");
     const consumerSecret = decryptString(store.credentials?.consumerSecretEnc || "");
     await woo.cleanupManagedWebhooks({
@@ -260,14 +444,66 @@ async function receiveWooWebhook({ storeId, headers, rawBody, payload }) {
   return { accepted: true };
 }
 
+async function receiveShopifyWebhook({ headers, rawBody, payload }) {
+  const signature = headers["x-shopify-hmac-sha256"];
+  if (!shopify.verifyWebhookHmac({ rawBody, signature })) throw new HttpError(401, "Invalid webhook signature");
+
+  const shopDomain = shopify.normalizeShopDomain(headers["x-shopify-shop-domain"] || "");
+  const store = await repository.findStoreForShopifyWebhook(shopDomain);
+  if (!store || store.platform !== "shopify") throw new HttpError(404, "Store not found");
+  if (store.status === "paused" || store.status === "disconnected" || store.status === "uninstalled") {
+    return { accepted: true, skipped: true };
+  }
+
+  const topic = String(headers["x-shopify-topic"] || "unknown").trim();
+  const externalEventId = String(headers["x-shopify-webhook-id"] || payload?.id || "").trim();
+  const idempotencyKey = `${store._id}:${topic}:${externalEventId || crypto.createHash("sha256").update(rawBody).digest("hex")}`;
+
+  try {
+    await repository.createEvent({
+      workspaceId: store.workspaceId,
+      storeId: store._id,
+      platform: "shopify",
+      topic,
+      externalEventId,
+      idempotencyKey,
+      status: "received",
+      summary: `${topic} received`,
+      payloadPreview: {
+        id: payload?.id,
+        email: payload?.email,
+        name: payload?.name,
+        order_number: payload?.order_number,
+        financial_status: payload?.financial_status,
+      },
+    });
+  } catch (err) {
+    if (Number(err?.code) !== 11000) throw err;
+  }
+
+  store.lastWebhookEventAt = new Date();
+  const webhook = (store.webhooks || []).find((item) => item.topic === topic);
+  if (webhook) webhook.lastSuccessfulDeliveryAt = new Date();
+  if (topic === "app/uninstalled") {
+    store.status = "uninstalled";
+    store.disconnectedAt = new Date();
+    store.credentials.accessTokenEnc = "";
+    store.provider = store.provider || {};
+    store.provider.tokenStatus = "revoked";
+  }
+  await store.save();
+  return { accepted: true };
+}
+
 async function deleteStore({ workspaceId, storeId }) {
   const store = await getStoreOrThrow({ workspaceId, storeId });
+  const snapshot = sanitizeStore(store);
   await cleanupRemoteManagedWebhooks(store);
   store.status = "disconnected";
   store.deletedAt = new Date();
   store.disconnectedAt = store.disconnectedAt || new Date();
   await store.save();
-  return { deleted: true };
+  return { deleted: true, store: snapshot };
 }
 
 async function getHealth({ workspaceId, storeId }) {
@@ -302,6 +538,7 @@ async function getEvents({ workspaceId, storeId, limit }) {
 
 module.exports = {
   connectStore,
+  completeShopifyAuth,
   deleteStore,
   disconnectStore,
   getEvents,
@@ -310,8 +547,10 @@ module.exports = {
   listPlatforms,
   listStores,
   rawBodyBuffer,
+  receiveShopifyWebhook,
   receiveWooWebhook,
   reconnectStore,
   setPaused,
+  startShopifyAuth,
   updateStore,
 };

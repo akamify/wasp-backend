@@ -47,9 +47,13 @@ async function updateStore(req, res) {
 }
 
 async function reconnectStore(req, res) {
-  const store = await service.reconnectStore({ workspaceId: workspaceId(req), storeId: req.params.storeId });
-  await audit(req, "store_reconnected", store);
-  return res.json({ success: true, store });
+  const result = await service.reconnectStore({ workspaceId: workspaceId(req), storeId: req.params.storeId, userId: userId(req) });
+  if (result?.requiresAuthorization) {
+    await audit(req, "shopify_connection_started", result.store, { platform: "shopify", purpose: "reconnect" });
+    return res.json({ success: true, ...result });
+  }
+  await audit(req, "store_reconnected", result);
+  return res.json({ success: true, store: result });
 }
 
 async function pauseStore(req, res) {
@@ -73,9 +77,9 @@ async function disconnectStore(req, res) {
 
 async function deleteStore(req, res) {
   const result = await service.deleteStore({ workspaceId: workspaceId(req), storeId: req.params.storeId });
-  await audit(req, "store_deleted", { id: req.params.storeId, platform: "woocommerce" });
-  await audit(req, "webhook_deleted", { id: req.params.storeId, platform: "woocommerce" }, { managedOnly: true });
-  return res.json({ success: true, ...result });
+  await audit(req, "store_deleted", result.store || { id: req.params.storeId });
+  await audit(req, "webhook_deleted", result.store || { id: req.params.storeId }, { managedOnly: true });
+  return res.json({ success: true, deleted: true });
 }
 
 async function getHealth(req, res) {
@@ -110,8 +114,55 @@ async function receiveWooCommerceWebhook(req, res) {
   return res.status(202).json({ success: true, accepted: true });
 }
 
+async function startShopifyConnect(req, res) {
+  const result = await service.startShopifyAuth({ workspaceId: workspaceId(req), userId: userId(req), payload: req.body });
+  await audit(req, "shopify_connection_started", { platform: "shopify", storeDomain: result.shopDomain }, { platform: "shopify", storeDomain: result.shopDomain });
+  return res.json({ success: true, ...result });
+}
+
+async function completeShopifyConnect(req, res) {
+  try {
+    const store = await service.completeShopifyAuth({ query: req.query || {} });
+    await writeAuditLog(req, {
+      action: "store_connected",
+      resourceType: "ecommerce_store",
+      resourceId: store.id,
+      metadata: {
+        workspaceId: store.workspaceId,
+        platform: "shopify",
+        storeDomain: store.storeDomain,
+        topics: (store.webhooks || []).map((webhook) => webhook.topic),
+      },
+    });
+    return res.redirect(
+      `${String(process.env.FRONTEND_BASE_URL || process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/+$/, "")}/app/ecommerce/shopify?shopifyStatus=connected&store=${encodeURIComponent(store.storeDomain || "")}`
+    );
+  } catch (err) {
+    return res.redirect(
+      `${String(process.env.FRONTEND_BASE_URL || process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/+$/, "")}/app/ecommerce/shopify?shopifyStatus=error&message=${encodeURIComponent(err?.message || "Shopify connection failed")}`
+    );
+  }
+}
+
+async function receiveShopifyWebhook(req, res) {
+  const rawBody = service.rawBodyBuffer(req);
+  let payload = {};
+  try {
+    payload = rawBody.length ? JSON.parse(rawBody.toString("utf8")) : {};
+  } catch {
+    payload = {};
+  }
+  await service.receiveShopifyWebhook({
+    headers: req.headers || {},
+    rawBody,
+    payload,
+  });
+  return res.status(202).json({ success: true, accepted: true });
+}
+
 module.exports = {
   createStore,
+  completeShopifyConnect,
   deleteStore,
   disconnectStore,
   getEvents,
@@ -120,8 +171,10 @@ module.exports = {
   listPlatforms,
   listStores,
   pauseStore,
+  receiveShopifyWebhook,
   receiveWooCommerceWebhook,
   reconnectStore,
   resumeStore,
+  startShopifyConnect,
   updateStore,
 };

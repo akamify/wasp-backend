@@ -32,7 +32,10 @@ function isMetaWebhookPath(pathname) {
 
 function isEcommerceWebhookPath(pathname) {
   const normalized = String(pathname || "").split("?")[0];
-  return /^\/(?:api\/)?ecommerce\/webhooks\/woocommerce\/[^/]+$/.test(normalized);
+  return (
+    /^\/(?:api\/)?ecommerce\/webhooks\/woocommerce\/[^/]+$/.test(normalized) ||
+    /^\/(?:api\/)?ecommerce\/webhooks\/shopify$/.test(normalized)
+  );
 }
 
 // If you're behind a reverse proxy (Render, Heroku, Nginx), this helps IP-based rate limits/logging.
@@ -56,7 +59,7 @@ app.use(
 );
 
 app.use(
-  ["/ecommerce/webhooks/woocommerce", "/api/ecommerce/webhooks/woocommerce"],
+  ["/ecommerce/webhooks/woocommerce", "/api/ecommerce/webhooks/woocommerce", "/ecommerce/webhooks/shopify", "/api/ecommerce/webhooks/shopify"],
   express.raw({ type: "application/json", limit: "1mb" }),
 );
 
