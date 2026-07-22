@@ -56,20 +56,22 @@ async function listPlatforms({ workspaceId }) {
   const stores = await repository.listStores({ workspaceId });
   const wooStores = stores.filter((store) => store.platform === "woocommerce");
   const shopifyStores = stores.filter((store) => store.platform === "shopify");
+  const wooSummary = platformSummary(wooStores);
+  const shopifySummary = platformSummary(shopifyStores);
   return [
     {
       platform: "woocommerce",
       name: "WooCommerce",
       description: "Connect WooCommerce stores and prepare order, product and webhook event sync.",
-      connectedStores: wooStores.length,
-      statusSummary: platformSummary(wooStores),
+      connectedStores: wooSummary.connected,
+      statusSummary: wooSummary,
     },
     {
       platform: "shopify",
       name: "Shopify",
       description: "Authorize Shopify stores and manage ecommerce webhook event sync.",
-      connectedStores: shopifyStores.length,
-      statusSummary: platformSummary(shopifyStores),
+      connectedStores: shopifySummary.connected,
+      statusSummary: shopifySummary,
     },
   ];
 }
