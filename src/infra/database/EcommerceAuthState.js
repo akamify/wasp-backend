@@ -6,7 +6,7 @@ const EcommerceAuthStateSchema = new mongoose.Schema(
     workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: "Workspace", required: true, index: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     platform: { type: String, trim: true, lowercase: true, required: true, enum: ["shopify"] },
-    shopDomain: { type: String, trim: true, lowercase: true, required: true },
+    shopDomain: { type: String, trim: true, lowercase: true, default: "" },
     purpose: { type: String, trim: true, default: "connect", enum: ["connect", "reconnect"] },
     storeId: { type: mongoose.Schema.Types.ObjectId, ref: "EcommerceStore", default: null },
     usedAt: { type: Date, default: null },

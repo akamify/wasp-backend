@@ -9,6 +9,34 @@ function userId(req) {
   return String(req.user?.id || "");
 }
 
+const SHOPIFY_STATE_COOKIE = "aiwiz_shopify_state";
+
+function frontendShopifyRedirect(params) {
+  const base = String(process.env.FRONTEND_BASE_URL || process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/+$/, "");
+  return `${base}/app/ecommerce/shopify?${new URLSearchParams(params).toString()}`;
+}
+
+function readCookie(req, name) {
+  const raw = String(req.headers?.cookie || "");
+  const parts = raw.split(";").map((part) => part.trim());
+  const found = parts.find((part) => part.startsWith(`${name}=`));
+  return found ? decodeURIComponent(found.slice(name.length + 1)) : "";
+}
+
+function setShopifyStateCookie(req, res, state) {
+  res.cookie(SHOPIFY_STATE_COOKIE, state, {
+    httpOnly: true,
+    secure: String(process.env.NODE_ENV || "").toLowerCase() === "production",
+    sameSite: "lax",
+    maxAge: 10 * 60 * 1000,
+    path: "/",
+  });
+}
+
+function clearShopifyStateCookie(res) {
+  res.clearCookie(SHOPIFY_STATE_COOKIE, { path: "/" });
+}
+
 async function audit(req, action, store, metadata = {}) {
   await writeAuditLog(req, {
     action,
@@ -116,13 +144,25 @@ async function receiveWooCommerceWebhook(req, res) {
 
 async function startShopifyConnect(req, res) {
   const result = await service.startShopifyAuth({ workspaceId: workspaceId(req), userId: userId(req), payload: req.body });
-  await audit(req, "shopify_connection_started", { platform: "shopify", storeDomain: result.shopDomain }, { platform: "shopify", storeDomain: result.shopDomain });
-  return res.json({ success: true, ...result });
+  if (result.state) setShopifyStateCookie(req, res, result.state);
+  await audit(req, "shopify_connection_started", { platform: "shopify", storeDomain: result.shopDomain || "" }, { platform: "shopify", storeDomain: result.shopDomain || "" });
+  return res.json({ success: true, authorizationUrl: result.authorizationUrl, shopDomain: result.shopDomain || "" });
+}
+
+async function continueShopifyInstall(req, res) {
+  try {
+    const state = readCookie(req, SHOPIFY_STATE_COOKIE);
+    const result = await service.continueShopifyInstall({ query: req.query || {}, state });
+    return res.redirect(result.authorizationUrl);
+  } catch (err) {
+    return res.redirect(frontendShopifyRedirect({ shopifyStatus: "error", message: err?.message || "Shopify install could not start" }));
+  }
 }
 
 async function completeShopifyConnect(req, res) {
   try {
     const store = await service.completeShopifyAuth({ query: req.query || {} });
+    clearShopifyStateCookie(res);
     await writeAuditLog(req, {
       action: "store_connected",
       resourceType: "ecommerce_store",
@@ -134,13 +174,10 @@ async function completeShopifyConnect(req, res) {
         topics: (store.webhooks || []).map((webhook) => webhook.topic),
       },
     });
-    return res.redirect(
-      `${String(process.env.FRONTEND_BASE_URL || process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/+$/, "")}/app/ecommerce/shopify?shopifyStatus=connected&store=${encodeURIComponent(store.storeDomain || "")}`
-    );
+    return res.redirect(frontendShopifyRedirect({ shopifyStatus: "connected", store: store.storeDomain || "" }));
   } catch (err) {
-    return res.redirect(
-      `${String(process.env.FRONTEND_BASE_URL || process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/+$/, "")}/app/ecommerce/shopify?shopifyStatus=error&message=${encodeURIComponent(err?.message || "Shopify connection failed")}`
-    );
+    clearShopifyStateCookie(res);
+    return res.redirect(frontendShopifyRedirect({ shopifyStatus: "error", message: err?.message || "Shopify connection failed" }));
   }
 }
 
@@ -163,6 +200,7 @@ async function receiveShopifyWebhook(req, res) {
 module.exports = {
   createStore,
   completeShopifyConnect,
+  continueShopifyInstall,
   deleteStore,
   disconnectStore,
   getEvents,

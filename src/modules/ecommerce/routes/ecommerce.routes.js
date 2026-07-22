@@ -22,6 +22,7 @@ router.get("/integrations/platforms", ...read, rateLimiters.ecommerceRead, async
 router.get("/stores", ...read, rateLimiters.ecommerceRead, validate(platformQuerySchema, "query"), asyncHandler(controller.listStores));
 router.post("/stores", ...manage, rateLimiters.ecommerceConnect, validate(createStoreSchema), asyncHandler(controller.createStore));
 router.post("/shopify/connect/start", ...manage, rateLimiters.ecommerceConnect, validate(shopifyConnectStartSchema), asyncHandler(controller.startShopifyConnect));
+router.get("/shopify/install", rateLimiters.ecommerceConnect, asyncHandler(controller.continueShopifyInstall));
 router.get("/shopify/callback", rateLimiters.ecommerceConnect, asyncHandler(controller.completeShopifyConnect));
 router.patch("/stores/:storeId", ...manage, rateLimiters.ecommerceConnect, validate(updateStoreSchema), asyncHandler(controller.updateStore));
 router.post("/stores/:storeId/reconnect", ...manage, rateLimiters.ecommerceConnect, asyncHandler(controller.reconnectStore));

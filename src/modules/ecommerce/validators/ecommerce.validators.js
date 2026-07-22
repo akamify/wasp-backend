@@ -19,7 +19,6 @@ const updateStoreSchema = Joi.object({
 }).min(1);
 
 const shopifyConnectStartSchema = Joi.object({
-  shop: Joi.string().trim().min(3).max(255).required(),
   storeId: Joi.string().trim().optional(),
 });
 

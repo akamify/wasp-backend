@@ -69,6 +69,10 @@ async function consumeAuthState({ stateHash }) {
   );
 }
 
+async function findActiveAuthState({ stateHash }) {
+  return EcommerceAuthState.findOne({ stateHash, usedAt: null, expiresAt: { $gt: new Date() } });
+}
+
 async function createEvent(payload) {
   return EcommerceEvent.create(payload);
 }
@@ -82,6 +86,7 @@ module.exports = {
   findStoreForWebhook,
   findStoreById,
   findStoreForShopifyWebhook,
+  findActiveAuthState,
   consumeAuthState,
   listEvents,
   listStores,

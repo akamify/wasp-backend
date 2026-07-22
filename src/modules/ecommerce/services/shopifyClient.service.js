@@ -25,10 +25,28 @@ function assertConfigured() {
   return cfg;
 }
 
+function installUrl() {
+  const explicit = String(
+    process.env.SHOPIFY_INSTALL_URL ||
+      process.env.SHOPIFY_APP_INSTALL_URL ||
+      process.env.SHOPIFY_APP_STORE_URL ||
+      ""
+  ).trim();
+  if (explicit) return explicit;
+  const handle = String(process.env.SHOPIFY_APP_HANDLE || "").trim().replace(/^\/+|\/+$/g, "");
+  if (handle) return `https://apps.shopify.com/${encodeURIComponent(handle)}`;
+  throw new HttpError(503, "Shopify install URL is not configured");
+}
+
 function normalizeShopDomain(input) {
   const raw = String(input || "").trim().toLowerCase();
   if (!raw) throw new HttpError(400, "Shopify store domain is required");
   if (raw.includes("@")) throw new HttpError(400, "Shopify store domain must not contain credentials");
+
+  if (/^[a-z0-9][a-z0-9-]*$/.test(raw)) {
+    return `${raw}.myshopify.com`;
+  }
+
   const candidate = raw.includes("://") ? raw : `https://${raw}`;
   let parsed;
   try {
@@ -39,8 +57,14 @@ function normalizeShopDomain(input) {
   if (parsed.protocol !== "https:") throw new HttpError(400, "Shopify store domain must use HTTPS");
   if (parsed.username || parsed.password) throw new HttpError(400, "Shopify store domain must not contain credentials");
   const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+
+  if (host === "admin.shopify.com") {
+    const match = parsed.pathname.match(/^\/store\/([a-z0-9][a-z0-9-]*)\/?$/i);
+    if (match?.[1]) return `${match[1].toLowerCase()}.myshopify.com`;
+  }
+
   if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(host)) {
-    throw new HttpError(400, "Enter the store's myshopify.com domain");
+    throw new HttpError(400, "Enter your Shopify store handle, admin.shopify.com/store handle URL, or myshopify.com domain");
   }
   return host;
 }
@@ -224,6 +248,7 @@ module.exports = {
   cleanupManagedWebhooks,
   exchangeCode,
   fetchShop,
+  installUrl,
   normalizeShopDomain,
   reconcileWebhooks,
   verifyCallbackHmac,

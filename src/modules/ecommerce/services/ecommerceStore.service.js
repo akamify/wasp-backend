@@ -121,12 +121,12 @@ function frontendRedirectUrl(params) {
 }
 
 async function startShopifyAuth({ workspaceId, userId, payload }) {
-  const shopDomain = shopify.normalizeShopDomain(payload.shop || payload.shopDomain || "");
   const purpose = payload.storeId ? "reconnect" : "connect";
+  let shopDomain = "";
   if (payload.storeId) {
     const existing = await getStoreOrThrow({ workspaceId, storeId: payload.storeId });
     if (existing.platform !== "shopify") throw new HttpError(400, "Reconnect authorization is only available for Shopify stores");
-    if (existing.storeDomain !== shopDomain) throw new HttpError(400, "Shopify reconnect store domain does not match the connected store");
+    shopDomain = shopify.normalizeShopDomain(existing.storeDomain);
   }
   const rawState = crypto.randomBytes(32).toString("base64url");
   await repository.createAuthState({
@@ -139,10 +139,35 @@ async function startShopifyAuth({ workspaceId, userId, payload }) {
     storeId: payload.storeId || null,
     expiresAt: new Date(Date.now() + 10 * 60 * 1000),
   });
+  if (!shopDomain) {
+    return {
+      authorizationUrl: shopify.installUrl(),
+      state: rawState,
+      shopDomain: "",
+    };
+  }
   return {
     authorizationUrl: shopify.buildAuthorizeUrl({
       shopDomain,
       state: rawState,
+      redirectUri: oauthCallbackUrl(),
+    }),
+    shopDomain,
+  };
+}
+
+async function continueShopifyInstall({ query, state }) {
+  const shopDomain = shopify.normalizeShopDomain(query.shop || "");
+  if (!shopify.verifyCallbackHmac(query)) throw new HttpError(401, "Invalid Shopify install signature");
+  const authState = await repository.findActiveAuthState({ stateHash: hashState(state || "") });
+  if (!authState || authState.platform !== "shopify") throw new HttpError(401, "Invalid or expired Shopify install state");
+  if (authState.shopDomain && authState.shopDomain !== shopDomain) {
+    throw new HttpError(401, "Shopify install state does not match store");
+  }
+  return {
+    authorizationUrl: shopify.buildAuthorizeUrl({
+      shopDomain,
+      state,
       redirectUri: oauthCallbackUrl(),
     }),
     shopDomain,
@@ -162,7 +187,7 @@ async function completeShopifyAuth({ query }) {
   if (!shopify.verifyCallbackHmac(query)) throw new HttpError(401, "Invalid Shopify authorization signature");
   const authState = await repository.consumeAuthState({ stateHash: hashState(query.state || "") });
   if (!authState) throw new HttpError(401, "Invalid or expired Shopify authorization state");
-  if (authState.platform !== "shopify" || authState.shopDomain !== shopDomain) {
+  if (authState.platform !== "shopify" || (authState.shopDomain && authState.shopDomain !== shopDomain)) {
     throw new HttpError(401, "Shopify authorization state does not match store");
   }
 
@@ -541,6 +566,7 @@ async function getEvents({ workspaceId, storeId, limit }) {
 module.exports = {
   connectStore,
   completeShopifyAuth,
+  continueShopifyInstall,
   deleteStore,
   disconnectStore,
   getEvents,
