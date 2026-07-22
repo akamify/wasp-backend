@@ -144,6 +144,13 @@ async function receiveWooCommerceWebhook(req, res) {
 
 async function startShopifyConnect(req, res) {
   const result = await service.startShopifyAuth({ workspaceId: workspaceId(req), userId: userId(req), payload: req.body });
+  if (result.requiresShopContext) {
+    return res.json({
+      success: true,
+      requiresShopContext: true,
+      message: result.message,
+    });
+  }
   if (result.state) setShopifyStateCookie(req, res, result.state);
   await audit(req, "shopify_connection_started", { platform: "shopify", storeDomain: result.shopDomain || "" }, { platform: "shopify", storeDomain: result.shopDomain || "" });
   return res.json({ success: true, authorizationUrl: result.authorizationUrl, shopDomain: result.shopDomain || "" });

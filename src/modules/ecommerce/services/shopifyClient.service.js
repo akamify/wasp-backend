@@ -25,7 +25,7 @@ function assertConfigured() {
   return cfg;
 }
 
-function installUrl() {
+function configuredInstallUrl() {
   const explicit = String(
     process.env.SHOPIFY_INSTALL_URL ||
       process.env.SHOPIFY_APP_INSTALL_URL ||
@@ -33,9 +33,7 @@ function installUrl() {
       ""
   ).trim();
   if (explicit) return explicit;
-  const handle = String(process.env.SHOPIFY_APP_HANDLE || "").trim().replace(/^\/+|\/+$/g, "");
-  if (handle) return `https://apps.shopify.com/${encodeURIComponent(handle)}`;
-  throw new HttpError(503, "Shopify install URL is not configured");
+  return "";
 }
 
 function normalizeShopDomain(input) {
@@ -248,7 +246,7 @@ module.exports = {
   cleanupManagedWebhooks,
   exchangeCode,
   fetchShop,
-  installUrl,
+  configuredInstallUrl,
   normalizeShopDomain,
   reconcileWebhooks,
   verifyCallbackHmac,

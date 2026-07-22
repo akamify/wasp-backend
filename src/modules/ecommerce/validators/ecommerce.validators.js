@@ -20,6 +20,7 @@ const updateStoreSchema = Joi.object({
 
 const shopifyConnectStartSchema = Joi.object({
   storeId: Joi.string().trim().optional(),
+  shopDomain: Joi.string().trim().max(255).optional().allow(""),
 });
 
 module.exports = {

@@ -127,6 +127,17 @@ async function startShopifyAuth({ workspaceId, userId, payload }) {
     const existing = await getStoreOrThrow({ workspaceId, storeId: payload.storeId });
     if (existing.platform !== "shopify") throw new HttpError(400, "Reconnect authorization is only available for Shopify stores");
     shopDomain = shopify.normalizeShopDomain(existing.storeDomain);
+  } else if (payload.shopDomain) {
+    shopDomain = shopify.normalizeShopDomain(payload.shopDomain);
+  }
+  if (!shopDomain) {
+    const installUrl = shopify.configuredInstallUrl();
+    if (!installUrl) {
+      return {
+        requiresShopContext: true,
+        message: "Enter your Shopify store handle to start authorization for this development app.",
+      };
+    }
   }
   const rawState = crypto.randomBytes(32).toString("base64url");
   await repository.createAuthState({
@@ -141,7 +152,7 @@ async function startShopifyAuth({ workspaceId, userId, payload }) {
   });
   if (!shopDomain) {
     return {
-      authorizationUrl: shopify.installUrl(),
+      authorizationUrl: shopify.configuredInstallUrl(),
       state: rawState,
       shopDomain: "",
     };
