@@ -158,6 +158,12 @@ async function startShopifyConnect(req, res) {
 
 async function continueShopifyInstall(req, res) {
   try {
+    if (!req.query?.shop || !req.query?.hmac) {
+      return res.redirect(frontendShopifyRedirect({
+        shopifyStatus: "needs_store_context",
+        message: "Open this app from Shopify install flow, or enter the Shopify store handle to authorize this development app.",
+      }));
+    }
     const state = readCookie(req, SHOPIFY_STATE_COOKIE);
     const result = await service.continueShopifyInstall({ query: req.query || {}, state });
     return res.redirect(result.authorizationUrl);

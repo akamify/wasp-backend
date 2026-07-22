@@ -32,7 +32,7 @@ function configuredInstallUrl() {
       process.env.SHOPIFY_APP_STORE_URL ||
       ""
   ).trim();
-  if (explicit) return explicit;
+  if (explicit && !/\/api\/ecommerce\/shopify\/install\/?$/i.test(explicit)) return explicit;
   return "";
 }
 
