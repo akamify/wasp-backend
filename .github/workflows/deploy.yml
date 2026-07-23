@@ -20,3 +20,4 @@ jobs:
 
           script: |
             /root/wasp-backend/deploy.sh
+            
