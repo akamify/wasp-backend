@@ -57,6 +57,14 @@ async function findStoreForShopifyWebhook(shopDomain) {
   });
 }
 
+async function findCustomStoreByApiKeyHash(keyHash) {
+  return EcommerceStore.findOne({
+    platform: "custom",
+    "credentials.apiKeyHash": String(keyHash || ""),
+    deletedAt: null,
+  });
+}
+
 async function createAuthState(payload) {
   return EcommerceAuthState.create(payload);
 }
@@ -77,6 +85,20 @@ async function createEvent(payload) {
   return EcommerceEvent.create(payload);
 }
 
+async function findEventById(eventId) {
+  if (!mongoose.Types.ObjectId.isValid(String(eventId))) return null;
+  return EcommerceEvent.findById(eventId);
+}
+
+async function updateEventStatus({ eventId, patch }) {
+  if (!mongoose.Types.ObjectId.isValid(String(eventId))) return null;
+  return EcommerceEvent.findByIdAndUpdate(
+    eventId,
+    { $set: patch || {} },
+    { returnDocument: "after" }
+  );
+}
+
 module.exports = {
   createStore,
   createEvent,
@@ -85,8 +107,11 @@ module.exports = {
   findByPlatformDomain,
   findStoreForWebhook,
   findStoreById,
+  findCustomStoreByApiKeyHash,
+  findEventById,
   findStoreForShopifyWebhook,
   findActiveAuthState,
+  updateEventStatus,
   consumeAuthState,
   listEvents,
   listStores,

@@ -16,7 +16,7 @@ const EcommerceWebhookSchema = new mongoose.Schema(
 const EcommerceStoreSchema = new mongoose.Schema(
   {
     workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: "Workspace", required: true, index: true },
-    platform: { type: String, trim: true, lowercase: true, required: true, enum: ["woocommerce", "shopify"] },
+    platform: { type: String, trim: true, lowercase: true, required: true, enum: ["woocommerce", "shopify", "custom"] },
     storeName: { type: String, trim: true, required: true },
     storeUrl: { type: String, trim: true, required: true },
     storeDomain: { type: String, trim: true, lowercase: true, default: "" },
@@ -36,7 +36,9 @@ const EcommerceStoreSchema = new mongoose.Schema(
         "connection_error",
         "degraded",
         "paused",
+        "suspended",
         "disconnected",
+        "revoked",
         "uninstalled",
       ],
       index: true,
@@ -47,8 +49,11 @@ const EcommerceStoreSchema = new mongoose.Schema(
       webhookSecretEnc: { type: String, default: "" },
       accessTokenEnc: { type: String, default: "" },
       refreshTokenEnc: { type: String, default: "" },
+      apiKeyHash: { type: String, default: "" },
       keyPrefix: { type: String, trim: true, default: "" },
       lastUpdatedAt: { type: Date, default: null },
+      secretRotatedAt: { type: Date, default: null },
+      revokedAt: { type: Date, default: null },
     },
     provider: {
       shopDomain: { type: String, trim: true, lowercase: true, default: "" },

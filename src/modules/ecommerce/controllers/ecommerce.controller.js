@@ -62,10 +62,11 @@ async function listStores(req, res) {
 }
 
 async function createStore(req, res) {
-  const store = await service.connectStore({ workspaceId: workspaceId(req), userId: userId(req), payload: req.body });
+  const result = await service.connectStore({ workspaceId: workspaceId(req), userId: userId(req), payload: req.body });
+  const store = result?.store || result;
   await audit(req, "store_connected", store);
   await audit(req, "webhook_created", store, { topics: (store.webhooks || []).map((webhook) => webhook.topic) });
-  return res.status(201).json({ success: true, store });
+  return res.status(201).json({ success: true, store, ...(result?.credentials ? { credentials: result.credentials } : {}) });
 }
 
 async function updateStore(req, res) {
@@ -210,6 +211,58 @@ async function receiveShopifyWebhook(req, res) {
   return res.status(202).json({ success: true, accepted: true });
 }
 
+async function receiveCustomWebhook(req, res) {
+  const rawBody = service.rawBodyBuffer(req);
+  let payload = {};
+  try {
+    payload = rawBody.length ? JSON.parse(rawBody.toString("utf8")) : {};
+  } catch {
+    payload = {};
+  }
+  const result = await service.receiveCustomWebhook({
+    storeId: req.params.storeId,
+    headers: req.headers || {},
+    rawBody,
+    payload,
+  });
+  return res.status(202).json({ success: true, ...result });
+}
+
+async function requestCustomSecretOtp(req, res) {
+  return res.json(await service.sendCustomSecretOtp({
+    workspaceId: workspaceId(req),
+    storeId: req.params.storeId,
+    userId: userId(req),
+  }));
+}
+
+async function rotateCustomSecret(req, res) {
+  const result = await service.rotateCustomSecret({
+    workspaceId: workspaceId(req),
+    storeId: req.params.storeId,
+    userId: userId(req),
+    otp: req.body?.otp,
+  });
+  await audit(req, "credentials_updated", result.store, { credentialType: "custom_webhook_secret" });
+  return res.json({ success: true, ...result });
+}
+
+async function revokeCustomStore(req, res) {
+  const store = await service.revokeCustomStore({ workspaceId: workspaceId(req), storeId: req.params.storeId });
+  await audit(req, "store_revoked", store);
+  return res.json({ success: true, store });
+}
+
+async function sendCustomTestEvent(req, res) {
+  const result = await service.sendCustomTestEvent({
+    workspaceId: workspaceId(req),
+    storeId: req.params.storeId,
+    payload: req.body || {},
+  });
+  await audit(req, "custom_store_test_event", { id: req.params.storeId, platform: "custom" }, result);
+  return res.status(202).json({ success: true, ...result });
+}
+
 module.exports = {
   createStore,
   completeShopifyConnect,
@@ -222,10 +275,15 @@ module.exports = {
   listPlatforms,
   listStores,
   pauseStore,
+  receiveCustomWebhook,
   receiveShopifyWebhook,
   receiveWooCommerceWebhook,
   reconnectStore,
+  requestCustomSecretOtp,
   resumeStore,
+  revokeCustomStore,
+  rotateCustomSecret,
+  sendCustomTestEvent,
   startShopifyConnect,
   updateStore,
 };

@@ -2,10 +2,31 @@ const mongoose = require("mongoose");
 const crypto = require("crypto");
 const { encryptString, decryptString } = require("@shared/utils/crypto");
 const { HttpError } = require("@shared/utils/httpError");
+const { webhookQueue } = require("@infra/queues/index");
+const otpService = require("@modules/api-keys/services/apiKeyOtp.service");
 const repository = require("@modules/ecommerce/repositories/ecommerceStore.repository");
 const { validatePublicStoreUrl } = require("@modules/ecommerce/utils/ecommerceUrlSafety");
 const woo = require("@modules/ecommerce/services/woocommerceClient.service");
 const shopify = require("@modules/ecommerce/services/shopifyClient.service");
+
+const CUSTOM_WEBHOOK_TOPICS = [
+  "customer.created",
+  "customer.updated",
+  "order.created",
+  "order.updated",
+  "order.cancelled",
+  "order.delivered",
+  "order.returned",
+  "cart.created",
+  "cart.updated",
+  "cart.abandoned",
+  "cart.recovered",
+  "refund.created",
+  "product.created",
+  "product.updated",
+];
+
+const CUSTOM_WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
 
 function sanitizeStore(store) {
   const row = typeof store?.toObject === "function" ? store.toObject() : store;
@@ -47,8 +68,8 @@ function sanitizeStore(store) {
 
 function platformSummary(stores) {
   const connected = stores.filter((store) => store.status === "connected").length;
-  const paused = stores.filter((store) => store.status === "paused").length;
-  const error = stores.filter((store) => ["connection_error", "degraded"].includes(store.status)).length;
+  const paused = stores.filter((store) => store.status === "paused" || store.status === "suspended").length;
+  const error = stores.filter((store) => ["connection_error", "degraded", "revoked"].includes(store.status)).length;
   return { connected, paused, error };
 }
 
@@ -56,8 +77,10 @@ async function listPlatforms({ workspaceId }) {
   const stores = await repository.listStores({ workspaceId });
   const wooStores = stores.filter((store) => store.platform === "woocommerce");
   const shopifyStores = stores.filter((store) => store.platform === "shopify");
+  const customStores = stores.filter((store) => store.platform === "custom");
   const wooSummary = platformSummary(wooStores);
   const shopifySummary = platformSummary(shopifyStores);
+  const customSummary = platformSummary(customStores);
   return [
     {
       platform: "woocommerce",
@@ -72,6 +95,13 @@ async function listPlatforms({ workspaceId }) {
       description: "Authorize Shopify stores and manage ecommerce webhook event sync.",
       connectedStores: shopifySummary.connected,
       statusSummary: shopifySummary,
+    },
+    {
+      platform: "custom",
+      name: "Custom Store",
+      description: "Connect a custom website with signed ecommerce webhooks and workspace-scoped credentials.",
+      connectedStores: customSummary.connected,
+      statusSummary: customSummary,
     },
   ];
 }
@@ -94,6 +124,100 @@ function encryptedCredentials({ consumerKey, consumerSecret, webhookSecret }) {
     webhookSecretEnc: webhookSecret ? encryptString(webhookSecret) : undefined,
     keyPrefix: String(consumerKey || "").slice(0, 8),
     lastUpdatedAt: new Date(),
+  };
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+function generateCustomApiKey() {
+  return `awc_live_${crypto.randomBytes(32).toString("base64url")}`;
+}
+
+function generateWebhookSecret() {
+  return `whsec_${crypto.randomBytes(32).toString("base64url")}`;
+}
+
+function customCredentialPayload({ apiKey, webhookSecret }) {
+  return {
+    apiKey,
+    webhookSecret,
+    signing: {
+      algorithm: "HMAC-SHA256",
+      signatureHeader: "X-Webhook-Signature",
+      timestampHeader: "X-Webhook-Timestamp",
+      signingString: "timestamp.rawBody",
+    },
+  };
+}
+
+function encryptedCustomCredentials({ apiKey, webhookSecret, existing = {} }) {
+  const current = typeof existing?.toObject === "function" ? existing.toObject() : existing;
+  return {
+    ...current,
+    apiKeyHash: apiKey ? sha256(apiKey) : current.apiKeyHash || "",
+    webhookSecretEnc: webhookSecret ? encryptString(webhookSecret) : current.webhookSecretEnc || "",
+    keyPrefix: apiKey ? String(apiKey).slice(0, 12) : current.keyPrefix || "",
+    lastUpdatedAt: new Date(),
+    secretRotatedAt: webhookSecret ? new Date() : current.secretRotatedAt || null,
+    revokedAt: null,
+  };
+}
+
+function redactPayloadPreview(value, depth = 0) {
+  if (depth > 3) return "[truncated]";
+  if (Array.isArray(value)) return value.slice(0, 5).map((item) => redactPayloadPreview(item, depth + 1));
+  if (!value || typeof value !== "object") return value;
+  const out = {};
+  Object.entries(value).slice(0, 30).forEach(([key, item]) => {
+    if (/secret|token|password|authorization|api[-_]?key|card|cvv/i.test(key)) {
+      out[key] = "[redacted]";
+    } else {
+      out[key] = redactPayloadPreview(item, depth + 1);
+    }
+  });
+  return out;
+}
+
+function parseWebhookTimestamp(value) {
+  const raw = String(value || "").trim();
+  if (!raw) throw new HttpError(401, "Missing webhook timestamp");
+  const numeric = Number(raw);
+  const date = Number.isFinite(numeric)
+    ? new Date(numeric > 9999999999 ? numeric : numeric * 1000)
+    : new Date(raw);
+  if (Number.isNaN(date.getTime())) throw new HttpError(401, "Invalid webhook timestamp");
+  if (Math.abs(Date.now() - date.getTime()) > CUSTOM_WEBHOOK_TIMESTAMP_TOLERANCE_MS) {
+    throw new HttpError(401, "Webhook timestamp is outside the allowed window");
+  }
+  return raw;
+}
+
+function verifyCustomSignature({ rawBody, timestamp, signature, secret }) {
+  const received = String(signature || "").trim();
+  if (!received || !received.startsWith("sha256=")) return false;
+  const expected = `sha256=${crypto
+    .createHmac("sha256", secret)
+    .update(`${timestamp}.${rawBody.toString("utf8")}`)
+    .digest("hex")}`;
+  return (
+    Buffer.byteLength(received) === Buffer.byteLength(expected) &&
+    crypto.timingSafeEqual(Buffer.from(received), Buffer.from(expected))
+  );
+}
+
+function normalizeCustomEventPayload(payload) {
+  const topic = String(payload?.event || payload?.topic || "").trim();
+  if (!CUSTOM_WEBHOOK_TOPICS.includes(topic)) throw new HttpError(400, "Unsupported custom ecommerce event type");
+  const data = payload?.data && typeof payload.data === "object" ? payload.data : {};
+  const externalEventId = String(payload?.eventId || payload?.id || data.id || data.orderId || data.customerId || data.productId || "").trim();
+  return {
+    topic,
+    externalEventId,
+    data,
+    occurredAt: payload?.occurredAt || payload?.timestamp || null,
+    isTest: Boolean(payload?.test === true || payload?.isTest === true),
   };
 }
 
@@ -284,8 +408,46 @@ async function completeShopifyAuth({ query }) {
   return sanitizeStore(store);
 }
 
+async function connectCustomStore({ workspaceId, userId, payload }) {
+  const { storeUrl, storeDomain } = await validatePublicStoreUrl(payload.storeUrl);
+  const duplicate = await repository.findDuplicate({ workspaceId, platform: "custom", storeUrl });
+  if (duplicate) throw new HttpError(409, "This custom store is already connected");
+
+  const apiKey = generateCustomApiKey();
+  const webhookSecret = generateWebhookSecret();
+  const store = await repository.createStore({
+    workspaceId,
+    platform: "custom",
+    storeName: payload.storeName,
+    storeUrl,
+    storeDomain,
+    status: "connected",
+    credentials: encryptedCustomCredentials({ apiKey, webhookSecret }),
+    connectionHealth: {
+      apiCredentialsValid: true,
+      apiAccessValid: true,
+      webhooksConfigured: true,
+      lastStatusCode: 200,
+      lastError: "",
+    },
+    webhooks: [{
+      topic: "custom.ecommerce.events",
+      status: "active",
+      managedBy: "ai_wiz_chat",
+    }],
+    lastConnectedAt: new Date(),
+    lastSuccessfulCheckAt: new Date(),
+    createdBy: userId,
+  });
+  return {
+    store: sanitizeStore(store),
+    credentials: customCredentialPayload({ apiKey, webhookSecret }),
+  };
+}
+
 async function connectStore({ workspaceId, userId, payload }) {
   const platform = String(payload.platform || "woocommerce").toLowerCase();
+  if (platform === "custom") return connectCustomStore({ workspaceId, userId, payload });
   if (platform !== "woocommerce") throw new HttpError(400, "Unsupported ecommerce platform");
 
   const { storeUrl, storeDomain } = await validatePublicStoreUrl(payload.storeUrl);
@@ -361,6 +523,17 @@ async function updateStore({ workspaceId, storeId, payload }) {
 
 async function reconnectStore({ workspaceId, storeId, userId }) {
   const store = await getStoreOrThrow({ workspaceId, storeId });
+  if (store.platform === "custom") {
+    if (store.status === "revoked") throw new HttpError(400, "Revoked custom stores cannot be reconnected. Create a new custom store.");
+    store.status = "connected";
+    store.connectionHealth.apiCredentialsValid = true;
+    store.connectionHealth.apiAccessValid = true;
+    store.connectionHealth.webhooksConfigured = Boolean(store.credentials?.apiKeyHash && store.credentials?.webhookSecretEnc);
+    store.connectionHealth.lastError = "";
+    store.lastSuccessfulCheckAt = new Date();
+    await store.save();
+    return sanitizeStore(store);
+  }
   if (store.platform === "shopify") {
     return {
       requiresAuthorization: true,
@@ -384,7 +557,7 @@ async function reconnectStore({ workspaceId, storeId, userId }) {
 
 async function setPaused({ workspaceId, storeId, paused }) {
   const store = await getStoreOrThrow({ workspaceId, storeId });
-  store.status = paused ? "paused" : "connected";
+  store.status = paused ? (store.platform === "custom" ? "suspended" : "paused") : "connected";
   store.pausedAt = paused ? new Date() : null;
   await store.save();
   return sanitizeStore(store);
@@ -392,6 +565,7 @@ async function setPaused({ workspaceId, storeId, paused }) {
 
 async function cleanupRemoteManagedWebhooks(store) {
   try {
+    if (store.platform === "custom") return;
     if (store.platform === "shopify") {
       const accessToken = decryptString(store.credentials?.accessTokenEnc || "");
       if (!accessToken) return;
@@ -533,6 +707,177 @@ async function receiveShopifyWebhook({ headers, rawBody, payload }) {
   return { accepted: true };
 }
 
+async function enqueueCustomEvent(event) {
+  try {
+    const queue = webhookQueue.getWebhookQueue();
+    await queue.add("ecommerce.custom.process", {
+      eventId: String(event._id || event.id || ""),
+    });
+    return true;
+  } catch (err) {
+    await repository.updateEventStatus({
+      eventId: event._id,
+      patch: {
+        status: "failed",
+        error: "Queue unavailable",
+      },
+    });
+    return false;
+  }
+}
+
+function extractCustomApiKey(headers) {
+  const authHeader = String(headers.authorization || headers.Authorization || "").trim();
+  if (/^Bearer\s+/i.test(authHeader)) return authHeader.replace(/^Bearer\s+/i, "").trim();
+  return String(headers["x-api-key"] || headers["X-API-Key"] || "").trim();
+}
+
+async function receiveCustomWebhook({ storeId, headers, rawBody, payload }) {
+  const apiKey = extractCustomApiKey(headers || {});
+  if (!apiKey) throw new HttpError(401, "Missing ecommerce webhook API key");
+
+  const store = await repository.findCustomStoreByApiKeyHash(sha256(apiKey));
+  if (!store || String(store._id) !== String(storeId)) throw new HttpError(401, "Invalid ecommerce webhook API key");
+  if (["paused", "suspended"].includes(store.status)) return { accepted: true, skipped: true };
+  if (["disconnected", "revoked", "uninstalled"].includes(store.status)) throw new HttpError(403, "Custom store integration is not active");
+
+  const timestamp = parseWebhookTimestamp(headers["x-webhook-timestamp"] || headers["X-Webhook-Timestamp"]);
+  const secret = decryptString(store.credentials?.webhookSecretEnc || "");
+  if (!secret || !verifyCustomSignature({ rawBody, timestamp, signature: headers["x-webhook-signature"] || headers["X-Webhook-Signature"], secret })) {
+    throw new HttpError(401, "Invalid webhook signature");
+  }
+
+  const eventPayload = normalizeCustomEventPayload(payload);
+  const signatureHash = sha256(headers["x-webhook-signature"] || "");
+  const idempotencyKey = `${store._id}:${eventPayload.topic}:${eventPayload.externalEventId || `${timestamp}:${signatureHash}`}`;
+  let event = null;
+  try {
+    event = await repository.createEvent({
+      workspaceId: store.workspaceId,
+      storeId: store._id,
+      platform: "custom",
+      topic: eventPayload.topic,
+      externalEventId: eventPayload.externalEventId,
+      idempotencyKey,
+      status: "queued",
+      queuedAt: new Date(),
+      isTest: eventPayload.isTest,
+      summary: `${eventPayload.topic} queued`,
+      payloadPreview: redactPayloadPreview(eventPayload.data),
+    });
+  } catch (err) {
+    if (Number(err?.code) !== 11000) throw err;
+    return { accepted: true, duplicate: true, status: "duplicate" };
+  }
+
+  store.lastWebhookEventAt = new Date();
+  const webhook = (store.webhooks || []).find((item) => item.topic === "custom.ecommerce.events");
+  if (webhook) webhook.lastSuccessfulDeliveryAt = new Date();
+  await store.save();
+
+  const queued = await enqueueCustomEvent(event);
+  return { accepted: true, eventId: String(event._id), status: queued ? "queued" : "failed" };
+}
+
+async function processCustomEventJob(job) {
+  const eventId = job?.data?.eventId;
+  const event = await repository.findEventById(eventId);
+  if (!event || event.platform !== "custom") return { skipped: true };
+  if (event.status === "processed") return { skipped: true, duplicate: true };
+
+  event.status = "processing";
+  event.retryCount = Number(job?.attemptsMade || 0);
+  await event.save();
+
+  try {
+    // V1 persists and verifies the ecommerce event contract. Downstream CRM,
+    // audience, and automation fan-out can subscribe here without changing the
+    // public webhook contract.
+    event.status = "processed";
+    event.processedAt = new Date();
+    event.error = "";
+    await event.save();
+    return { processed: true, eventId: String(event._id), test: Boolean(event.isTest) };
+  } catch (err) {
+    event.status = Number(job?.attemptsMade || 0) + 1 >= Number(job?.opts?.attempts || 1) ? "dead_letter" : "retrying";
+    event.error = err?.message || "Custom ecommerce event processing failed";
+    await event.save();
+    throw err;
+  }
+}
+
+async function sendCustomSecretOtp({ workspaceId, storeId, userId }) {
+  const store = await getStoreOrThrow({ workspaceId, storeId });
+  if (store.platform !== "custom") throw new HttpError(400, "Secret rotation is only available for custom stores");
+  return otpService.sendSecurityOtp({
+    userId,
+    purpose: "ecommerce_custom_secret_rotate",
+    keyId: storeId,
+    title: "Rotate custom store webhook secret",
+    subtitle: "Use this OTP to rotate your custom ecommerce webhook signing secret.",
+  });
+}
+
+async function rotateCustomSecret({ workspaceId, storeId, userId, otp }) {
+  const store = await getStoreOrThrow({ workspaceId, storeId });
+  if (store.platform !== "custom") throw new HttpError(400, "Secret rotation is only available for custom stores");
+  await otpService.verifySecurityOtp({
+    userId,
+    otp,
+    purpose: "ecommerce_custom_secret_rotate",
+    keyId: storeId,
+  });
+  const webhookSecret = generateWebhookSecret();
+  store.credentials = encryptedCustomCredentials({
+    webhookSecret,
+    existing: store.credentials || {},
+  });
+  store.status = store.status === "revoked" ? "revoked" : "connected";
+  await store.save();
+  return {
+    store: sanitizeStore(store),
+    credentials: {
+      webhookSecret,
+      signing: customCredentialPayload({ apiKey: "", webhookSecret }).signing,
+    },
+  };
+}
+
+async function revokeCustomStore({ workspaceId, storeId }) {
+  const store = await getStoreOrThrow({ workspaceId, storeId });
+  if (store.platform !== "custom") throw new HttpError(400, "Revoke is only available for custom stores");
+  store.status = "revoked";
+  store.credentials.apiKeyHash = "";
+  store.credentials.webhookSecretEnc = "";
+  store.credentials.revokedAt = new Date();
+  store.disconnectedAt = new Date();
+  await store.save();
+  return sanitizeStore(store);
+}
+
+async function sendCustomTestEvent({ workspaceId, storeId, payload }) {
+  const store = await getStoreOrThrow({ workspaceId, storeId });
+  if (store.platform !== "custom") throw new HttpError(400, "Test event is only available for custom stores");
+  if (["disconnected", "revoked", "uninstalled"].includes(store.status)) throw new HttpError(403, "Custom store integration is not active");
+  const topic = String(payload?.topic || "order.created").trim();
+  if (!CUSTOM_WEBHOOK_TOPICS.includes(topic)) throw new HttpError(400, "Unsupported custom ecommerce event type");
+  const event = await repository.createEvent({
+    workspaceId: store.workspaceId,
+    storeId: store._id,
+    platform: "custom",
+    topic,
+    externalEventId: `test_${Date.now()}`,
+    idempotencyKey: `${store._id}:${topic}:test:${crypto.randomUUID()}`,
+    status: "queued",
+    queuedAt: new Date(),
+    isTest: true,
+    summary: `${topic} test queued`,
+    payloadPreview: redactPayloadPreview(payload?.payload || { source: "dashboard_test" }),
+  });
+  const queued = await enqueueCustomEvent(event);
+  return { accepted: true, eventId: String(event._id), status: queued ? "queued" : "failed" };
+}
+
 async function deleteStore({ workspaceId, storeId }) {
   const store = await getStoreOrThrow({ workspaceId, storeId });
   const snapshot = sanitizeStore(store);
@@ -568,7 +913,10 @@ async function getEvents({ workspaceId, storeId, limit }) {
       summary: event.summary,
       receivedAt: event.receivedAt,
       processedAt: event.processedAt,
+      queuedAt: event.queuedAt,
+      isTest: Boolean(event.isTest),
       error: event.error,
+      payloadPreview: event.payloadPreview || null,
       createdAt: event.createdAt,
     })),
   };
@@ -585,10 +933,16 @@ module.exports = {
   getWebhooks,
   listPlatforms,
   listStores,
+  processCustomEventJob,
   rawBodyBuffer,
+  receiveCustomWebhook,
   receiveShopifyWebhook,
   receiveWooWebhook,
   reconnectStore,
+  revokeCustomStore,
+  rotateCustomSecret,
+  sendCustomSecretOtp,
+  sendCustomTestEvent,
   setPaused,
   startShopifyAuth,
   updateStore,

@@ -2,13 +2,17 @@ const { webhookQueue } = require("@infra/queues/index");
 const { createWorker } = require("@infra/queues/queueFactory");
 const { attachQueueObserver } = require("@infra/queues/queueObserver");
 const { deliverExternalWebhookJob } = require("@modules/external-chat/services/externalWebhook.service");
+const ecommerceStoreService = require("@modules/ecommerce/services/ecommerceStore.service");
 const logger = require("@core/logger/logger");
 
 async function handleWebhookJob(job) {
-  if (job?.name !== "external-chat.deliver") {
-    return { skipped: true };
+  if (job?.name === "external-chat.deliver") {
+    return deliverExternalWebhookJob(job);
   }
-  return deliverExternalWebhookJob(job);
+  if (job?.name === "ecommerce.custom.process") {
+    return ecommerceStoreService.processCustomEventJob(job);
+  }
+  return { skipped: true };
 }
 
 function startWebhookWorker() {

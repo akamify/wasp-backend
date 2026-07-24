@@ -34,7 +34,8 @@ function isEcommerceWebhookPath(pathname) {
   const normalized = String(pathname || "").split("?")[0];
   return (
     /^\/(?:api\/)?ecommerce\/webhooks\/woocommerce\/[^/]+$/.test(normalized) ||
-    /^\/(?:api\/)?ecommerce\/webhooks\/shopify$/.test(normalized)
+    /^\/(?:api\/)?ecommerce\/webhooks\/shopify$/.test(normalized) ||
+    /^\/(?:api\/)?ecommerce\/webhooks\/custom\/[^/]+$/.test(normalized)
   );
 }
 
@@ -59,7 +60,14 @@ app.use(
 );
 
 app.use(
-  ["/ecommerce/webhooks/woocommerce", "/api/ecommerce/webhooks/woocommerce", "/ecommerce/webhooks/shopify", "/api/ecommerce/webhooks/shopify"],
+  [
+    "/ecommerce/webhooks/woocommerce",
+    "/api/ecommerce/webhooks/woocommerce",
+    "/ecommerce/webhooks/shopify",
+    "/api/ecommerce/webhooks/shopify",
+    "/ecommerce/webhooks/custom",
+    "/api/ecommerce/webhooks/custom",
+  ],
   express.raw({ type: "application/json", limit: "1mb" }),
 );
 
@@ -147,7 +155,7 @@ app.use(
       return cb(null, allowed);
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-workspace-id", "x-api-key"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-workspace-id", "x-api-key", "x-webhook-signature", "x-webhook-timestamp"],
     maxAge: 86400,
   }),
 );
