@@ -18,6 +18,7 @@ const {
 const {
   enableAutoRenew,
   confirmAutoRenew,
+  changePaymentMethod,
   disableAutoRenew,
   toggleAutoRenew,
   renewalSettings,
@@ -29,13 +30,18 @@ const router = express.Router();
 const checkoutSchema = Joi.object({
   planId: Joi.string().required(),
   durationMonths: Joi.number().integer().min(1).max(24).optional(),
+  mode: Joi.string().valid("autopay", "one_time").optional(),
+  fallbackAllowed: Joi.boolean().optional(),
 }).unknown(false);
 
 const verifyPaymentSchema = Joi.object({
-  razorpay_order_id: Joi.string().required(),
+  razorpay_order_id: Joi.string().optional(),
+  razorpay_subscription_id: Joi.string().optional(),
   razorpay_payment_id: Joi.string().required(),
   razorpay_signature: Joi.string().required(),
-}).unknown(false);
+})
+  .or("razorpay_order_id", "razorpay_subscription_id")
+  .unknown(false);
 
 const scheduleDowngradeSchema = Joi.object({
   planId: Joi.string().required(),
@@ -72,7 +78,7 @@ router.post("/auto-renew/enable", auth, requireWorkspace, requireWorkspacePermis
 router.post("/auto-renew/confirm", auth, requireWorkspace, requireWorkspacePermission("billing.manage"), validate(confirmAutoRenewSchema), asyncHandler(confirmAutoRenew));
 router.post("/auto-renew/disable", auth, requireWorkspace, requireWorkspacePermission("billing.manage"), asyncHandler(disableAutoRenew));
 router.post("/auto-renew/toggle", auth, requireWorkspace, requireWorkspacePermission("billing.manage"), validate(toggleAutoRenewSchema), asyncHandler(toggleAutoRenew));
-router.post("/change-payment-method", auth, requireWorkspace, requireWorkspacePermission("billing.manage"), asyncHandler(enableAutoRenew));
+router.post("/change-payment-method", auth, requireWorkspace, requireWorkspacePermission("billing.manage"), asyncHandler(changePaymentMethod));
 router.post(
   "/schedule-downgrade",
   auth,

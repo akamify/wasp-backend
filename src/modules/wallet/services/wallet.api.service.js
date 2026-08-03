@@ -16,6 +16,16 @@ function getRazorpayClient() {
   return new Razorpay({ key_id: razorpayKeyId, key_secret: razorpayKeySecret });
 }
 
+function verifyRazorpayOrderSignature({ orderId, paymentId, signature }) {
+  if (!razorpayKeySecret) throw new HttpError(400, "Razorpay credentials not configured");
+  const expected = crypto.createHmac("sha256", razorpayKeySecret).update(`${orderId}|${paymentId}`).digest("hex");
+  const received = String(signature || "");
+  if (!received || expected.length !== received.length) throw new HttpError(401, "Invalid payment signature");
+  if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(received))) {
+    throw new HttpError(401, "Invalid payment signature");
+  }
+}
+
 function buildReceipt(workspaceId) {
   const ws = String(workspaceId || "").replace(/[^a-zA-Z0-9]/g, "").slice(-10) || "ws";
   const ts = Date.now().toString(36);
@@ -82,6 +92,89 @@ async function walletHistory(req) {
   };
 }
 
+async function verifyRechargePayment(req) {
+  const workspaceId = String(req.workspace?.id || "");
+  const orderId = String(req.body?.razorpay_order_id || req.body?.orderId || "").trim();
+  const paymentId = String(req.body?.razorpay_payment_id || req.body?.paymentId || "").trim();
+  const signature = String(req.body?.razorpay_signature || req.body?.signature || "").trim();
+  if (!workspaceId) throw new HttpError(400, "Workspace is required");
+  if (!orderId || !paymentId || !signature) throw new HttpError(400, "Payment verification payload is incomplete");
+
+  verifyRazorpayOrderSignature({ orderId, paymentId, signature });
+
+  const existing = await walletRepository.findTransactionByProviderRef({
+    provider: "razorpay",
+    providerRef: paymentId,
+    type: "credit",
+  });
+  if (existing) {
+    const wallet = await walletCore.getOrCreateWallet(workspaceId);
+    return {
+      success: true,
+      alreadyCredited: true,
+      wallet: {
+        workspaceId: String(wallet.workspaceId),
+        balance: wallet.balance,
+        currency: wallet.currency,
+        lastRechargeAt: wallet.lastRechargeAt || null,
+      },
+      transactionId: String(existing._id),
+    };
+  }
+
+  let payment;
+  let order;
+  try {
+    const client = getRazorpayClient();
+    [payment, order] = await Promise.all([
+      client.payments.fetch(paymentId),
+      client.orders.fetch(orderId),
+    ]);
+  } catch (err) {
+    const providerMessage =
+      err?.error?.description ||
+      err?.response?.data?.error?.description ||
+      err?.response?.data?.error?.reason ||
+      err?.message ||
+      "Failed to verify Razorpay payment";
+    throw new HttpError(400, "Recharge verification failed", { providerError: providerMessage });
+  }
+
+  if (String(payment?.order_id || "") !== orderId) {
+    throw new HttpError(400, "Payment order mismatch");
+  }
+  if (String(payment?.status || "").toLowerCase() !== "captured") {
+    throw new HttpError(400, "Payment is not captured");
+  }
+
+  const orderWorkspaceId = String(order?.notes?.workspaceId || payment?.notes?.workspaceId || "").trim();
+  if (!orderWorkspaceId || orderWorkspaceId !== workspaceId) {
+    throw new HttpError(403, "Payment does not belong to this workspace");
+  }
+
+  const amount = Number(payment?.amount || 0) / 100;
+  const wallet = await walletCore.credit(workspaceId, amount, "Wallet recharge (Razorpay)", "razorpay", paymentId, {
+    verifiedVia: "api",
+    razorpayOrderId: orderId,
+  });
+
+  return {
+    success: true,
+    wallet: {
+      workspaceId: String(wallet.workspaceId),
+      balance: wallet.balance,
+      currency: wallet.currency,
+      lastRechargeAt: wallet.lastRechargeAt || null,
+    },
+    payment: {
+      id: paymentId,
+      orderId,
+      amount,
+      currency: payment?.currency || "INR",
+    },
+  };
+}
+
 async function razorpayWebhook(req) {
   if (!razorpayWebhookSecret) throw new HttpError(400, "RAZORPAY_WEBHOOK_SECRET not configured");
 
@@ -114,6 +207,13 @@ async function razorpayWebhook(req) {
   const amount = Number(payment?.amount || 0) / 100;
   const paymentId = payment?.id || "";
 
+  const existing = await walletRepository.findTransactionByProviderRef({
+    provider: "razorpay",
+    providerRef: paymentId,
+    type: "credit",
+  });
+  if (existing) return { success: true, duplicate: true };
+
   await walletCore.credit(workspaceId, amount, "Wallet recharge (Razorpay)", "razorpay", paymentId, { eventId: event?.id || null });
   return { success: true };
 }
@@ -121,6 +221,7 @@ async function razorpayWebhook(req) {
 module.exports = {
   getWallet,
   createRechargeOrder,
+  verifyRechargePayment,
   walletHistory,
   razorpayWebhook,
   getRazorpayClient,

@@ -47,11 +47,13 @@ async function assignConversation({
 
   // Optimistic locking on assignmentVersion.
   let conversation = await Conversation.findOne({ workspaceId, wabaId: scope.wabaId, phone }).select(
-    "_id assignedEmployeeId assignmentVersion lastInboundAt"
+    "_id assignedEmployeeId assignmentVersion lastInboundAt aiAgentId aiConversationId aiState aiHandoverAt aiHandoverReason"
   );
   if (!conversation) return { assigned: false, reason: "no_conversation" };
 
   const fromEmployeeId = conversation.assignedEmployeeId ? String(conversation.assignedEmployeeId) : null;
+  const hadAiOwnership = Boolean(conversation.aiAgentId || conversation.aiConversationId || conversation.aiState);
+  const previousAiState = String(conversation.aiState || "");
   const rawVersion = conversation.assignmentVersion;
   const hasVersion = typeof rawVersion === "number" && Number.isFinite(rawVersion);
   const currentVersion = hasVersion ? rawVersion : 0;
@@ -85,6 +87,16 @@ async function assignConversation({
         leadStatusUpdatedBy: assignedBy || { kind: "system" },
         lastLeadCreatedAt: now,
         normalizedPhone: String(phone),
+        ...(hadAiOwnership
+          ? {
+              aiState: "HUMAN_ACTIVE",
+              aiHandoverAt: conversation.aiHandoverAt || now,
+              aiHandoverReason:
+                String(conversation.aiHandoverReason || reason || "employee_assignment")
+                  .trim()
+                  .slice(0, 300),
+            }
+          : {}),
       },
     }
   );
@@ -138,6 +150,22 @@ async function assignConversation({
     actor: { kind: String(assignedBy?.kind || "system"), actorId: assignedBy?.actorId || undefined },
     payload: { fromEmployeeId, toEmployeeId, mode: mode || "ROUND_ROBIN", reason: reason || "" },
   }).catch(() => {});
+
+  if (hadAiOwnership && previousAiState !== "human") {
+    await writeConversationEvent({
+      workspaceId,
+      conversationId: conversation._id,
+      phone,
+      type: "ai_handover_taken_over",
+      actor: { kind: String(assignedBy?.kind || "system"), actorId: assignedBy?.actorId || undefined },
+      payload: {
+        previousState: previousAiState || null,
+        nextState: "human",
+        reason: String(reason || conversation.aiHandoverReason || "employee_assignment").trim().slice(0, 300),
+        assignedEmployeeId: String(toEmployeeId),
+      },
+    }).catch(() => {});
+  }
 
   publishWorkspaceEvent(workspaceId, { type: "assignment_changed", phone, assignedEmployeeId: String(toEmployeeId) });
 

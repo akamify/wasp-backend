@@ -28,6 +28,12 @@ async function findByRazorpaySubscriptionId(razorpaySubscriptionId) {
   }).sort({ createdAt: -1 });
 }
 
+async function findByPendingMandateSetupSubscriptionId(razorpaySubscriptionId) {
+  return Subscription.findOne({
+    "metadata.pendingMandateSetup.razorpaySubscriptionId": String(razorpaySubscriptionId || ""),
+  }).sort({ createdAt: -1 });
+}
+
 async function listExpiredActive(now, { limit = 100 } = {}) {
   return Subscription.find({
     status: { $in: ["active", "past_due"] },
@@ -131,6 +137,7 @@ module.exports = {
   findById,
   findPaymentDueByWorkspace,
   findByRazorpaySubscriptionId,
+  findByPendingMandateSetupSubscriptionId,
   listExpiredActive,
   claimLifecycleLock,
   releaseLifecycleLock,

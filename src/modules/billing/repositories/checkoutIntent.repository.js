@@ -8,9 +8,21 @@ async function findByRazorpayOrderId(orderId) {
   return BillingCheckoutIntent.findOne({ razorpayOrderId: String(orderId || "") });
 }
 
+async function findByRazorpaySubscriptionId(subscriptionId) {
+  return BillingCheckoutIntent.findOne({ razorpaySubscriptionId: String(subscriptionId || "") });
+}
+
 async function claimProcessingByRazorpayOrderId(orderId) {
   return BillingCheckoutIntent.findOneAndUpdate(
     { razorpayOrderId: String(orderId || ""), status: "payment_pending" },
+    { $set: { status: "processing" } },
+    { new: true }
+  );
+}
+
+async function claimProcessingByRazorpaySubscriptionId(subscriptionId) {
+  return BillingCheckoutIntent.findOneAndUpdate(
+    { razorpaySubscriptionId: String(subscriptionId || ""), status: { $in: ["payment_pending", "created"] } },
     { $set: { status: "processing" } },
     { new: true }
   );
@@ -40,12 +52,32 @@ async function markFailed(id, patch = {}, options = {}) {
   );
 }
 
+async function markCancelled(id, patch = {}, options = {}) {
+  return BillingCheckoutIntent.findByIdAndUpdate(
+    id,
+    { $set: { ...patch, status: "cancelled" } },
+    { new: true, session: options.session }
+  );
+}
+
+async function updateIntent(id, patch = {}, options = {}) {
+  return BillingCheckoutIntent.findByIdAndUpdate(
+    id,
+    { $set: { ...patch } },
+    { new: true, session: options.session }
+  );
+}
+
 module.exports = {
   createIntent,
   findByRazorpayOrderId,
+  findByRazorpaySubscriptionId,
   claimProcessingByRazorpayOrderId,
+  claimProcessingByRazorpaySubscriptionId,
   markPaymentPending,
   markPaid,
   markFailed,
+  markCancelled,
+  updateIntent,
 };
 

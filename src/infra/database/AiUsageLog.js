@@ -20,6 +20,7 @@ const AiUsageLogSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    executionKey: { type: String, trim: true, default: null, index: true },
     provider: { type: String, trim: true, default: "manual", index: true },
     model: { type: String, trim: true, default: "" },
     inputTokens: { type: Number, min: 0, default: 0 },
@@ -47,6 +48,15 @@ const AiUsageLogSchema = new mongoose.Schema(
 
 AiUsageLogSchema.index({ workspaceId: 1, createdAt: -1 });
 AiUsageLogSchema.index({ workspaceId: 1, agentId: 1, createdAt: -1 });
+AiUsageLogSchema.index(
+  { workspaceId: 1, executionKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      executionKey: { $type: "string" },
+    },
+  }
+);
 
 const AiUsageLog = mongoose.model("AiUsageLog", AiUsageLogSchema);
 

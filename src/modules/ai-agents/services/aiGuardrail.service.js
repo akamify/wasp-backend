@@ -90,7 +90,8 @@ function applyGuardrails({ agent, userMessage, reply, providerResult, conversati
   const blockedByPattern = BLOCKED_DEFAULT_PATTERNS.some((pattern) => pattern.test(userMessage));
   const blockedByTopic = textMatchesAny(userMessage, blockedTopics);
   const maxMessagesExceeded = existingMessageCount >= maxMessages * 2;
-  const lowConfidence = confidence < 0.55;
+  const threshold = Math.min(0.95, Math.max(0.1, Number(guardrails.confidenceThreshold || 0.55)));
+  const lowConfidence = confidence < threshold;
 
   if (blockedByPattern || blockedByTopic) {
     return {

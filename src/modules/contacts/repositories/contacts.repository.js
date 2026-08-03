@@ -125,6 +125,10 @@ async function countContactsCreatedBetween({ workspaceId, start, end }) {
   });
 }
 
+async function countStoredContacts({ workspaceId }) {
+  return Contact.countDocuments({ workspaceId });
+}
+
 async function countContactExportsBetween({ workspaceId, start, end }) {
   return AuditLog.countDocuments({
     action: "contacts.export.csv",
@@ -157,6 +161,7 @@ module.exports = {
   deleteContact,
   findContactsForExport,
   listContactTags,
+  countStoredContacts,
   countContactsCreatedBetween,
   countContactExportsBetween,
   writeContactExportAudit,

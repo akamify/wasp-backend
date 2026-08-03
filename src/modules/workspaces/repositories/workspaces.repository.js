@@ -16,13 +16,13 @@ const { User } = require("@infra/database/User");
 async function listActiveMembershipsForUser(userId) {
   return WorkspaceMember.find({ userId, status: "active" }).sort({ joinedAt: 1, createdAt: 1 }).populate({
     path: "workspaceId",
-    match: { isActive: true, status: { $ne: "deleted" } },
+    match: { isActive: true, status: "active" },
     select: "_id name slug businessName plan status createdAt defaultCurrency timezone",
   });
 }
 
 async function findAnyWorkspaceForOwner(ownerId) {
-  return Workspace.findOne({ ownerId }).sort({ createdAt: 1 }).select("_id name plan isActive createdAt");
+  return Workspace.findOne({ ownerId, isActive: true, status: "active" }).sort({ createdAt: 1 }).select("_id name plan isActive createdAt");
 }
 
 async function createWorkspace({ ownerId, name, slug, businessName, defaultCurrency, timezone, industry }) {
@@ -58,7 +58,7 @@ async function createWorkspace({ ownerId, name, slug, businessName, defaultCurre
 }
 
 async function findActiveWorkspaceById(workspaceId) {
-  return Workspace.findOne({ _id: workspaceId, isActive: true }).select(
+  return Workspace.findOne({ _id: workspaceId, isActive: true, status: "active" }).select(
     "_id ownerId name plan isActive allowedApiPermissions features"
   );
 }

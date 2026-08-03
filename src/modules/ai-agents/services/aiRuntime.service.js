@@ -9,6 +9,10 @@ const aiGuardrailService = require("@modules/ai-agents/services/aiGuardrail.serv
 const aiToolService = require("@modules/ai-agents/services/aiTool.service");
 const aiBillingService = require("@modules/ai-agents/services/aiBilling.service");
 const aiKnowledgeService = require("@modules/ai-agents/services/aiKnowledge.service");
+const {
+  tokensToCreditsExact,
+  getWorkspaceAiLimits,
+} = require("@modules/ai-agents/services/aiAddon.service");
 
 function assertValidObjectId(value, label) {
   if (!mongoose.Types.ObjectId.isValid(String(value || ""))) {
@@ -31,7 +35,7 @@ function serializeUsage(log) {
 
 function creditsForUsage(usage) {
   const totalTokens = Number(usage.inputTokens || 0) + Number(usage.outputTokens || 0);
-  return Math.max(1, Math.ceil(totalTokens / 1000));
+  return tokensToCreditsExact(totalTokens);
 }
 
 function serializeBilling(result) {
@@ -40,8 +44,9 @@ function serializeBilling(result) {
     enabled: Boolean(result.enabled),
     deducted: Boolean(result.deducted),
     creditsUsed: Number(result.creditsUsed || 0),
-    balance: result.wallet?.balance ?? null,
-    currency: result.wallet?.currency || null,
+    remainingCredits: result.remainingCredits ?? null,
+    remainingTokens: result.remainingTokens ?? null,
+    currency: result.currency || null,
   };
 }
 
@@ -82,6 +87,7 @@ async function testMessage({ workspaceId, agentId, payload }) {
     userMessage: message,
   });
   const startedAt = Date.now();
+  const aiLimits = await getWorkspaceAiLimits(workspaceId);
   let providerResult;
   let guardrail;
   let usageLog;
@@ -200,19 +206,45 @@ async function testMessage({ workspaceId, agentId, payload }) {
 
     await aiBillingService.ensureAiCredits({ workspaceId, minCredits: 1 });
     providerResult = await aiProviderService.generateResponse({
+      workspaceId,
       agent,
       userMessage: message,
       knowledgeChunks,
+      limits: aiLimits,
       ...promptPayload,
     });
     const plannedToolCall = aiToolService.parseToolCall(providerResult.reply);
+    const toolExecution = plannedToolCall
+      ? await aiToolService.executeRequestedTools({
+          workspaceId,
+          agent,
+          toolCalls: [plannedToolCall],
+          context: {
+            channel: "test",
+            contact,
+            contactId: contact?._id ? String(contact._id) : null,
+            conversation,
+            conversationId: conversation?._id ? String(conversation._id) : null,
+          },
+        })
+      : null;
+    const assistantReply = toolExecution?.publicReply || providerResult.reply;
     guardrail = aiGuardrailService.applyGuardrails({
       agent,
       userMessage: message,
-      reply: providerResult.reply,
+      reply: assistantReply,
       providerResult,
       conversation,
     });
+    if (toolExecution?.action && toolExecution.action !== "reply") {
+      guardrail = {
+        ...guardrail,
+        passed: false,
+        action: toolExecution.action,
+        reply: assistantReply,
+        reason: plannedToolCall?.name || "tool_action",
+      };
+    }
     const updatedConversation = await aiMemoryService.appendExchange({
       workspaceId,
       conversation,
@@ -274,6 +306,7 @@ async function testMessage({ workspaceId, agentId, payload }) {
           score: chunk.score,
           sourceId: chunk.sourceId,
         })),
+        toolExecution,
         billing,
         providerRaw: providerResult.raw || null,
       },
@@ -293,6 +326,7 @@ async function testMessage({ workspaceId, agentId, payload }) {
       conversation: aiMemoryService.serializeConversation(updatedConversation),
       tools: aiToolService.plannedTools(agent),
       plannedToolCall,
+      toolExecution,
       billing,
       sources: knowledgeChunks.map((chunk) => ({
         sourceId: chunk.sourceId,
@@ -306,8 +340,8 @@ async function testMessage({ workspaceId, agentId, payload }) {
       workspaceId,
       agentId,
       conversationId: conversation?._id || null,
-      provider: agent.modelProvider || "manual",
-      model: agent.modelName || "",
+      provider: "gemini",
+      model: agent.modelName || "gemini-1.5-flash",
       inputTokens: aiProviderService.estimateTokens(promptPayload.prompt),
       outputTokens: 0,
       totalTokens: aiProviderService.estimateTokens(promptPayload.prompt),

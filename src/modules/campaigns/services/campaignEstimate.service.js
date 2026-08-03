@@ -44,6 +44,12 @@ function buildRecipientFromRuntime(to, runtime) {
         to,
         variables: Array.isArray(runtime?.variables) ? runtime.variables : [],
         headerVariables: Array.isArray(runtime?.headerVariables) ? runtime.headerVariables : [],
+        headerLocation: runtime?.headerLocation && typeof runtime.headerLocation === "object" ? {
+            latitude: Number(runtime.headerLocation.latitude),
+            longitude: Number(runtime.headerLocation.longitude),
+            name: String(runtime.headerLocation.name || ""),
+            address: String(runtime.headerLocation.address || ""),
+        } : undefined,
         otpCode: runtime?.otpCode || undefined,
         buttonValues: Array.isArray(runtime?.buttonValues) ? runtime.buttonValues : [],
         buttonTtlMinutes: Array.isArray(runtime?.buttonTtlMinutes) ? runtime.buttonTtlMinutes : [],

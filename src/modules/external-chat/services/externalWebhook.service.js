@@ -6,6 +6,7 @@ const { webhookQueue } = require("@infra/queues/index");
 const { HttpError } = require("@shared/utils/httpError");
 const { toExternalContactDto } = require("@modules/external-chat/dto/externalContact.dto");
 const { mapExternalRealtimeEvent } = require("@modules/external-chat/services/externalRealtimeMap.service");
+const { checkLimit } = require("@modules/billing/services/usageLimit.service");
 
 const EXTERNAL_CHAT_WEBHOOK_EVENTS = [
   "message.created",
@@ -64,6 +65,7 @@ async function listWebhooks({ workspaceId, apiKeyId }) {
 }
 
 async function createWebhook({ workspaceId, apiKeyId, url, events }) {
+  await checkLimit(workspaceId, "webhooks");
   const secret = generateWebhookSecret();
   const doc = await ExternalChatWebhook.create({
     workspaceId,

@@ -3,6 +3,7 @@ const { sha256Hex } = require("@shared/utils/hash");
 const repo = require("@modules/api-keys/repositories/apiKey.repository");
 const { generateApiKeyRaw } = require("@modules/api-keys/utils/generateApiKey");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { checkLimit } = require("@modules/billing/services/usageLimit.service");
 
 function normalizeKeyItem(item) {
   return {
@@ -38,6 +39,7 @@ async function listMyApiKeys({ userId, workspaceId }) {
 
 async function generateApiKey({ userId, workspaceId, name }) {
   const scope = await requireActiveWabaScope(workspaceId);
+  await checkLimit(scope.workspaceId, "apiKeys");
   const user = await repo.findUserById(userId, "allowedApiPermissions");
   if (!user) throw new HttpError(404, "User not found");
   const raw = generateApiKeyRaw();

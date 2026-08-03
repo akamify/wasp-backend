@@ -2,7 +2,7 @@ const { HttpError } = require("@shared/utils/httpError");
 const { contactsRepository } = require("@modules/contacts/repositories/index");
 const { assertNormalizedPhone, normalizePhone } = require("@shared/services/contactService");
 const { subscriptionRepository } = require("@modules/billing/repositories");
-const { enforceMonthlyLimit } = require("@modules/billing/services/usageLimit.service");
+const { checkLimit, enforceMonthlyLimit, getUsageState } = require("@modules/billing/services/usageLimit.service");
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
 const { contactAttributesRepository } = require("@modules/contacts/repositories/index");
@@ -126,13 +126,7 @@ async function lookupContactByPhone(req) {
 
 async function createContact(req) {
   const scope = await requireActiveWabaScope(req.workspace.id);
-  await enforceMonthlyLimit({
-    workspaceId: req.workspace.id,
-    limitKey: "maxContacts",
-    errorMessage: "Monthly contact create limit reached for your current plan",
-    countInWindow: (start, end) =>
-      contactsRepository.countContactsCreatedBetween({ workspaceId: req.workspace.id, start, end }),
-  });
+  await checkLimit(req.workspace.id, "contacts");
 
   const phone = assertNormalizedPhone(req.body.phone);
   const duplicate = await contactsRepository.findIdByPhone({ workspaceId: req.workspace.id, wabaId: scope.wabaId, phone });
@@ -238,6 +232,8 @@ async function importContactsCsv(req) {
     duplicates: 0,
     errors: [],
   };
+  const contactLimitState = await getUsageState({ workspaceId: req.workspace.id, resourceKey: "contacts" });
+  let currentStoredContacts = Number(contactLimitState.currentUsage || 0);
   const seenPhones = new Set();
   const allImportTags = new Set();
   for (const row of rows) {
@@ -274,6 +270,14 @@ async function importContactsCsv(req) {
 
     const tags = normalizeImportTags(row.tags);
     try {
+      const existingContact = await contactsRepository.findByPhone({
+        workspaceId: req.workspace.id,
+        wabaId: scope.wabaId,
+        phone,
+      });
+      if (!existingContact) {
+        await checkLimit(req.workspace.id, "contacts", { currentUsage: currentStoredContacts });
+      }
       const result = await contactsRepository.upsertImportedContact({
         workspaceId: req.workspace.id,
         wabaId: scope.wabaId,
@@ -296,7 +300,10 @@ async function importContactsCsv(req) {
           attributes: normalizedAttributes.values,
         },
       });
-      if (result.action === "created") summary.created += 1;
+      if (result.action === "created") {
+        summary.created += 1;
+        currentStoredContacts += 1;
+      }
       else if (result.action === "updated") summary.updated += 1;
       else summary.skipped += 1;
     } catch (error) {

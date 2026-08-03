@@ -10,6 +10,16 @@ const { validatePublicMediaUrl } = require("@shared/utils/mediaValidation");
 const MAX_EXTRACTED_CHARS = 50000;
 const WEBSITE_TIMEOUT_MS = Number(process.env.AI_KB_WEBSITE_TIMEOUT_MS || 15000);
 const WEBSITE_MAX_BYTES = Number(process.env.AI_KB_WEBSITE_MAX_BYTES || 1024 * 1024);
+const PRODUCT_FILE_SIZE_LIMIT_BYTES = Number(process.env.AI_KB_FILE_SIZE_LIMIT_BYTES || 10 * 1024 * 1024);
+const SUPPORTED_UPLOAD_TYPES = [
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/csv",
+  "application/csv",
+  "application/vnd.ms-excel",
+  "text/comma-separated-values",
+  "text/plain",
+];
 
 function truncateKnowledge(text) {
   return String(text || "").slice(0, MAX_EXTRACTED_CHARS);
@@ -78,6 +88,12 @@ function extractTxt(buffer) {
 
 async function extractFile(file) {
   if (!file?.buffer || !Buffer.isBuffer(file.buffer)) throw new HttpError(400, "Knowledge file is required");
+  if (Number(file.size || file.buffer.length || 0) > PRODUCT_FILE_SIZE_LIMIT_BYTES) {
+    throw new HttpError(400, `Knowledge file exceeds ${Math.round(PRODUCT_FILE_SIZE_LIMIT_BYTES / (1024 * 1024))} MB limit.`);
+  }
+  if (file?.mimetype && !SUPPORTED_UPLOAD_TYPES.includes(String(file.mimetype))) {
+    throw new HttpError(400, "Unsupported knowledge file type");
+  }
   const type = detectFileType(file);
   let content = "";
   if (type === "pdf") content = await extractPdf(file.buffer);
@@ -162,4 +178,9 @@ module.exports = {
   fetchWebsiteText,
   htmlToText,
   detectFileType,
+  PRODUCT_FILE_SIZE_LIMIT_BYTES,
+  SUPPORTED_UPLOAD_TYPES,
+  WEBSITE_MAX_BYTES,
+  WEBSITE_TIMEOUT_MS,
+  MAX_EXTRACTED_CHARS,
 };

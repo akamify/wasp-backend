@@ -38,10 +38,70 @@ const AiAgentGuardrailsSchema = new mongoose.Schema(
     },
     handoverOnLowConfidence: { type: Boolean, default: true },
     maxMessagesPerSession: { type: Number, min: 1, max: 500, default: 50 },
+    confidenceThreshold: { type: Number, min: 0.1, max: 0.95, default: 0.55 },
     allowedTopics: { type: [String], default: [] },
     blockedTopics: { type: [String], default: [] },
   },
   { _id: false },
+);
+
+const AiAgentRuntimeControlsSchema = new mongoose.Schema(
+  {
+    businessHours: {
+      enabled: { type: Boolean, default: false },
+      timezone: { type: String, trim: true, maxlength: 80, default: "Asia/Calcutta" },
+      days: {
+        type: [String],
+        default: ["mon", "tue", "wed", "thu", "fri", "sat"],
+      },
+      startTime: { type: String, trim: true, maxlength: 5, default: "09:00" },
+      endTime: { type: String, trim: true, maxlength: 5, default: "18:00" },
+      afterHoursAction: {
+        type: String,
+        enum: ["reply_and_handover", "handover_only", "pause"],
+        default: "reply_and_handover",
+      },
+    },
+    escalationRules: {
+      enabled: { type: Boolean, default: false },
+      keywords: { type: [String], default: [] },
+      slaMinutes: { type: Number, min: 1, max: 1440, default: 30 },
+      action: {
+        type: String,
+        enum: ["handover", "pause"],
+        default: "handover",
+      },
+    },
+    conversationSla: {
+      enabled: { type: Boolean, default: false },
+      firstResponseMinutes: { type: Number, min: 1, max: 1440, default: 15 },
+    },
+    fallbackTemplates: {
+      afterHours: { type: String, trim: true, maxlength: 2000, default: "" },
+      escalation: { type: String, trim: true, maxlength: 2000, default: "" },
+      noAnswer: { type: String, trim: true, maxlength: 2000, default: "" },
+    },
+    routing: {
+      keywords: { type: [String], default: [] },
+      priority: { type: Number, min: 0, max: 1000, default: 100 },
+      channels: {
+        type: [String],
+        default: ["whatsapp", "test", "api"],
+      },
+    },
+  },
+  { _id: false }
+);
+
+const AiAgentVersionSchema = new mongoose.Schema(
+  {
+    version: { type: Number, min: 1, required: true },
+    changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    changedAt: { type: Date, default: Date.now },
+    reason: { type: String, trim: true, maxlength: 500, default: "" },
+    snapshot: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+  },
+  { _id: true }
 );
 
 const AiAgentSchema = new mongoose.Schema(
@@ -68,8 +128,8 @@ const AiAgentSchema = new mongoose.Schema(
     },
     modelProvider: {
       type: String,
-      enum: ["openai", "gemini", "manual"],
-      default: "manual",
+      enum: ["gemini"],
+      default: "gemini",
     },
     modelName: { type: String, trim: true, maxlength: 120, default: "" },
     systemPrompt: { type: String, trim: true, maxlength: 12000, default: "" },
@@ -86,6 +146,15 @@ const AiAgentSchema = new mongoose.Schema(
     guardrails: {
       type: AiAgentGuardrailsSchema,
       default: () => ({}),
+    },
+    runtimeControls: {
+      type: AiAgentRuntimeControlsSchema,
+      default: () => ({}),
+    },
+    version: { type: Number, min: 1, default: 1 },
+    versionHistory: {
+      type: [AiAgentVersionSchema],
+      default: [],
     },
     stats: {
       conversations: { type: Number, default: 0, min: 0 },

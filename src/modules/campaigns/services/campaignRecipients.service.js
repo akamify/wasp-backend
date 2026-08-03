@@ -30,6 +30,12 @@ async function retryFailedCampaign(req) {
         to: String(row.phone || ""),
         variables: Array.isArray(row.runtime?.variables) ? row.runtime.variables : [],
         headerVariables: Array.isArray(row.runtime?.headerVariables) ? row.runtime.headerVariables : [],
+        headerLocation: row.runtime?.headerLocation && typeof row.runtime.headerLocation === "object" ? {
+            latitude: Number(row.runtime.headerLocation.latitude),
+            longitude: Number(row.runtime.headerLocation.longitude),
+            name: String(row.runtime.headerLocation.name || ""),
+            address: String(row.runtime.headerLocation.address || ""),
+        } : undefined,
         otpCode: row.runtime?.otpCode ? String(row.runtime.otpCode) : "",
         buttonValues: Array.isArray(row.runtime?.buttonValues) ? row.runtime.buttonValues : [],
         buttonTtlMinutes: Array.isArray(row.runtime?.buttonTtlMinutes) ? row.runtime.buttonTtlMinutes : [],

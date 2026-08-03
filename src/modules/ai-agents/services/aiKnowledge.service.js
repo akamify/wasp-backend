@@ -42,6 +42,7 @@ function scoreChunk(chunk, queryTokens, query = "") {
   const normalizedQuery = String(query || "").toLowerCase().trim();
   const title = String(chunk.title || chunk.metadata?.sourceTitle || "").toLowerCase();
   const text = String(chunk.text || chunk.chunkText || "").toLowerCase();
+  const searchBoost = Math.min(10, Math.max(0, Number(chunk.searchBoost || chunk.metadata?.searchBoost || 1) || 1));
   let score = 0;
   if (normalizedQuery && title.includes(normalizedQuery)) score += 8;
   if (normalizedQuery && text.includes(normalizedQuery)) score += 5;
@@ -49,7 +50,7 @@ function scoreChunk(chunk, queryTokens, query = "") {
     if (title.includes(token)) score += 5;
     if (text.includes(token)) score += token.length > 5 ? 2 : 1;
   }
-  return score;
+  return Number((score * searchBoost).toFixed(2));
 }
 
 function normalizeLegacyChunk(chunk) {
@@ -62,6 +63,7 @@ function normalizeLegacyChunk(chunk) {
     url: chunk.url,
     text: chunk.text,
     score: Number(chunk.score || 0),
+    searchBoost: Number(chunk.searchBoost || 1),
     legacy: true,
   };
 }
@@ -76,6 +78,7 @@ function normalizeDbChunk(chunk, score = 0) {
     url: chunk.metadata?.sourceUrl || "",
     text: chunk.chunkText,
     score,
+    searchBoost: Number(chunk.metadata?.searchBoost || 1),
     legacy: false,
   };
 }

@@ -1,5 +1,6 @@
 const { HttpError } = require("@shared/utils/httpError");
-const walletCoreService = require("@modules/wallet/services/wallet.core.service");
+const aiAddonService = require("@modules/ai-agents/services/aiAddon.service");
+const { AiCreditTransaction } = require("@infra/database/AiCreditTransaction");
 
 function isCreditDeductionEnabled() {
   return String(process.env.AI_CREDIT_DEDUCTION_ENABLED || "true").toLowerCase() !== "false";
@@ -11,14 +12,51 @@ function normalizeCredits(value) {
   return Math.ceil(numeric);
 }
 
-async function ensureAiCredits({ workspaceId, minCredits = 1 }) {
+async function ensureAiCredits({ workspaceId, minCredits = 1, executionKey = null }) {
   if (!isCreditDeductionEnabled()) {
     return { enabled: false, checked: false };
   }
   const credits = normalizeCredits(minCredits);
   if (credits <= 0) return { enabled: true, checked: false };
-  const wallet = await walletCoreService.ensureBalance(workspaceId, credits);
-  return { enabled: true, checked: true, requiredCredits: credits, wallet };
+  const normalizedExecutionKey = String(executionKey || "").trim();
+  if (normalizedExecutionKey) {
+    const priorUsage = await AiCreditTransaction.findOne({
+      workspaceId,
+      type: "usage",
+      direction: "debit",
+      executionKey: normalizedExecutionKey,
+    })
+      .select("_id credits balanceAfter")
+      .lean();
+    if (priorUsage?._id) {
+      return {
+        enabled: true,
+        checked: false,
+        alreadyDeducted: true,
+        requiredCredits: credits,
+        remainingCredits: Number(priorUsage.balanceAfter?.remainingCredits || 0),
+        remainingTokens: Number(priorUsage.balanceAfter?.remainingTokens || 0),
+      };
+    }
+  }
+  const status = await aiAddonService.getAddonStatus({ workspaceId });
+  if (!status?.access?.enabled) {
+    throw new HttpError(403, "AI Agent add-on is not active for this workspace.", {
+      code: "AI_ADDON_REQUIRED",
+    });
+  }
+  if (Number(status.workspace?.remainingCredits || 0) < credits) {
+    throw new HttpError(402, "AI credits exhausted. Renew or top up your AI add-on.");
+  }
+  return {
+    enabled: true,
+    checked: true,
+    alreadyDeducted: false,
+    requiredCredits: credits,
+    remainingCredits: Number(status.workspace?.remainingCredits || 0),
+    remainingTokens: Number(status.workspace?.remainingTokens || 0),
+    currency: status.subscription?.currency || "INR",
+  };
 }
 
 async function deductAiCredits({ workspaceId, creditsUsed, meta = {} }) {
@@ -28,11 +66,14 @@ async function deductAiCredits({ workspaceId, creditsUsed, meta = {} }) {
   const credits = normalizeCredits(creditsUsed);
   if (credits <= 0) return { enabled: true, deducted: false, creditsUsed: 0 };
   try {
-    const wallet = await walletCoreService.debit(workspaceId, credits, "AI agent usage", {
-      ...meta,
-      billingKind: "ai_agent_usage",
+    return await aiAddonService.consumeIncludedCredits({
+      workspaceId,
+      creditsUsed: credits,
+      meta: {
+        ...meta,
+        billingKind: "ai_agent_usage",
+      },
     });
-    return { enabled: true, deducted: true, creditsUsed: credits, wallet };
   } catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(402, error?.message || "Unable to deduct AI credits");

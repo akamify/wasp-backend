@@ -8,6 +8,11 @@ const { hashIdempotencyParts } = require("@modules/billing/utils/idempotency");
 const { calculatePrice } = require("@modules/billing/utils/priceCalculator");
 const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
 const crypto = require("crypto");
+const { Workspace } = require("@infra/database/Workspace");
+const { Subscription } = require("@infra/database/Subscription");
+const { Plan } = require("@infra/database/Plan");
+const { AuditLog } = require("@infra/database/AuditLog");
+const { getWorkspaceEntitlements } = require("@modules/workspaces/services/workspaceEntitlement.service");
 
 function toObjectIdString(value) {
   return String(value || "").trim();
@@ -24,6 +29,32 @@ function parseScrollQuery(req) {
 function safeNumber(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function addMonths(date, months) {
+  const out = new Date(date);
+  out.setMonth(out.getMonth() + Number(months || 1));
+  return out;
+}
+
+function parseDateInput(value, endOfDay = false) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}${endOfDay ? "T23:59:59.999Z" : "T00:00:00.000Z"}` : raw;
+  const dt = new Date(normalized);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+function normalizeBoolFilter(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw || raw === "all") return null;
+  if (["1", "true", "enabled", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "disabled", "no", "off"].includes(raw)) return false;
+  return null;
+}
+
+function lower(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function resolvePaymentType(mode) {
@@ -46,15 +77,71 @@ function resolveTransactionId(sub) {
 }
 
 function normalizeLimitSnapshot(raw = {}) {
+  const pick = (value, fallback = 0) => (value === null ? null : (value === undefined ? fallback : value));
   return {
-    maxContacts: raw.maxContacts ?? 0,
-    maxTemplates: raw.maxTemplates ?? 0,
-    maxEmployees: raw.maxEmployees ?? 0,
-    maxApiKeys: raw.maxApiKeys ?? 0,
-    maxCampaignsPerMonth: raw.maxCampaignsPerMonth ?? 0,
-    maxContactsExport: raw.maxContactsExport ?? raw.maxExportsPerMonth ?? 0,
-    maxStorageMb: raw.maxStorageMb ?? 0,
+    maxContacts: pick(raw.maxContacts),
+    maxTemplates: pick(raw.maxTemplates),
+    maxEmployees: pick(raw.maxEmployees, raw.maxAgents),
+    maxApiKeys: pick(raw.maxApiKeys),
+    maxCampaignsPerMonth: pick(raw.maxCampaignsPerMonth),
+    maxContactsExport: pick(raw.maxContactsExport, raw.maxExportsPerMonth ?? 0),
+    maxStorageMb: pick(raw.maxStorageMb),
+    maxWebhooks: pick(raw.maxWebhooks),
+    maxFlows: pick(raw.maxFlows),
+    maxMediaSizeMb: pick(raw.maxMediaSizeMb),
+    dailyMessageLimit: pick(raw.dailyMessageLimit),
   };
+}
+
+function isWorkspaceBlocked(workspace) {
+  return String(workspace?.status || "active") !== "active" || workspace?.isActive === false;
+}
+
+function buildAiDiagnostics({ workspace, subscription, plan, entitlements }) {
+  const paidPlan = lower(subscription?.planSlug || workspace?.plan) && lower(subscription?.planSlug || workspace?.plan) !== "free";
+  const explicitAiAccess = plan ? Boolean(plan.features?.aiAgentsPageAccess) : Boolean(subscription?.snapshot?.features?.aiAgentsPageAccess);
+  const effectiveAiAccess = Boolean(entitlements?.features?.aiAgentsPageAccess);
+  const blocked = isWorkspaceBlocked(workspace);
+  const aiAddonActive = Boolean(workspace?.aiAgentEnabled);
+  let aiBlockedReason = null;
+  if (blocked) aiBlockedReason = "workspace_blocked";
+  else if (!paidPlan) aiBlockedReason = "plan_upgrade_required";
+  else if (!effectiveAiAccess) aiBlockedReason = "feature_disabled";
+  else if (aiAddonActive) aiBlockedReason = "ai_addon_active";
+  return {
+    aiAgentsPageAccess: effectiveAiAccess,
+    aiFeatureEligible: !blocked && effectiveAiAccess,
+    aiPurchaseEligible: !blocked && effectiveAiAccess && !aiAddonActive,
+    aiBlockedReason,
+    aiMismatch: Boolean(paidPlan && effectiveAiAccess && explicitAiAccess !== effectiveAiAccess),
+  };
+}
+
+async function loadWorkspaceAuditTimeline(workspaceId, limit = 25) {
+  const items = await AuditLog.find({
+    $or: [{ resourceId: String(workspaceId) }, { "metadata.workspaceId": String(workspaceId) }],
+  })
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean();
+  return items.map((row) => ({
+    id: String(row._id),
+    action: row.action,
+    resourceType: row.resourceType || "",
+    resourceId: row.resourceId || "",
+    metadata: row.metadata || {},
+    actorId: row.actorId ? String(row.actorId) : null,
+    createdAt: row.createdAt || null,
+  }));
+}
+
+function applyWorkspacePlanState(workspace, planSlug, features = {}) {
+  workspace.plan = planSlug || "free";
+  workspace.crmEnabled = Boolean(features?.crmPageAccess || features?.crmAccess);
+  workspace.features = workspace.features || {};
+  workspace.features.externalChatApiAccess = Boolean(features?.externalChatApiAccess);
+  workspace.allowedApiPermissions = workspace.allowedApiPermissions || {};
+  workspace.allowedApiPermissions.chatAccess = Boolean(features?.externalChatApiAccess);
 }
 
 function buildUsageMetric(used, limit) {
@@ -114,17 +201,111 @@ async function subscriptionPlans() {
 }
 
 async function subscriptionsData(req) {
-  const { page, limit, skip, rx } = billingValidation.parseListQuery(req);
+  const { page, limit, rx } = billingValidation.parseListQuery(req);
   const filter = rx ? { $or: [{ name: rx }, { plan: rx }] } : {};
+  const planId = String(req.query.planId || "").trim();
+  const subscriptionStatus = lower(req.query.status);
+  const workspaceStatus = lower(req.query.workspaceStatus);
+  const billingMode = lower(req.query.billingMode);
+  const autoRenew = normalizeBoolFilter(req.query.autoRenew);
+  const dateFrom = parseDateInput(req.query.dateFrom, false);
+  const dateTo = parseDateInput(req.query.dateTo, true);
 
-  const { total, workspaces, planSummary, latestByWorkspace } = await billingRepository.listSubscriptionsData({ filter, skip, limit });
+  const { workspaces, latestByWorkspace } = await billingRepository.listWorkspaceSubscriptions({ filter });
   const ownerById = await billingRepository.loadOwnersForWorkspaces(workspaces);
+  const planIds = Array.from(
+    new Set(
+      workspaces
+        .map((workspace) => latestByWorkspace.get(String(workspace._id)))
+        .filter(Boolean)
+        .map((subscription) => String(subscription.planId || ""))
+        .filter(Boolean)
+    )
+  );
+  const plans = planIds.length
+    ? await Plan.find({ _id: { $in: planIds } }).select("slug name features.aiAgentsPageAccess").lean()
+    : [];
+  const planById = new Map(plans.map((plan) => [String(plan._id), plan]));
 
-  const items = workspaces.map((w) => {
-    const owner = ownerById.get(String(w.ownerId));
-    const subscription = latestByWorkspace.get(String(w._id)) || null;
-    return mapWorkspaceSubscriptionItem(w, owner, subscription);
-  });
+  const filteredItems = [];
+  for (const workspace of workspaces) {
+    const owner = ownerById.get(String(workspace.ownerId));
+    const subscription = latestByWorkspace.get(String(workspace._id)) || null;
+    const item = mapWorkspaceSubscriptionItem(workspace, owner, subscription);
+    const entitlementSnapshot = await getWorkspaceEntitlements(workspace._id);
+    const plan = subscription?.planId ? planById.get(String(subscription.planId)) || null : null;
+    const purchasedAt = subscription?.createdAt ? new Date(subscription.createdAt) : null;
+    const paymentType = resolvePaymentType(subscription?.paymentMode);
+
+    if (planId) {
+      const matchesPlan =
+        String(subscription?.planId || "") === planId ||
+        lower(subscription?.planSlug) === lower(planId) ||
+        lower(subscription?.planName) === lower(planId);
+      if (!matchesPlan) continue;
+    }
+    if (subscriptionStatus && subscriptionStatus !== "all" && lower(subscription?.status) !== subscriptionStatus) continue;
+    if (workspaceStatus && workspaceStatus !== "all" && lower(workspace?.status) !== workspaceStatus) continue;
+    if (billingMode && billingMode !== "all" && lower(paymentType) !== billingMode && lower(subscription?.paymentMode) !== billingMode) continue;
+    if (autoRenew !== null && Boolean(subscription?.autoRenewEnabled) !== autoRenew) continue;
+    if (dateFrom && (!purchasedAt || purchasedAt < dateFrom)) continue;
+    if (dateTo && (!purchasedAt || purchasedAt > dateTo)) continue;
+
+    filteredItems.push({
+      ...item,
+      workspaceStatus: workspace.status || "active",
+      aiDiagnostics: buildAiDiagnostics({
+        workspace,
+        subscription,
+        plan,
+        entitlements: entitlementSnapshot,
+      }),
+    });
+  }
+
+  const total = filteredItems.length;
+  const skip = (page - 1) * limit;
+  const items = filteredItems.slice(skip, skip + limit);
+  const rollupMap = new Map();
+  let totalRevenuePaise = 0;
+  let activeSubscriptions = 0;
+  let cancelledSubscriptions = 0;
+  let blockedWorkspaces = 0;
+  let autoRenewEnabledCount = 0;
+
+  for (const item of filteredItems) {
+    const subscription = item.subscription || {};
+    const key = String(subscription.planSlug || item.plan || "free").toLowerCase() || "free";
+    const rollup = rollupMap.get(key) || {
+      plan: key,
+      planName: subscription.planName || item.plan || "Free",
+      workspaceCount: 0,
+      purchasesCount: 0,
+      activeCount: 0,
+      cancelledCount: 0,
+      blockedCount: 0,
+      revenuePaise: 0,
+    };
+    rollup.workspaceCount += 1;
+    if (subscription.id) rollup.purchasesCount += 1;
+    if (["active", "past_due", "grace_period"].includes(lower(subscription.subscriptionStatus))) {
+      rollup.activeCount += 1;
+      activeSubscriptions += 1;
+    }
+    if (["cancelled", "expired", "replaced", "suspended"].includes(lower(subscription.subscriptionStatus))) {
+      rollup.cancelledCount += 1;
+      cancelledSubscriptions += 1;
+    }
+    if (item.workspaceStatus === "suspended") {
+      rollup.blockedCount += 1;
+      blockedWorkspaces += 1;
+    }
+    if (subscription.autoRenewEnabled) autoRenewEnabledCount += 1;
+    rollup.revenuePaise += safeNumber(subscription.payableAmountPaise, 0);
+    totalRevenuePaise += safeNumber(subscription.payableAmountPaise, 0);
+    rollupMap.set(key, rollup);
+  }
+  const planRollups = Array.from(rollupMap.values()).sort((a, b) => b.workspaceCount - a.workspaceCount);
 
   return {
     success: true,
@@ -137,7 +318,16 @@ async function subscriptionsData(req) {
         total,
         totalPages: Math.max(1, Math.ceil(total / limit)),
       },
-      summary: planSummary.map(mapPlanSummaryItem),
+      summary: planRollups.map((entry) => ({ plan: entry.plan, count: entry.workspaceCount })),
+      analytics: {
+        totalWorkspaces: total,
+        activeSubscriptions,
+        cancelledSubscriptions,
+        blockedWorkspaces,
+        autoRenewEnabledCount,
+        totalRevenuePaise,
+        planRollups,
+      },
     },
   };
 }
@@ -151,7 +341,10 @@ async function getWorkspaceSubscriptionOverview(req) {
 
   const owner = await billingRepository.findOwnerById(workspace.ownerId);
   const subscription = await subscriptionRepository.findLatestByWorkspace(workspace._id);
+  const plan = subscription?.planId ? await Plan.findById(subscription.planId).select("slug name features.aiAgentsPageAccess").lean() : null;
+  const entitlements = await getWorkspaceEntitlements(workspace._id);
   const usageCounts = await billingRepository.countWorkspaceUsage(workspace._id);
+  const auditTimeline = await loadWorkspaceAuditTimeline(workspace._id);
 
   const mapped = mapWorkspaceSubscriptionItem(workspace, owner, subscription);
   const limits = normalizeLimitSnapshot(mapped.subscription?.limits || {});
@@ -161,6 +354,11 @@ async function getWorkspaceSubscriptionOverview(req) {
     templates: buildUsageMetric(usageCounts.templatesCount, limits.maxTemplates),
     employees: buildUsageMetric(usageCounts.employeesCount, limits.maxEmployees),
     campaigns: buildUsageMetric(usageCounts.campaignsCount, limits.maxCampaignsPerMonth),
+    apiKeys: buildUsageMetric(usageCounts.apiKeysCount, limits.maxApiKeys),
+    webhooks: buildUsageMetric(usageCounts.webhooksCount, limits.maxWebhooks),
+    flows: buildUsageMetric(usageCounts.flowsCount, limits.maxFlows),
+    storage: buildUsageMetric(Number(((usageCounts.storageBytes || 0) / (1024 * 1024)).toFixed(2)), limits.maxStorageMb),
+    dailyMessages: buildUsageMetric(usageCounts.outboundMessagesTodayCount, limits.dailyMessageLimit),
   };
 
   return {
@@ -171,6 +369,9 @@ async function getWorkspaceSubscriptionOverview(req) {
         ...mapped,
         workspaceId: mapped.id,
         usage,
+        workspaceStatus: workspace.status || "active",
+        aiDiagnostics: buildAiDiagnostics({ workspace, subscription, plan, entitlements }),
+        auditTimeline,
       },
     },
   };
@@ -306,12 +507,8 @@ async function assignPlanToWorkspace(req) {
     assignmentReason: String(req.body?.reason || "").trim(),
   });
 
-  workspace.plan = plan.slug;
-  workspace.crmEnabled = Boolean(plan.features?.crmAccess);
-  workspace.features = workspace.features || {};
-  workspace.features.externalChatApiAccess = Boolean(plan.features?.externalChatApiAccess);
-  workspace.allowedApiPermissions = workspace.allowedApiPermissions || {};
-  workspace.allowedApiPermissions.chatAccess = Boolean(plan.features?.externalChatApiAccess);
+  applyWorkspacePlanState(workspace, plan.slug, plan.features || {});
+  workspace.status = "active";
   await workspace.save();
 
   return {
@@ -434,18 +631,25 @@ async function disableActivePlanForWorkspace(req) {
   }
 
   const now = new Date();
+  const before = {
+    workspaceStatus: workspace.status || "active",
+    planSlug: active.planSlug || workspace.plan || "free",
+    subscriptionStatus: active.status || "active",
+  };
   active.status = "cancelled";
   active.cancelledAt = now;
   active.cancelAtPeriodEnd = false;
   active.autoRenewEnabled = false;
+  active.renewalStatus = "disabled";
+  active.metadata = {
+    ...(active.metadata || {}),
+    disabledBy: req.user?.id || null,
+    disabledReason: String(req.body?.reason || "Workspace plan deactivated").trim(),
+    disabledBySuperAdmin: Boolean(req.body?.superAdminAction),
+  };
   await active.save();
 
-  workspace.plan = "free";
-  workspace.crmEnabled = false;
-  workspace.features = workspace.features || {};
-  workspace.features.externalChatApiAccess = false;
-  workspace.allowedApiPermissions = workspace.allowedApiPermissions || {};
-  workspace.allowedApiPermissions.chatAccess = false;
+  applyWorkspacePlanState(workspace, "free", {});
   await workspace.save();
 
   return {
@@ -456,6 +660,189 @@ async function disableActivePlanForWorkspace(req) {
       subscriptionId: String(active._id),
       disabled: true,
       disabledAt: now,
+      before,
+      after: {
+        workspaceStatus: workspace.status || "active",
+        planSlug: "free",
+        subscriptionStatus: active.status,
+      },
+    },
+  };
+}
+
+async function activateWorkspacePlanForWorkspace(req) {
+  const workspaceId = toObjectIdString(req.params.workspaceId);
+  if (!workspaceId) throw new HttpError(400, "workspaceId is required");
+
+  const workspace = await Workspace.findById(workspaceId);
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+
+  const active = await subscriptionRepository.findActiveByWorkspace(workspace._id);
+  const before = {
+    workspaceStatus: workspace.status || "active",
+    planSlug: active?.planSlug || workspace.plan || "free",
+    subscriptionStatus: active?.status || null,
+  };
+
+  if (active) {
+    workspace.status = "active";
+    await workspace.save();
+    return {
+      success: true,
+      message: "Workspace access restored successfully.",
+      data: {
+        workspaceId: String(workspace._id),
+        subscriptionId: String(active._id),
+        activated: true,
+        before,
+        after: {
+          workspaceStatus: workspace.status || "active",
+          planSlug: active.planSlug || workspace.plan || "free",
+          subscriptionStatus: active.status,
+        },
+      },
+    };
+  }
+
+  const latest = await Subscription.findOne({ workspaceId: workspace._id }).sort({ createdAt: -1 });
+  if (!latest) throw new HttpError(404, "No previous plan assignment found for this workspace");
+
+  const plan = latest.planId ? await planRepository.findById(latest.planId) : null;
+  const now = new Date();
+  const currentPeriodEnd = addMonths(now, Math.max(1, Number(latest.durationMonths || 1)));
+  const restoredFeatures = plan?.features || latest.snapshot?.features || {};
+  const restoredLimits = plan?.limits || latest.snapshot?.limits || {};
+  const restored = await subscriptionRepository.createSubscription({
+    workspaceId: workspace._id,
+    userId: latest.userId || workspace.ownerId,
+    planId: plan?._id || latest.planId,
+    planSlug: plan?.slug || latest.planSlug,
+    planName: plan?.name || latest.planName,
+    planType: latest.planType || plan?.planType || "custom",
+    status: "active",
+    currentPeriodStart: now,
+    currentPeriodEnd,
+    startedAt: now,
+    purchasedAt: now,
+    validUntil: currentPeriodEnd,
+    durationMonths: Math.max(1, Number(latest.durationMonths || 1)),
+    autoRenewEnabled: false,
+    cancelAtPeriodEnd: false,
+    snapshot: {
+      price: latest.snapshot?.price || {},
+      gst: latest.snapshot?.gst || {},
+      features: restoredFeatures,
+      limits: restoredLimits,
+      displayFeatures: latest.snapshot?.displayFeatures || [],
+      unavailableFeatures: latest.snapshot?.unavailableFeatures || [],
+      addonServices: latest.snapshot?.addonServices || [],
+    },
+    paymentMode: "manual",
+    assignedBy: req.user?.id || null,
+    assignmentReason: String(req.body?.reason || "Workspace plan activated by super admin").trim(),
+    renewalMethod: "manual",
+    renewalStatus: "manual_due",
+    mandateStatus: "not_setup",
+  });
+
+  applyWorkspacePlanState(workspace, restored.planSlug || plan?.slug || latest.planSlug, restoredFeatures);
+  workspace.status = "active";
+  await workspace.save();
+
+  return {
+    success: true,
+    message: "Workspace plan activated successfully.",
+    data: {
+      workspaceId: String(workspace._id),
+      subscriptionId: String(restored._id),
+      activated: true,
+      before,
+      after: {
+        workspaceStatus: workspace.status || "active",
+        planSlug: restored.planSlug || workspace.plan || "free",
+        subscriptionStatus: restored.status,
+      },
+    },
+  };
+}
+
+async function blockWorkspacePlanAccess(req) {
+  const workspaceId = toObjectIdString(req.params.workspaceId);
+  if (!workspaceId) throw new HttpError(400, "workspaceId is required");
+
+  const workspace = await Workspace.findById(workspaceId);
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+
+  const active = await subscriptionRepository.findActiveByWorkspace(workspace._id);
+  const before = {
+    workspaceStatus: workspace.status || "active",
+    planSlug: active?.planSlug || workspace.plan || "free",
+    subscriptionStatus: active?.status || null,
+  };
+  workspace.status = "suspended";
+  await workspace.save();
+
+  return {
+    success: true,
+    message: "Workspace blocked successfully.",
+    data: {
+      workspaceId: String(workspace._id),
+      blocked: true,
+      before,
+      after: {
+        workspaceStatus: workspace.status || "suspended",
+        planSlug: workspace.plan || "free",
+        subscriptionStatus: active?.status || null,
+      },
+    },
+  };
+}
+
+async function deleteWorkspacePlanAssignment(req) {
+  const workspaceId = toObjectIdString(req.params.workspaceId);
+  if (!workspaceId) throw new HttpError(400, "workspaceId is required");
+
+  const workspace = await Workspace.findById(workspaceId);
+  if (!workspace) throw new HttpError(404, "Workspace not found");
+
+  const active = await subscriptionRepository.findActiveByWorkspace(workspace._id);
+  const before = {
+    workspaceStatus: workspace.status || "active",
+    planSlug: active?.planSlug || workspace.plan || "free",
+    subscriptionStatus: active?.status || null,
+  };
+
+  if (active) {
+    active.status = "cancelled";
+    active.cancelledAt = new Date();
+    active.cancelAtPeriodEnd = false;
+    active.autoRenewEnabled = false;
+    active.renewalStatus = "disabled";
+    active.metadata = {
+      ...(active.metadata || {}),
+      assignmentDeletedAt: new Date(),
+      assignmentDeletedBy: req.user?.id || null,
+      assignmentDeleteReason: String(req.body?.reason || "Workspace plan assignment removed by super admin").trim(),
+    };
+    await active.save();
+  }
+
+  applyWorkspacePlanState(workspace, "free", {});
+  await workspace.save();
+
+  return {
+    success: true,
+    message: "Workspace plan assignment removed successfully.",
+    data: {
+      workspaceId: String(workspace._id),
+      subscriptionId: active ? String(active._id) : null,
+      deleted: true,
+      before,
+      after: {
+        workspaceStatus: workspace.status || "active",
+        planSlug: "free",
+        subscriptionStatus: active?.status || null,
+      },
     },
   };
 }
@@ -475,5 +862,8 @@ module.exports = {
   createWorkspacePaymentLink,
   cancelWorkspacePaymentLink,
   disableActivePlanForWorkspace,
+  activateWorkspacePlanForWorkspace,
+  blockWorkspacePlanAccess,
+  deleteWorkspacePlanAssignment,
   paymentGateway,
 };

@@ -25,6 +25,9 @@ function errorHandler(err, req, res, next) {
   res.status(statusCode).json({
     success: false,
     message,
+    ...(typeof err?.details?.providerError === "string" && err.details.providerError.trim()
+      ? { providerError: err.details.providerError.trim() }
+      : {}),
     ...(err.details ? { details: err.details } : {}),
   });
 }

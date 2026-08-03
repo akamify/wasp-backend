@@ -4,6 +4,10 @@ const {
 } = require("@shared/utils/mediaValidation");
 const mediaAssetRepository = require("@modules/media/repositories/mediaAsset.repository");
 const { uploadMediaObject } = require("@modules/media/services/mediaStorage.service");
+const {
+  assertMediaFileSizeAllowed,
+  assertStorageQuotaAvailable,
+} = require("@modules/billing/services/workspaceQuota.service");
 
 function serializeMediaAsset(asset) {
   return {
@@ -30,6 +34,14 @@ async function uploadMediaAsset({
   if (!file) {
     throw new HttpError(400, "File is required", { code: "MEDIA_FILE_REQUIRED" });
   }
+  await assertMediaFileSizeAllowed({
+    workspaceId,
+    fileSizeBytes: file.size,
+  });
+  await assertStorageQuotaAvailable({
+    workspaceId,
+    incomingBytes: file.size,
+  });
   const validation = validateMediaFile({
     mediaType,
     mimeType: file.mimetype,

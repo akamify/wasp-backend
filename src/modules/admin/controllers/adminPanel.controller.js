@@ -205,17 +205,39 @@ async function adminListMasterCampaigns(req, res) {
 async function adminListMasterTemplates(req, res) {
   const { page, limit, skip } = parsePaging(req);
   const rx = buildSearchRegex(req);
+  const ownerTypeFilter = parseFilter(req, ["all", "system", "workspace"], "all");
+  const statusFilter = parseFilter(req, ["all", "draft", "published", "archived"], "all");
+  const featuredFilter = parseFilter(req, ["all", "featured", "standard"], "all");
+  const categoryFilter = normalizeListOption(req.query.category);
+  const industryFilter = normalizeListOption(req.query.industry);
+  const sortKey = parseSort(req, ["recent", "old", "name", "popular"], "recent");
   const filter = rx
     ? { $or: [{ name: rx }, { status: rx }, { language: rx }, { category: rx }, { source: rx }] }
     : {};
+  const query = {
+    ...filter,
+    ...(ownerTypeFilter === "all" ? {} : { ownerType: ownerTypeFilter }),
+    ...(statusFilter === "all" ? {} : { status: statusFilter }),
+    ...(featuredFilter === "all" ? {} : { featured: featuredFilter === "featured" }),
+    ...(categoryFilter && categoryFilter !== "all" ? { category: categoryFilter } : {}),
+    ...(industryFilter && industryFilter !== "all" ? { industry: industryFilter } : {}),
+  };
+  const sort =
+    sortKey === "old"
+      ? { updatedAt: 1 }
+      : sortKey === "name"
+        ? { name: 1, updatedAt: -1 }
+        : sortKey === "popular"
+          ? { popularity: -1, featured: -1, updatedAt: -1 }
+          : { featured: -1, updatedAt: -1 };
 
   const [total, templates] = await Promise.all([
-    Template.countDocuments(filter),
-    Template.find(filter)
-      .sort({ updatedAt: -1 })
+    Template.countDocuments(query),
+    Template.find(query)
+      .sort(sort)
       .skip(skip)
       .limit(limit)
-      .select("workspaceId name language category status source rejectedReason updatedAt createdAt"),
+      .select("workspaceId ownerType name language category status source rejectedReason updatedAt createdAt featured tags industry libraryCategory templatePackKey templatePackName templatePackOrder thumbnail isOfficial popularity"),
   ]);
 
   const workspaceIds = Array.from(new Set(templates.map((t) => String(t.workspaceId)).filter(isValidObjectId)));
@@ -235,7 +257,18 @@ async function adminListMasterTemplates(req, res) {
           language: t.language,
           category: t.category,
           status: t.status,
+          ownerType: t.ownerType || "workspace",
           source: t.source,
+          featured: Boolean(t.featured),
+          tags: Array.isArray(t.tags) ? t.tags : [],
+          industry: t.industry || null,
+          libraryCategory: t.libraryCategory || null,
+          templatePackKey: t.templatePackKey || null,
+          templatePackName: t.templatePackName || null,
+          templatePackOrder: Number(t.templatePackOrder || 0),
+          thumbnail: t.thumbnail || null,
+          isOfficial: Boolean(t.isOfficial),
+          popularity: Number(t.popularity || 0),
           updatedAt: t.updatedAt,
           createdAt: t.createdAt,
           workspace: w

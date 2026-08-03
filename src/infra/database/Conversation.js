@@ -1,4 +1,8 @@
 const mongoose = require("mongoose");
+const {
+  AI_STATE_VALUES,
+  normalizeAiState,
+} = require("@modules/ai-agents/constants/aiRuntime.constants");
 
 const ConversationSchema = new mongoose.Schema(
   {
@@ -50,6 +54,31 @@ const ConversationSchema = new mongoose.Schema(
     closedAt: { type: Date, default: null, index: true },
     reopenedAt: { type: Date, default: null, index: true },
 
+    aiAgentId: { type: mongoose.Schema.Types.ObjectId, ref: "AiAgent", default: null, index: true },
+    aiConversationId: { type: mongoose.Schema.Types.ObjectId, ref: "AiConversation", default: null, index: true },
+    aiState: {
+      type: String,
+      enum: AI_STATE_VALUES,
+      default: null,
+      index: true,
+      set: (value) => normalizeAiState(value, { fallback: null }),
+      get: (value) => normalizeAiState(value, { fallback: null }),
+    },
+    aiLastInboundAt: { type: Date, default: null, index: true },
+    aiLastReplyAt: { type: Date, default: null, index: true },
+    aiHandoverAt: { type: Date, default: null, index: true },
+    aiHandoverReason: { type: String, trim: true, default: null },
+    aiBusinessHoursStatus: { type: String, enum: ["within_hours", "after_hours"], default: null, index: true },
+    aiSlaDueAt: { type: Date, default: null, index: true },
+    aiEscalatedAt: { type: Date, default: null, index: true },
+    aiEscalationLevel: { type: Number, default: 0, min: 0 },
+    aiEscalationReason: { type: String, trim: true, default: null },
+    aiLastErrorAt: { type: Date, default: null },
+    aiLastErrorMessage: { type: String, trim: true, default: null },
+    aiProcessingLockUntil: { type: Date, default: null, index: true },
+    aiProcessingMessageId: { type: String, trim: true, default: null },
+    aiProcessingLockOwner: { type: String, trim: true, default: null },
+
     leadStatus: {
       type: String,
       enum: ["OPEN", "PENDING", "FOLLOW_UP", "WON", "LOST", "REOPENED", "UNASSIGNED"],
@@ -62,7 +91,11 @@ const ConversationSchema = new mongoose.Schema(
 
     normalizedPhone: { type: String, default: "", index: true },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: { getters: true },
+    toObject: { getters: true },
+  }
 );
 
 ConversationSchema.index({ workspaceId: 1, wabaId: 1, phone: 1 }, { unique: true });

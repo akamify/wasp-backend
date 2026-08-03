@@ -3,6 +3,8 @@ const aiKnowledgeRepository = require("@modules/ai-agents/repositories/aiKnowled
 
 const MIN_CHUNK_CHARS = 40;
 const MAX_CHUNK_CHARS = 900;
+const ABSOLUTE_MAX_CHUNK_CHARS = 2000;
+const ABSOLUTE_MAX_SOURCE_CHUNKS = 1000;
 
 function cleanText(value) {
   return String(value || "")
@@ -38,13 +40,21 @@ function splitIntoSentences(text) {
     .filter(Boolean);
 }
 
-function splitChunks(text) {
+function splitChunks(text, options = {}) {
+  const chunkSize = Math.min(
+    ABSOLUTE_MAX_CHUNK_CHARS,
+    Math.max(MIN_CHUNK_CHARS, Number(options.chunkSize || MAX_CHUNK_CHARS) || MAX_CHUNK_CHARS)
+  );
+  const maxChunks = Math.min(
+    ABSOLUTE_MAX_SOURCE_CHUNKS,
+    Math.max(1, Number(options.maxChunks || 500) || 500)
+  );
   const sentences = splitIntoSentences(text);
   const chunks = [];
   let current = "";
   for (const sentence of sentences) {
     const next = current ? `${current} ${sentence}` : sentence;
-    if (next.length > MAX_CHUNK_CHARS && current.length >= MIN_CHUNK_CHARS) {
+    if (next.length > chunkSize && current.length >= MIN_CHUNK_CHARS) {
       chunks.push(current);
       current = sentence;
     } else {
@@ -54,15 +64,15 @@ function splitChunks(text) {
   if (current.trim()) chunks.push(current.trim());
   return chunks
     .flatMap((chunk) => {
-      if (chunk.length <= MAX_CHUNK_CHARS + 200) return [chunk];
+      if (chunk.length <= chunkSize + 200) return [chunk];
       const parts = [];
-      for (let index = 0; index < chunk.length; index += MAX_CHUNK_CHARS) {
-        parts.push(chunk.slice(index, index + MAX_CHUNK_CHARS).trim());
+      for (let index = 0; index < chunk.length; index += chunkSize) {
+        parts.push(chunk.slice(index, index + chunkSize).trim());
       }
       return parts;
     })
     .filter((chunk) => chunk.length >= MIN_CHUNK_CHARS)
-    .slice(0, 500);
+    .slice(0, maxChunks);
 }
 
 async function indexSource({ workspaceId, agentId, sourceId }) {
@@ -77,7 +87,9 @@ async function indexSource({ workspaceId, agentId, sourceId }) {
   try {
     const text = extractSourceText(source);
     const sourceHash = contentHash(text);
-    const chunkTexts = splitChunks(text);
+    const chunkSize = Number(source.metadata?.chunkSize || MAX_CHUNK_CHARS);
+    const maxChunks = Number(source.metadata?.maxChunks || 500);
+    const chunkTexts = splitChunks(text, { chunkSize, maxChunks });
     if (!chunkTexts.length) {
       throw new Error("Knowledge source has no indexable content");
     }
@@ -94,6 +106,9 @@ async function indexSource({ workspaceId, agentId, sourceId }) {
           sourceTitle: source.title,
           sourceType: source.type,
           sourceUrl: source.sourceUrl || "",
+          searchBoost: Number(source.metadata?.searchBoost || 1),
+          chunkSize,
+          maxChunks,
         },
       })),
     );

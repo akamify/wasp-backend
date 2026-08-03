@@ -11,6 +11,8 @@ const {
   getConversation,
   readConversation,
   clearConversation,
+  takeOverAiConversation,
+  returnAiConversation,
 } = require("@modules/conversations/controllers/conversation.controller");
 
 const router = express.Router();
@@ -20,6 +22,8 @@ const requireInboxAccess = requireBillingFeature("inboxPageAccess", {
 
 router.get("/", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.view"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(listConversations));
 router.post("/:phone/read", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.reply"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(readConversation));
+router.post("/:phone/take-over", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.reply"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(takeOverAiConversation));
+router.post("/:phone/return-to-ai", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.reply"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(returnAiConversation));
 router.get("/:phone", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.view"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(getConversation));
 router.delete("/:phone", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.reply"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(clearConversation));
 module.exports = router;

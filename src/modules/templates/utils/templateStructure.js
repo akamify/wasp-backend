@@ -26,6 +26,25 @@ function ensureStringArray(value) {
   return ensureArray(value).map((item) => String(item ?? ""));
 }
 
+function normalizeHeaderLocation(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const latitude = Number(value.latitude);
+  const longitude = Number(value.longitude);
+  const name = toTrimmedString(value.name);
+  const address = toTrimmedString(value.address);
+  return { latitude, longitude, name, address };
+}
+
+function assertHeaderLocation(location) {
+  invariant(location, "Header location is required");
+  invariant(Number.isFinite(location.latitude), "Header latitude must be a valid number");
+  invariant(Number.isFinite(location.longitude), "Header longitude must be a valid number");
+  invariant(location.latitude >= -90 && location.latitude <= 90, "Header latitude must be between -90 and 90");
+  invariant(location.longitude >= -180 && location.longitude <= 180, "Header longitude must be between -180 and 180");
+  invariant(location.name, "Header location name is required");
+  invariant(location.address, "Header address is required");
+}
+
 function invariant(condition, message) {
   if (!condition) {
     throw new HttpError(400, message);
@@ -530,6 +549,7 @@ function getButtonRuntimeValue(button, buttonValues, data) {
 function validateBeforeSend(template, data = {}) {
   const variables = ensureStringArray(data.variables);
   const headerVariables = ensureStringArray(data.headerVariables);
+  const headerLocation = normalizeHeaderLocation(data.headerLocation);
   const buttonValues = ensureStringArray(data.buttonValues);
   const buttonTtlMinutes = ensureArray(data.buttonTtlMinutes);
   const flowTokens = ensureStringArray(data.flowTokens);
@@ -561,6 +581,10 @@ function validateBeforeSend(template, data = {}) {
         toTrimmedString(headerVariables[0]),
         "Header media is required (provide a media URL or media ID)"
       );
+    }
+
+    if (compType === "HEADER" && headerFormat === "LOCATION") {
+      assertHeaderLocation(headerLocation);
     }
 
     if (compType === "BODY") {
@@ -754,6 +778,7 @@ function buildComponentsFromTemplate(template, data = {}) {
 
   const variables = ensureStringArray(data.variables);
   const headerVariables = ensureStringArray(data.headerVariables);
+  const headerLocation = normalizeHeaderLocation(data.headerLocation);
   const components = [];
 
   for (const component of ensureArray(normalizedTemplate.components)) {
@@ -789,6 +814,23 @@ function buildComponentsFromTemplate(template, data = {}) {
           ],
         });
       }
+    }
+
+    if (compType === "HEADER" && headerFormat === "LOCATION" && headerLocation) {
+      components.push({
+        type: "header",
+        parameters: [
+          {
+            type: "location",
+            location: {
+              latitude: headerLocation.latitude,
+              longitude: headerLocation.longitude,
+              name: headerLocation.name,
+              address: headerLocation.address,
+            },
+          },
+        ],
+      });
     }
 
     if (compType === "BODY") {

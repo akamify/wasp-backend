@@ -293,6 +293,7 @@ async function sendApiCampaignByName(req) {
                         to: recipient.to,
                         variables: recipient.variables,
                         headerVariables: recipient.headerVariables,
+                        headerLocation: recipient.headerLocation,
                         otpCode: recipient.otpCode,
                         buttonValues: recipient.buttonValues,
                         buttonTtlMinutes: recipient.buttonTtlMinutes,
@@ -320,7 +321,7 @@ async function sendApiCampaignByName(req) {
                             status: "failed",
                             statusTimestamps: { failedAt: new Date() },
                             text: "",
-                            payload: { to: recipient.to, template: { id: String(template._id) }, runtime: { variables: recipient.variables || [] } },
+                            payload: { to: recipient.to, template: { id: String(template._id) }, runtime: { variables: recipient.variables || [], headerVariables: recipient.headerVariables || [], headerLocation: recipient.headerLocation || null, otpCode: recipient.otpCode || "", buttonValues: recipient.buttonValues || [], buttonTtlMinutes: recipient.buttonTtlMinutes || [], flowTokens: recipient.flowTokens || [], flowActionData: recipient.flowActionData || [] } },
                             error: storedError,
                         });
                     } catch { }

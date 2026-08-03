@@ -8,6 +8,10 @@ async function createRechargeOrder(req, res) {
   res.json(await walletApi.createRechargeOrder(req));
 }
 
+async function verifyRechargePayment(req, res) {
+  res.json(await walletApi.verifyRechargePayment(req));
+}
+
 async function walletHistory(req, res) {
   res.json(await walletApi.walletHistory(req));
 }
@@ -16,5 +20,5 @@ async function razorpayWebhook(req, res) {
   res.json(await walletApi.razorpayWebhook(req));
 }
 
-module.exports = { getWallet, createRechargeOrder, walletHistory, razorpayWebhook };
+module.exports = { getWallet, createRechargeOrder, verifyRechargePayment, walletHistory, razorpayWebhook };
 

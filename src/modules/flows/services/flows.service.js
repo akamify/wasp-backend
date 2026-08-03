@@ -24,6 +24,7 @@ const {
   computeFlowDraftHash,
 } = require("@modules/flows/services/flowDraftHash.service");
 const mediaAssetRepository = require("@modules/media/repositories/mediaAsset.repository");
+const { checkLimit } = require("@modules/billing/services/usageLimit.service");
 
 function assertValidFlowId(flowId) {
   if (!mongoose.Types.ObjectId.isValid(String(flowId || ""))) {
@@ -321,6 +322,7 @@ async function assertNoTriggerConflict({ workspaceId, flowId, trigger }) {
 }
 
 async function createFlow({ workspaceId, actorId, payload }) {
+  await checkLimit(workspaceId, "flows");
   let flow = await flowsRepository.createFlow({
     workspaceId,
     name: payload.name,

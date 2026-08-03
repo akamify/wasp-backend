@@ -24,10 +24,14 @@ function create(payload) {
   return AiAgent.create(payload);
 }
 
-function update({ workspaceId, agentId, updates }) {
+function update({ workspaceId, agentId, updates, pushes = {}, unsets = {} }) {
+  const patch = {};
+  if (updates && Object.keys(updates).length) patch.$set = updates;
+  if (pushes && Object.keys(pushes).length) patch.$push = pushes;
+  if (unsets && Object.keys(unsets).length) patch.$unset = unsets;
   return AiAgent.findOneAndUpdate(
     { _id: agentId, workspaceId, deletedAt: null },
-    { $set: updates },
+    patch,
     { returnDocument: "after", runValidators: true },
   );
 }

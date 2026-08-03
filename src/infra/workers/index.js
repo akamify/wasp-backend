@@ -2,6 +2,7 @@ const { startCampaignWorker } = require("@infra/workers/campaign.worker");
 const { startRetryWorker } = require("@infra/workers/retry.worker");
 const { startNotificationWorker } = require("@infra/workers/notification.worker");
 const { startWebhookWorker } = require("@infra/workers/webhook.worker");
+const { startAiRuntimeWorker } = require("@infra/workers/aiRuntime.worker");
 const { startCleanupWorker } = require("@infra/workers/cleanup.worker");
 const { startCrmLeadAssignmentWorker } = require("@infra/workers/crmLeadAssignment.worker");
 const { startFlowSessionExpiryWorker } = require("@infra/workers/flowSessionExpiry.worker");
@@ -18,6 +19,7 @@ function startAllWorkers() {
         startRetryWorker(),
         startNotificationWorker(),
         startWebhookWorker(),
+        startAiRuntimeWorker(),
         startCleanupWorker(),
         startCrmLeadAssignmentWorker(),
         startFlowSessionExpiryWorker(),
@@ -52,6 +54,7 @@ module.exports = {
     startRetryWorker,
     startNotificationWorker,
     startWebhookWorker,
+    startAiRuntimeWorker,
     startCleanupWorker,
     startCrmLeadAssignmentWorker,
     startFlowSessionExpiryWorker,

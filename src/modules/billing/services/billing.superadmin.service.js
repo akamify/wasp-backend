@@ -168,7 +168,10 @@ function deriveFromFeatureRows(featureRows) {
 
 function buildStructuredEntitlements(payload = {}, fallback = {}) {
   const hasStructured = Boolean(payload.features || payload.limits || payload.displayFeatures || payload.unavailableFeatures || payload.addonServices);
-  if (!hasStructured) return deriveFromFeatureRows(payload.featureRows || fallback.featureRows || []);
+  if (!hasStructured) {
+    const derived = deriveFromFeatureRows(payload.featureRows || fallback.featureRows || []);
+    return { ...derived, features: normalizeFeatures(derived.features) };
+  }
   const derivedRows = deriveFromFeatureRows(payload.featureRows || fallback.featureRows || []);
   const displayFeatures = normalizeStringArray(payload.displayFeatures);
   const unavailableFeatures = normalizeStringArray(payload.unavailableFeatures);
@@ -192,6 +195,7 @@ function calculatePlanPreview(pricing) {
 
 function mapPlan(plan) {
   const pricing = plan?.pricing || {};
+  const limitValue = (primary, fallback) => (primary === null ? null : (primary === undefined ? fallback : primary));
   const preview = calculatePlanPreview({
     originalPricePaise: pricing.originalPricePaise,
     discountedPricePaise: pricing.discountedPricePaise,
@@ -234,10 +238,8 @@ function mapPlan(plan) {
     limits: {
       ...(plan.limits || {}),
       maxContactsExport:
-        (plan.limits || {}).maxContactsExport == null
-          ? ((plan.limits || {}).maxExportsPerMonth ?? 0)
-          : (plan.limits || {}).maxContactsExport,
-      maxAgents: (plan.limits || {}).maxAgents == null ? ((plan.limits || {}).maxEmployees ?? 0) : (plan.limits || {}).maxAgents,
+        limitValue((plan.limits || {}).maxContactsExport, (plan.limits || {}).maxExportsPerMonth ?? 0),
+      maxAgents: limitValue((plan.limits || {}).maxAgents, (plan.limits || {}).maxEmployees ?? 0),
     },
     displayFeatures: Array.isArray(plan.displayFeatures) ? plan.displayFeatures : [],
     unavailableFeatures: Array.isArray(plan.unavailableFeatures) ? plan.unavailableFeatures : [],
@@ -524,6 +526,17 @@ async function updatePlan({ actorId, planId, payload }) {
   const plan = await planRepository.findById(planId);
   if (!plan) throw new HttpError(404, "Plan not found");
   const slot = resolvePlanSlot({ slug: plan.slug, name: plan.name });
+  const previousRecurringConfig = JSON.stringify({
+    name: String(plan.name || ""),
+    description: String(plan.description || ""),
+    pricing: {
+      originalPricePaise: plan.pricing?.originalPricePaise ?? null,
+      discountedPricePaise: plan.pricing?.discountedPricePaise ?? null,
+      gstPercent: plan.pricing?.gstPercent ?? 18,
+      taxMode: plan.pricing?.taxMode || "exclusive",
+      billingCycle: plan.pricing?.billingCycle || "monthly",
+    },
+  });
 
   const derived = buildStructuredEntitlements(payload, plan);
   const pricing = mapPricePayload({
@@ -566,6 +579,22 @@ async function updatePlan({ actorId, planId, payload }) {
   plan.status = meta.status;
 
   plan.updatedBy = actorId || null;
+  const nextRecurringConfig = JSON.stringify({
+    name: String(plan.name || ""),
+    description: String(plan.description || ""),
+    pricing: {
+      originalPricePaise: plan.pricing?.originalPricePaise ?? null,
+      discountedPricePaise: plan.pricing?.discountedPricePaise ?? null,
+      gstPercent: plan.pricing?.gstPercent ?? 18,
+      taxMode: plan.pricing?.taxMode || "exclusive",
+      billingCycle: plan.pricing?.billingCycle || "monthly",
+    },
+  });
+  if (previousRecurringConfig !== nextRecurringConfig) {
+    plan.razorpayPlanId = "";
+    plan.razorpayPlanConfigHash = "";
+    plan.razorpayPlanSyncedAt = null;
+  }
   await plan.save();
   if (plan.recommended) {
     await planRepository.clearRecommendedExcept(plan._id);

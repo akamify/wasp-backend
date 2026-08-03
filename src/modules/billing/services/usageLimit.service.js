@@ -2,6 +2,45 @@ const { subscriptionRepository } = require("@modules/billing/repositories");
 const { HttpError } = require("@shared/utils/httpError");
 const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
+const { getWorkspaceEntitlements } = require("@modules/workspaces/services/workspaceEntitlement.service");
+const { contactsRepository } = require("@modules/contacts/repositories");
+const { templatesRepository } = require("@modules/templates/repositories");
+const apiKeyRepository = require("@modules/api-keys/repositories/apiKey.repository");
+const flowsRepository = require("@modules/flows/repositories/flows.repository");
+const { ExternalChatWebhook } = require("@infra/database/ExternalChatWebhook");
+
+const RESOURCE_LIMIT_DEFINITIONS = Object.freeze({
+  contacts: {
+    label: "contacts",
+    limitKeys: ["maxContacts"],
+    resolveUsage: ({ workspaceId }) => contactsRepository.countStoredContacts({ workspaceId }),
+    upgradeMessage: "Please upgrade your subscription or delete existing contacts.",
+  },
+  templates: {
+    label: "templates",
+    limitKeys: ["maxTemplates"],
+    resolveUsage: ({ workspaceId }) => templatesRepository.countStoredTemplates({ workspaceId }),
+    upgradeMessage: "Please upgrade your subscription or delete existing templates.",
+  },
+  apikeys: {
+    label: "API keys",
+    limitKeys: ["maxApiKeys"],
+    resolveUsage: ({ workspaceId }) => apiKeyRepository.countWorkspaceActiveApiKeys(workspaceId),
+    upgradeMessage: "Please upgrade your subscription or delete an existing API key.",
+  },
+  webhooks: {
+    label: "webhooks",
+    limitKeys: ["maxWebhooks"],
+    resolveUsage: ({ workspaceId }) => ExternalChatWebhook.countDocuments({ workspaceId }),
+    upgradeMessage: "Please upgrade your subscription or delete an existing webhook.",
+  },
+  flows: {
+    label: "flows",
+    limitKeys: ["maxFlows"],
+    resolveUsage: ({ workspaceId }) => flowsRepository.countStoredFlows({ workspaceId }),
+    upgradeMessage: "Please upgrade your subscription or archive existing flows.",
+  },
+});
 
 function addMonths(date, months) {
   const d = new Date(date);
@@ -25,6 +64,99 @@ function resolveCycleWindow(subscription, now = new Date()) {
   const lastStart = addMonths(periodStart, durationMonths - 1);
   const lastEnd = addMonths(periodStart, durationMonths);
   return { start: lastStart, end: lastEnd, monthIndex: durationMonths, durationMonths };
+}
+
+function resolveResourceDefinition(resourceKey) {
+  const key = String(resourceKey || "").trim().toLowerCase();
+  const definition = RESOURCE_LIMIT_DEFINITIONS[key];
+  if (!definition) {
+    throw new HttpError(500, `Unknown usage limit resource: ${resourceKey}`);
+  }
+  return definition;
+}
+
+function resolveLimitSnapshot(entitlements = {}, limitKeys = []) {
+  const keys = Array.isArray(limitKeys) && limitKeys.length ? limitKeys : [];
+  const selectedKey = keys.find((key) => entitlements?.limits?.[key] !== undefined) || keys[0];
+  return {
+    selectedKey,
+    limitValue: selectedKey ? entitlements?.limits?.[selectedKey] : undefined,
+  };
+}
+
+function buildStoredLimitError({ label, limit, upgradeMessage, limitKey, currentUsage }) {
+  return new HttpError(
+    403,
+    `Your current subscription allows a maximum of ${Number(limit || 0).toLocaleString("en-IN")} ${label}. ${upgradeMessage}`,
+    {
+      code: "WORKSPACE_LIMIT_REACHED",
+      limitKey,
+      limit,
+      currentUsage,
+      resource: label,
+    }
+  );
+}
+
+async function getUsageState({ workspaceId, resourceKey, currentUsage } = {}) {
+  const definition = resolveResourceDefinition(resourceKey);
+  const entitlements = await getWorkspaceEntitlements(workspaceId);
+  const { selectedKey, limitValue } = resolveLimitSnapshot(entitlements, definition.limitKeys);
+  const usage = currentUsage == null ? await definition.resolveUsage({ workspaceId }) : Number(currentUsage || 0);
+
+  if (limitValue === null) {
+    return {
+      resourceKey,
+      label: definition.label,
+      limitKey: selectedKey,
+      currentUsage: usage,
+      limit: null,
+      remaining: null,
+      unlimited: true,
+      allowed: true,
+      entitlements,
+    };
+  }
+
+  const limit = Number(limitValue ?? 0);
+  const remaining = limit > 0 ? Math.max(0, limit - usage) : 0;
+  return {
+    resourceKey,
+    label: definition.label,
+    limitKey: selectedKey,
+    currentUsage: usage,
+    limit,
+    remaining,
+    unlimited: false,
+    allowed: Number.isFinite(limit) && limit > usage && limit > 0,
+    blocked: !Number.isFinite(limit) || limit <= 0,
+    entitlements,
+    upgradeMessage: definition.upgradeMessage,
+  };
+}
+
+async function checkLimit(workspaceId, resourceKey, options = {}) {
+  const state = await getUsageState({ workspaceId, resourceKey, currentUsage: options.currentUsage });
+  if (state.unlimited) return state;
+  if (state.blocked) {
+    throw buildStoredLimitError({
+      label: state.label,
+      limit: state.limit,
+      upgradeMessage: state.upgradeMessage,
+      limitKey: state.limitKey,
+      currentUsage: state.currentUsage,
+    });
+  }
+  if (state.currentUsage >= state.limit) {
+    throw buildStoredLimitError({
+      label: state.label,
+      limit: state.limit,
+      upgradeMessage: state.upgradeMessage,
+      limitKey: state.limitKey,
+      currentUsage: state.currentUsage,
+    });
+  }
+  return state;
 }
 
 async function enforceMonthlyLimit({
@@ -114,6 +246,8 @@ async function enforceMonthlyLimit({
 }
 
 module.exports = {
+  checkLimit,
   enforceMonthlyLimit,
+  getUsageState,
   resolveCycleWindow,
 };

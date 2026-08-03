@@ -60,6 +60,13 @@ const { requireAdminPermission } = require("@core/middleware/requireAdminPermiss
 const Joi = require("joi");
 
 const {
+  adminCreateMasterTemplate,
+  adminDuplicateMasterTemplate,
+  adminUploadMasterTemplateMedia,
+  adminPublishMasterTemplate,
+  adminArchiveMasterTemplate,
+  adminListMasterTemplateHistory,
+  adminRestoreMasterTemplateVersion,
   adminGetMasterTemplate,
   adminUpdateMasterTemplate,
   adminDeleteMasterTemplate,
@@ -93,6 +100,23 @@ const docsMediaUpload = buildMemoryUpload({
 const platformBrandUpload = buildMemoryUpload({
   maxFileSizeBytes: 5 * 1024 * 1024,
   allowedMimeTypes: ["image/png", "image/jpeg", "image/webp", "image/svg+xml"],
+});
+const masterTemplateMediaUpload = buildMemoryUpload({
+  maxFileSizeBytes: 100 * 1024 * 1024,
+  allowedMimeTypes: [
+    "image/jpeg",
+    "image/png",
+    "video/mp4",
+    "video/3gpp",
+    "text/plain",
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ],
 });
 const p = (key) => requireAdminPermission("page", key);
 const c = (key) => requireAdminPermission("component", key);
@@ -140,9 +164,21 @@ router.get("/channels", p("/admin/workspaces"), asyncHandler(adminListChannels))
 router.get("/workspaces", p("/admin/workspaces"), asyncHandler(adminListChannels));
 router.get("/master-campaigns", p("/admin/master-campaigns"), asyncHandler(adminListMasterCampaigns));
 router.get("/master-templates", p("/admin/master-templates"), asyncHandler(adminListMasterTemplates));
+router.post(
+  "/master-templates/media",
+  c("templates.create"),
+  masterTemplateMediaUpload.single("file"),
+  asyncHandler(adminUploadMasterTemplateMedia)
+);
+router.post("/master-templates", c("templates.create"), asyncHandler(adminCreateMasterTemplate));
 router.get("/master-templates/:id", p("/admin/master-templates"), asyncHandler(adminGetMasterTemplate));
 router.put("/master-templates/:id", c("templates.edit"), asyncHandler(adminUpdateMasterTemplate));
 router.delete("/master-templates/:id", c("templates.delete"), asyncHandler(adminDeleteMasterTemplate));
+router.post("/master-templates/:id/duplicate", c("templates.create"), asyncHandler(adminDuplicateMasterTemplate));
+router.post("/master-templates/:id/publish", c("templates.edit"), asyncHandler(adminPublishMasterTemplate));
+router.post("/master-templates/:id/archive", c("templates.edit"), asyncHandler(adminArchiveMasterTemplate));
+router.get("/master-templates/:id/history", p("/admin/master-templates"), asyncHandler(adminListMasterTemplateHistory));
+router.post("/master-templates/:id/restore/:versionId", c("templates.edit"), asyncHandler(adminRestoreMasterTemplateVersion));
 router.post("/master-templates/:id/sync-status", a("templates.manage"), asyncHandler(adminSyncTemplateStatus));
 router.post("/master-templates/sync-meta", a("templates.manage"), asyncHandler(adminSyncMetaTemplates));
 router.get("/master-contacts", p("/admin/master-contacts"), asyncHandler(adminListMasterContacts));
