@@ -14,6 +14,12 @@ function normalizeRecipients(recipients) {
             to,
             variables: Array.isArray(raw.variables) ? raw.variables : undefined,
             headerVariables: Array.isArray(raw.headerVariables) ? raw.headerVariables : undefined,
+            headerLocation: raw.headerLocation && typeof raw.headerLocation === "object" && !Array.isArray(raw.headerLocation) ? {
+                latitude: Number(raw.headerLocation.latitude),
+                longitude: Number(raw.headerLocation.longitude),
+                name: raw.headerLocation.name ? String(raw.headerLocation.name) : "",
+                address: raw.headerLocation.address ? String(raw.headerLocation.address) : "",
+            } : undefined,
             otpCode: raw.otpCode ? String(raw.otpCode) : undefined,
             buttonValues: Array.isArray(raw.buttonValues) ? raw.buttonValues : undefined,
             buttonTtlMinutes: Array.isArray(raw.buttonTtlMinutes) ? raw.buttonTtlMinutes : undefined,

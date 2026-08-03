@@ -7,6 +7,10 @@ function listSources({ workspaceId, agentId }) {
     .lean();
 }
 
+function listWorkspaceSources({ workspaceId }) {
+  return KnowledgeSource.find({ workspaceId, deletedAt: null }).sort({ updatedAt: -1, _id: -1 }).lean();
+}
+
 function findSourceById({ workspaceId, agentId, sourceId }) {
   return KnowledgeSource.findOne({ _id: sourceId, workspaceId, agentId, deletedAt: null });
 }
@@ -75,8 +79,35 @@ function listChunksForAgent({ workspaceId, agentId, limit = 500 }) {
     .lean();
 }
 
+async function workspaceUsageSummary({ workspaceId }) {
+  const rows = await KnowledgeSource.aggregate([
+    { $match: { workspaceId, deletedAt: null } },
+    {
+      $group: {
+        _id: null,
+        totalSources: { $sum: 1 },
+        totalChunks: { $sum: { $ifNull: ["$metadata.totalChunks", 0] } },
+        totalBytes: {
+          $sum: {
+            $cond: [
+              { $gt: [{ $ifNull: ["$metadata.sizeBytes", 0] }, 0] },
+              { $ifNull: ["$metadata.sizeBytes", 0] },
+              { $strLenCP: { $ifNull: ["$content", ""] } },
+            ],
+          },
+        },
+        urlSources: {
+          $sum: { $cond: [{ $eq: ["$type", "url"] }, 1, 0] },
+        },
+      },
+    },
+  ]);
+  return rows[0] || { totalSources: 0, totalChunks: 0, totalBytes: 0, urlSources: 0 };
+}
+
 module.exports = {
   listSources,
+  listWorkspaceSources,
   findSourceById,
   createSource,
   findSourceByHash,
@@ -87,4 +118,5 @@ module.exports = {
   countChunks,
   searchChunks,
   listChunksForAgent,
+  workspaceUsageSummary,
 };

@@ -3,6 +3,7 @@ const QUEUE_NAMES = {
     RETRY: "retry",
     NOTIFICATION: "notification",
     WEBHOOK: "webhook",
+    AI_RUNTIME: "ai-runtime",
     CRM_LEAD_ASSIGNMENT: "crm-lead-assignment",
     CRM_ANALYTICS: "crm-analytics",
     CRM_EXPORT: "crm-export",

@@ -14,6 +14,8 @@ const PlanSchema = new mongoose.Schema(
       billingCycle: { type: String, enum: ["monthly", "quarterly", "yearly", "lifetime"], default: "monthly" },
     },
     razorpayPlanId: { type: String, default: "", index: true },
+    razorpayPlanConfigHash: { type: String, default: "" },
+    razorpayPlanSyncedAt: { type: Date, default: null },
     trial: {
       enabled: { type: Boolean, default: false },
       days: { type: Number, default: 0, min: 0, max: 365 },
@@ -49,6 +51,7 @@ const PlanSchema = new mongoose.Schema(
       walletPageAccess: { type: Boolean, default: false },
       linksPageAccess: { type: Boolean, default: false },
       automationPageAccess: { type: Boolean, default: false },
+      aiAgentsPageAccess: { type: Boolean, default: false },
       activityPageAccess: { type: Boolean, default: false },
       apiKeysPageAccess: { type: Boolean, default: false },
       apiReportsPageAccess: { type: Boolean, default: false },

@@ -4,6 +4,10 @@ const path = require("path");
 const { HttpError } = require("@shared/utils/httpError");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { TemplateMedia } = require("@infra/database/TemplateMedia");
+const {
+  assertMediaFileSizeAllowed,
+  assertStorageQuotaAvailable,
+} = require("@modules/billing/services/workspaceQuota.service");
 
 function graphBaseUrl(graphApiVersion) {
   const version = graphApiVersion || process.env.META_GRAPH_VERSION || "v22.0";
@@ -71,6 +75,14 @@ async function uploadTemplateMedia(req) {
   const creds = await getCredentialsForUser(req.workspace.id);
   const file = req.file;
   if (!file) throw new HttpError(400, "File is required");
+  await assertMediaFileSizeAllowed({
+    workspaceId: req.workspace.id,
+    fileSizeBytes: file.size,
+  });
+  await assertStorageQuotaAvailable({
+    workspaceId: req.workspace.id,
+    incomingBytes: file.size,
+  });
 
   try {
     const appId = process.env.APP_ID || process.env.META_APP_ID;

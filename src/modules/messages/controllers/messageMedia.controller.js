@@ -3,6 +3,7 @@ const FormData = require("form-data");
 const crypto = require("crypto");
 const { HttpError } = require("@shared/utils/httpError");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
+const { assertMediaFileSizeAllowed } = require("@modules/billing/services/workspaceQuota.service");
 
 function graphBaseUrl(graphApiVersion) {
   const version = graphApiVersion || process.env.META_GRAPH_VERSION || "v22.0";
@@ -13,6 +14,10 @@ async function uploadMessageMedia(req, res) {
   const creds = await getCredentialsForUser(req.workspace.id);
   const file = req.file;
   if (!file) throw new HttpError(400, "File is required");
+  await assertMediaFileSizeAllowed({
+    workspaceId: req.workspace.id,
+    fileSizeBytes: file.size,
+  });
 
   try {
     const client = axios.create({ baseURL: graphBaseUrl(creds.graphApiVersion), timeout: 30000 });

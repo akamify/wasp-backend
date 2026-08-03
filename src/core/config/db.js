@@ -112,7 +112,24 @@ async function backfillScopedFields(db) {
     { $set: { isActive: true, deletedAt: null } }
   );
   await db.collection("templates").updateMany(
-    { $or: [{ wabaId: null }, { wabaId: "" }, { wabaId: { $exists: false } }] },
+    {
+      deletedAt: null,
+      $or: [
+        { ownerType: "system" },
+        { $and: [{ ownerType: { $exists: false } }, { workspaceId: null }] },
+        { status: "draft" },
+      ],
+    },
+    { $set: { isActive: true, staleReason: null } }
+  );
+  await db.collection("templates").updateMany(
+    {
+      deletedAt: null,
+      status: { $ne: "draft" },
+      ownerType: { $ne: "system" },
+      workspaceId: { $ne: null },
+      $or: [{ wabaId: null }, { wabaId: "" }, { wabaId: { $exists: false } }],
+    },
     { $set: { isActive: false, staleReason: "missing_waba_id" } }
   );
 }

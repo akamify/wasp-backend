@@ -121,7 +121,7 @@ async function updateWorkspaceEntitlements(workspaceId, plan, options = {}) {
   const workspace = await Workspace.findById(workspaceId).session(options.session || null);
   if (!workspace) throw new HttpError(404, "Workspace not found");
   workspace.plan = plan.slug;
-  workspace.crmEnabled = Boolean(plan.features?.crmAccess);
+  workspace.crmEnabled = Boolean(plan.features?.crmPageAccess || plan.features?.crmAccess);
   workspace.features = workspace.features || {};
   workspace.features.externalChatApiAccess = Boolean(plan.features?.externalChatApiAccess);
   workspace.allowedApiPermissions = workspace.allowedApiPermissions || {};

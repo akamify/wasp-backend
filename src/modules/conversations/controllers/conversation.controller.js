@@ -1,17 +1,34 @@
 const { Conversation } = require("@infra/database/Conversation");
 const { Contact } = require("@infra/database/Contact");
 const { Message } = require("@infra/database/Message");
+const { AiAgent } = require("@infra/database/AiAgent");
+const { AiUsageLog } = require("@infra/database/AiUsageLog");
+const mongoose = require("mongoose");
 const { normalizePhone } = require("@shared/services/contactService");
 const { markConversationRead } = require("@shared/services/conversationService");
 const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { markMessageAsRead } = require("@shared/utils/whatsappSender");
 const { HttpError } = require("@shared/utils/httpError");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const {
+  actorFromRequest,
+  takeOverConversation,
+  returnConversationToAi,
+} = require("@modules/conversations/services/conversationAiHandover.service");
+const {
+  AI_STATE_VALUES,
+  LEGACY_AI_STATE_MAP,
+  normalizeAiState,
+} = require("@modules/ai-agents/constants/aiRuntime.constants");
 const { windowState } = require("../services/customerServiceWindow.service");
 
 function withServiceWindow(conversation, now = new Date()) {
   const plain = conversation?.toObject ? conversation.toObject() : conversation || {};
-  return { ...plain, ...windowState(plain, now) };
+  return {
+    ...plain,
+    aiState: normalizeAiState(plain.aiState, { fallback: null }),
+    ...windowState(plain, now),
+  };
 }
 
 async function attachContacts(userId, wabaId, conversations) {
@@ -25,6 +42,7 @@ async function attachContacts(userId, wabaId, conversations) {
     const contact = contactMap.get(conversation.phone);
     return {
       ...conversation.toObject(),
+      aiState: normalizeAiState(conversation.aiState, { fallback: null }),
       contact: contact
         ? {
           _id: contact._id,
@@ -74,6 +92,12 @@ function mapConversationListItemForPublic(item) {
     id: String(item?._id || ""),
     phone,
     displayName: contactName || phone,
+    aiState: normalizeAiState(item?.aiState, { fallback: null }),
+    aiHandoverAt: item?.aiHandoverAt || null,
+    aiHandoverReason: item?.aiHandoverReason || null,
+    aiLastReplyAt: item?.aiLastReplyAt || null,
+    aiAgentId: item?.aiAgentId ? String(item.aiAgentId) : null,
+    assignedHuman: item?.assignedEmployeeId ? String(item.assignedEmployeeId) : null,
     lastMessage: {
       preview: String(item?.lastMessagePreview || ""),
       at: item?.lastMessageAt || null,
@@ -99,6 +123,117 @@ function mapConversationListItemForPublic(item) {
   };
 }
 
+function parseAiStateFilters(rawValue) {
+  const source = Array.isArray(rawValue)
+    ? rawValue
+    : String(rawValue || "")
+        .split(",")
+        .map((value) => value.trim());
+  return Array.from(
+    new Set(
+      source
+        .map((value) => normalizeAiState(value, { fallback: null }))
+        .filter(Boolean)
+    )
+  );
+}
+
+function expandAiStateQueryValues(states = []) {
+  const values = new Set();
+  const legacyEntries = Object.entries(LEGACY_AI_STATE_MAP);
+  for (const state of states) {
+    const normalized = normalizeAiState(state, { fallback: null });
+    if (!normalized) continue;
+    values.add(normalized);
+    legacyEntries.forEach(([legacy, current]) => {
+      if (current === normalized) values.add(legacy);
+    });
+  }
+  return Array.from(values);
+}
+
+async function attachAiRuntimeMetadata(workspaceId, items) {
+  if (!Array.isArray(items) || !items.length) return items;
+  const phones = Array.from(
+    new Set(items.map((item) => String(item?.phone || "").trim()).filter(Boolean))
+  );
+  if (!phones.length) return items;
+
+  const workspaceObjectId = mongoose.Types.ObjectId.isValid(String(workspaceId || ""))
+    ? new mongoose.Types.ObjectId(String(workspaceId))
+    : null;
+  if (!workspaceObjectId) return items;
+
+  const usageRows = await AiUsageLog.aggregate([
+    { $match: { workspaceId: workspaceObjectId, "metadata.phone": { $in: phones } } },
+    { $sort: { createdAt: -1, _id: -1 } },
+    {
+      $group: {
+        _id: "$metadata.phone",
+        latest: {
+          $first: {
+            agentId: "$agentId",
+            provider: "$provider",
+            model: "$model",
+            status: "$status",
+            action: "$action",
+            creditsUsed: "$creditsUsed",
+            inputTokens: "$inputTokens",
+            outputTokens: "$outputTokens",
+            totalTokens: "$totalTokens",
+            latencyMs: "$latencyMs",
+            executionKey: "$executionKey",
+            createdAt: "$createdAt",
+            metadata: "$metadata",
+          },
+        },
+      },
+    },
+  ]);
+
+  const usageByPhone = new Map(usageRows.map((row) => [String(row._id || ""), row.latest]));
+  const agentIds = Array.from(
+    new Set(
+      items
+        .map((item) => item?.aiAgentId)
+        .concat(usageRows.map((row) => row?.latest?.agentId))
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )
+  );
+  const agents = agentIds.length
+    ? await AiAgent.find({ _id: { $in: agentIds } }).select("_id name").lean()
+    : [];
+  const agentNameById = new Map(agents.map((agent) => [String(agent._id), String(agent.name || "")]));
+
+  return items.map((item) => {
+    const usage = usageByPhone.get(String(item?.phone || "").trim());
+    const aiAgentId = item?.aiAgentId ? String(item.aiAgentId) : usage?.agentId ? String(usage.agentId) : null;
+    return {
+      ...item,
+      aiAgentName: aiAgentId ? agentNameById.get(aiAgentId) || null : null,
+      aiRuntime: usage
+        ? {
+            executionKey: usage.executionKey ? String(usage.executionKey) : null,
+            provider: String(usage.provider || "gemini"),
+            model: String(usage.model || ""),
+            runtimeStatus: String(usage.status || ""),
+            action: String(usage.action || ""),
+            confidence: Number(usage.metadata?.confidence || 0),
+            creditsUsed: Number(usage.creditsUsed || 0),
+            inputTokens: Number(usage.inputTokens || 0),
+            outputTokens: Number(usage.outputTokens || 0),
+            totalTokens: Number(usage.totalTokens || 0),
+            latencyMs: Number(usage.latencyMs || 0),
+            processedAt: usage.createdAt || null,
+            handoverReason: item?.aiHandoverReason || usage.metadata?.reason || null,
+            assignedHuman: item?.assignedHuman || null,
+          }
+        : null,
+    };
+  });
+}
+
 async function listConversations(req, res) {
   const scope = await requireActiveWabaScope(req.workspace.id);
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -107,9 +242,37 @@ async function listConversations(req, res) {
 
   const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
   const conversationFilter = { workspaceId: req.workspace.id, wabaId: scope.wabaId };
-  if (String(req.query.filter || "").toLowerCase() === "unread") conversationFilter.unreadCount = { $gt: 0 };
-  if (String(req.query.filter || "").toLowerCase() === "read") {
-    conversationFilter.$or = [{ unreadCount: 0 }, { unreadCount: { $exists: false } }];
+  const filterMode = String(req.query.filter || "").toLowerCase();
+  const aiOnly = String(req.query.aiOnly || "").toLowerCase() === "true";
+  const requestedAgentId = String(req.query.agentId || "").trim();
+  const requestedAiStates = parseAiStateFilters(req.query.aiState);
+  const andConditions = [];
+  if (filterMode === "unread") andConditions.push({ unreadCount: { $gt: 0 } });
+  if (filterMode === "read") {
+    andConditions.push({ $or: [{ unreadCount: 0 }, { unreadCount: { $exists: false } }] });
+  }
+  if (aiOnly) {
+    andConditions.push({
+      $or: [
+        { aiAgentId: { $ne: null } },
+        { aiConversationId: { $ne: null } },
+        { aiLastReplyAt: { $ne: null } },
+        { aiState: { $in: [...AI_STATE_VALUES, ...Object.keys(LEGACY_AI_STATE_MAP)] } },
+      ],
+    });
+  }
+  if (requestedAgentId) {
+    conversationFilter.aiAgentId = requestedAgentId;
+  }
+  if (requestedAiStates.length) {
+    andConditions.push({
+      aiState: {
+        $in: expandAiStateQueryValues(requestedAiStates),
+      },
+    });
+  }
+  if (andConditions.length) {
+    conversationFilter.$and = andConditions;
   }
   const [conversations, unreadRows] = await Promise.all([
     Conversation.find(conversationFilter).sort({ lastMessageAt: -1 }).limit(limit),
@@ -202,6 +365,7 @@ async function listConversations(req, res) {
 
   const responseNow = new Date();
   items = items.map((item) => withServiceWindow(item, responseNow));
+  items = await attachAiRuntimeMetadata(req.workspace.id, items);
 
   return res.json({ success: true, conversations: items, totalUnread });
 }
@@ -222,12 +386,14 @@ async function getConversation(req, res) {
     ),
   ]);
 
-  const resolvedConversation = withServiceWindow(conversation || {
+  let resolvedConversation = withServiceWindow(conversation || {
     phone,
     unreadCount: 0,
     lastMessagePreview: "",
     lastMessageAt: null,
+    aiState: null,
   });
+  [resolvedConversation] = await attachAiRuntimeMetadata(req.workspace.id, [resolvedConversation]);
 
   res.json({
     success: true,
@@ -311,5 +477,40 @@ async function clearConversation(req, res) {
   res.json({ success: true, phone });
 }
 
-module.exports = { listConversations, getConversation, readConversation, clearConversation };
+async function takeOverAiConversation(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const phone = normalizePhone(req.params.phone);
+  if (!phone) throw new HttpError(400, "Invalid phone number");
+  const conversation = await takeOverConversation({
+    workspaceId: req.workspace.id,
+    wabaId: scope.wabaId,
+    phone,
+    actor: actorFromRequest(req),
+    reason: req.body?.reason,
+  });
+  res.json({ success: true, conversation: withServiceWindow(conversation), phone });
+}
+
+async function returnAiConversation(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const phone = normalizePhone(req.params.phone);
+  if (!phone) throw new HttpError(400, "Invalid phone number");
+  const conversation = await returnConversationToAi({
+    workspaceId: req.workspace.id,
+    wabaId: scope.wabaId,
+    phone,
+    actor: actorFromRequest(req),
+    reason: req.body?.reason,
+  });
+  res.json({ success: true, conversation: withServiceWindow(conversation), phone });
+}
+
+module.exports = {
+  listConversations,
+  getConversation,
+  readConversation,
+  clearConversation,
+  takeOverAiConversation,
+  returnAiConversation,
+};
 

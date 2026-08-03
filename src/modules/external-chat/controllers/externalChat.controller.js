@@ -24,6 +24,7 @@ const { resolveExternalChatAccessState } = require("@modules/external-chat/servi
 const { mapExternalRealtimeEvent } = require("@modules/external-chat/services/externalRealtimeMap.service");
 const externalWebhookService = require("@modules/external-chat/services/externalWebhook.service");
 const { requireActiveWabaScope } = require("@shared/services/activeWabaScopeService");
+const { assertMediaFileSizeAllowed } = require("@modules/billing/services/workspaceQuota.service");
 
 function ok(res, message, data) {
   return res.json({ success: true, message, data: data || {} });
@@ -117,6 +118,10 @@ async function readConversation(req, res) {
 async function uploadMedia(req, res) {
   const file = req.file;
   if (!file) throw new HttpError(400, "File is required", { code: "FILE_REQUIRED" });
+  await assertMediaFileSizeAllowed({
+    workspaceId: req.workspace.id,
+    fileSizeBytes: file.size,
+  });
 
   const creds = await getCredentialsForUser(req.workspace.id);
   const client = axios.create({ baseURL: graphBaseUrl(creds.graphApiVersion), timeout: 30000 });

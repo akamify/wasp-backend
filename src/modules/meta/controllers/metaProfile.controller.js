@@ -6,6 +6,7 @@ const {
   cacheWhatsAppBusinessProfile,
   normalizeBusinessProfile,
 } = require("@shared/services/whatsappConnectionMetadataService");
+const { assertMediaFileSizeAllowed } = require("@modules/billing/services/workspaceQuota.service");
 
 function graphBaseUrl(graphApiVersion) {
   const version = graphApiVersion || process.env.META_GRAPH_VERSION || "v22.0";
@@ -88,6 +89,10 @@ async function uploadProfilePicture(req, res) {
   const creds = await getCredentialsForUser(req.workspace.id);
   const file = req.file;
   if (!file) throw new HttpError(400, "File is required");
+  await assertMediaFileSizeAllowed({
+    workspaceId: req.workspace.id,
+    fileSizeBytes: file.size,
+  });
 
   try {
     // WhatsApp business profile picture requires a handle from Meta's Resumable Upload API (not /{phone}/media).

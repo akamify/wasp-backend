@@ -11,6 +11,7 @@ const FREE_PLAN_FEATURES = Object.freeze({
   flowsPageAccess: false,
   linksPageAccess: false,
   automationPageAccess: false,
+  aiAgentsPageAccess: false,
   activityPageAccess: false,
   apiKeysPageAccess: false,
   apiReportsPageAccess: false,
@@ -110,6 +111,7 @@ const FREE_PLAN_UNAVAILABLE_FEATURES = Object.freeze([
 ]);
 
 function normalizeLimit(v, fallback) {
+  if (v === null) return null;
   const n = Number(v);
   if (!Number.isFinite(n) || n < 0) return fallback;
   return Math.round(n);

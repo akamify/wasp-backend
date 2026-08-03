@@ -1,12 +1,6 @@
-const { subscriptionRepository } = require("@modules/billing/repositories");
 const { HttpError } = require("@shared/utils/httpError");
-const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
-
-function resolveFeatureValue(subscription, freeFeatures, featureKey) {
-  if (!subscription) return Boolean((freeFeatures || {})[featureKey]);
-  return Boolean(subscription?.snapshot?.features?.[featureKey]);
-}
+const { getWorkspaceEntitlements } = require("@modules/workspaces/services/workspaceEntitlement.service");
 
 function requireBillingFeature(featureKey, options = {}) {
   const { message = "Upgrade plan to access this feature." } = options;
@@ -14,9 +8,11 @@ function requireBillingFeature(featureKey, options = {}) {
     try {
       if (!isPlanRestrictionsEnabled()) return next();
       if (!req.workspace?.id) return next(new HttpError(400, "Missing workspace context"));
-      const subscription = await subscriptionRepository.findActiveByWorkspace(req.workspace.id);
-      const freeConfig = subscription ? null : await getFreePlanConfig();
-      const allowed = resolveFeatureValue(subscription, freeConfig?.features, featureKey);
+      if (String(req.workspace?.status || "active") !== "active") {
+        return next(new HttpError(403, "Workspace is blocked", { featureKey, code: "WORKSPACE_BLOCKED" }));
+      }
+      const entitlements = await getWorkspaceEntitlements(req.workspace.id);
+      const allowed = Boolean(entitlements.features?.[featureKey]);
       if (!allowed) {
         return next(new HttpError(403, message, { featureKey, code: "FEATURE_NOT_ALLOWED" }));
       }

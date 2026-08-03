@@ -50,6 +50,7 @@ async function requireWorkspace(req, res, next) {
       id: String(workspace._id),
       name: workspace.name,
       plan: workspace.plan,
+      status: workspace.status || "active",
       crmEnabled: Boolean(workspace.crmEnabled),
       crmSettings: workspace.crmSettings || {},
       allowedApiPermissions: {

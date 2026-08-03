@@ -10,6 +10,7 @@ const { Campaign } = require("@infra/database/Campaign");
 const { HttpError } = require("@shared/utils/httpError");
 const { publishWorkspaceEvent, publishToWorkspace } = require("@shared/services/realtimeService");
 const { getCrmLeadAssignmentQueue } = require("@infra/queues/crmLeadAssignment.queue");
+const { getAiRuntimeQueue } = require("@infra/queues/aiRuntime.queue");
 const { Workspace } = require("@infra/database/Workspace");
 const {
   normalizeWhatsAppWebhookMessages,
@@ -21,6 +22,7 @@ const {
   reconcileCustomerServiceWindow,
 } = require("@modules/conversations/services/customerServiceWindow.service");
 const { resolveInboundReplyContext } = require("@modules/webhooks/services/inboundReplyContext.service");
+const { buildExecutionKey } = require("@modules/ai-agents/services/aiRuntimeIdempotency.service");
 
 const WEBHOOK_DEBUG_LIMIT = 40;
 const webhookDebugEventsByWorkspace = new Map();
@@ -767,6 +769,41 @@ async function receive(req, res) {
           });
 
           // CRM lead detection/assignment is strictly async and must not affect webhook latency.
+          try {
+            if (text.trim()) {
+              const executionKey = buildExecutionKey({
+                workspaceId: String(workspaceIdRaw),
+                inboundMessageId: msgDoc?._id ? String(msgDoc._id) : "",
+                inboundWhatsappMessageId: waId,
+                phone: from,
+              });
+              if (msgDoc?._id) {
+                await Message.updateOne(
+                  { _id: msgDoc._id, workspaceId: workspaceIdRaw },
+                  {
+                    $set: {
+                      aiExecutionKey: executionKey,
+                    },
+                  }
+                ).catch(() => {});
+              }
+              const aiQueue = getAiRuntimeQueue();
+              const aiJobId = `ai-live:${executionKey}`;
+              await aiQueue.add(
+                "ai-runtime.process-inbound",
+                {
+                  workspaceId: String(workspaceIdRaw),
+                  conversationId: convo?._id ? String(convo._id) : null,
+                  messageId: msgDoc?._id ? String(msgDoc._id) : null,
+                  executionKey,
+                },
+                { jobId: aiJobId }
+              );
+            }
+          } catch {
+            // Never break webhook delivery for AI enqueue failures.
+          }
+
           try {
             if (await isCrmEnabled(workspaceIdRaw)) {
               const q = getCrmLeadAssignmentQueue();

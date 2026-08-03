@@ -35,6 +35,21 @@ async function listApiKeys(userId) {
   return user;
 }
 
+async function countWorkspaceActiveApiKeys(workspaceId) {
+  const rows = await User.aggregate([
+    { $unwind: "$apiKeys" },
+    {
+      $match: {
+        "apiKeys.workspaceId": new mongoose.Types.ObjectId(String(workspaceId)),
+        "apiKeys.revoked": { $ne: true },
+        "apiKeys.status": { $ne: "disabled" },
+      },
+    },
+    { $count: "total" },
+  ]);
+  return Number(rows?.[0]?.total || 0);
+}
+
 async function addApiKey({ userId, workspaceId, wabaId, keyPrefix, keyHash, name, permissions }) {
   const user = await User.findById(userId).select("+apiKeys");
   if (!user) return null;
@@ -165,6 +180,7 @@ module.exports = {
   findUserById,
   findUserByApiKeyHash,
   listApiKeys,
+  countWorkspaceActiveApiKeys,
   addApiKey,
   revokeApiKey,
   updateApiKeyState,

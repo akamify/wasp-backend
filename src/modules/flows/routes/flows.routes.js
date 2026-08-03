@@ -9,11 +9,11 @@ const flowsController = require("@modules/flows/controllers/flows.controller");
 const flowsValidation = require("@modules/flows/validations/flows.validation");
 
 const router = express.Router();
-const requireAutomationAccess = requireBillingFeature("automationPageAccess", {
-  message: "Your current plan does not include automation access.",
+const requireFlowsAccess = requireBillingFeature("flowsPageAccess", {
+  message: "Your current plan does not include flow builder access.",
 });
 
-router.use(auth, requireWorkspace, requireAutomationAccess);
+router.use(auth, requireWorkspace, requireFlowsAccess);
 
 router.post(
   "/",

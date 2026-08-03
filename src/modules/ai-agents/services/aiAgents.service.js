@@ -1,6 +1,8 @@
 const mongoose = require("mongoose");
 const { HttpError } = require("@shared/utils/httpError");
 const aiAgentRepository = require("@modules/ai-agents/repositories/aiAgent.repository");
+const aiAddonService = require("@modules/ai-agents/services/aiAddon.service");
+const aiProviderConfigService = require("@modules/ai-agents/services/aiProviderConfig.service");
 const { slugifyAiAgent } = require("@modules/ai-agents/utils/slugifyAiAgent");
 
 function assertValidAgentId(agentId) {
@@ -56,12 +58,72 @@ function normalizeGuardrails(guardrails = {}) {
     ...(guardrails.maxMessagesPerSession !== undefined
       ? { maxMessagesPerSession: Math.min(500, Math.max(1, Number(guardrails.maxMessagesPerSession) || 50)) }
       : {}),
+    ...(guardrails.confidenceThreshold !== undefined
+      ? { confidenceThreshold: Math.min(0.95, Math.max(0.1, Number(guardrails.confidenceThreshold) || 0.55)) }
+      : {}),
     ...(guardrails.allowedTopics !== undefined
       ? { allowedTopics: normalizeStringArray(guardrails.allowedTopics) }
       : {}),
     ...(guardrails.blockedTopics !== undefined
       ? { blockedTopics: normalizeStringArray(guardrails.blockedTopics) }
       : {}),
+  };
+}
+
+function normalizeRuntimeControls(runtimeControls = {}) {
+  const businessHours = runtimeControls.businessHours || {};
+  const escalationRules = runtimeControls.escalationRules || {};
+  const conversationSla = runtimeControls.conversationSla || {};
+  const fallbackTemplates = runtimeControls.fallbackTemplates || {};
+  const routing = runtimeControls.routing || {};
+  return {
+    businessHours: {
+      enabled: Boolean(businessHours.enabled),
+      timezone: String(businessHours.timezone || "Asia/Calcutta").trim() || "Asia/Calcutta",
+      days: normalizeStringArray(businessHours.days).filter((day) => ["sun", "mon", "tue", "wed", "thu", "fri", "sat"].includes(day)).slice(0, 7),
+      startTime: String(businessHours.startTime || "09:00").trim() || "09:00",
+      endTime: String(businessHours.endTime || "18:00").trim() || "18:00",
+      afterHoursAction: ["reply_and_handover", "handover_only", "pause"].includes(String(businessHours.afterHoursAction || ""))
+        ? String(businessHours.afterHoursAction)
+        : "reply_and_handover",
+    },
+    escalationRules: {
+      enabled: Boolean(escalationRules.enabled),
+      keywords: normalizeStringArray(escalationRules.keywords),
+      slaMinutes: Math.min(1440, Math.max(1, Number(escalationRules.slaMinutes) || 30)),
+      action: ["handover", "pause"].includes(String(escalationRules.action || "")) ? String(escalationRules.action) : "handover",
+    },
+    conversationSla: {
+      enabled: Boolean(conversationSla.enabled),
+      firstResponseMinutes: Math.min(1440, Math.max(1, Number(conversationSla.firstResponseMinutes) || 15)),
+    },
+    fallbackTemplates: {
+      afterHours: String(fallbackTemplates.afterHours || "").trim(),
+      escalation: String(fallbackTemplates.escalation || "").trim(),
+      noAnswer: String(fallbackTemplates.noAnswer || "").trim(),
+    },
+    routing: {
+      keywords: normalizeStringArray(routing.keywords),
+      priority: Math.min(1000, Math.max(0, Number(routing.priority) || 100)),
+      channels: normalizeStringArray(routing.channels).filter((channel) => ["whatsapp", "test", "api"].includes(channel)).slice(0, 3),
+    },
+  };
+}
+
+function buildVersionSnapshot(agent, updates = {}) {
+  const value = typeof agent?.toObject === "function" ? agent.toObject() : agent || {};
+  return {
+    name: updates.name !== undefined ? updates.name : value.name,
+    description: updates.description !== undefined ? updates.description : value.description,
+    status: updates.status !== undefined ? updates.status : value.status,
+    persona: updates.persona !== undefined ? updates.persona : value.persona,
+    modelName: updates.modelName !== undefined ? updates.modelName : value.modelName,
+    systemPrompt: updates.systemPrompt !== undefined ? updates.systemPrompt : value.systemPrompt,
+    language: updates.language !== undefined ? updates.language : value.language,
+    temperature: updates.temperature !== undefined ? updates.temperature : value.temperature,
+    guardrails: updates.guardrails !== undefined ? updates.guardrails : value.guardrails,
+    runtimeControls: updates.runtimeControls !== undefined ? updates.runtimeControls : value.runtimeControls,
+    tools: updates.tools !== undefined ? updates.tools : value.tools,
   };
 }
 
@@ -75,8 +137,11 @@ function normalizePayload(payload, { partial = false } = {}) {
   assign("description", payload.description !== undefined ? String(payload.description || "").trim() : undefined);
   assign("status", payload.status || undefined);
   assign("persona", payload.persona || undefined);
-  assign("modelProvider", payload.modelProvider || undefined);
-  assign("modelName", payload.modelName !== undefined ? String(payload.modelName || "").trim() : undefined);
+  assign("modelProvider", "gemini");
+  assign(
+    "modelName",
+    payload.modelName !== undefined ? (String(payload.modelName || "").trim() || "gemini-1.5-flash") : (partial ? undefined : "gemini-1.5-flash"),
+  );
   assign("systemPrompt", payload.systemPrompt !== undefined ? String(payload.systemPrompt || "").trim() : undefined);
   assign("language", payload.language !== undefined ? String(payload.language || "auto").trim() || "auto" : undefined);
   assign("temperature", payload.temperature !== undefined ? Number(payload.temperature) : undefined);
@@ -86,6 +151,7 @@ function normalizePayload(payload, { partial = false } = {}) {
   );
   assign("tools", payload.tools !== undefined ? normalizeTools(payload.tools) : undefined);
   assign("guardrails", payload.guardrails !== undefined ? normalizeGuardrails(payload.guardrails) : undefined);
+  assign("runtimeControls", payload.runtimeControls !== undefined ? normalizeRuntimeControls(payload.runtimeControls) : undefined);
   return updates;
 }
 
@@ -145,7 +211,14 @@ async function getAgent({ workspaceId, agentId }) {
 }
 
 async function createAgent({ workspaceId, actorId, payload }) {
+  const limits = await aiAddonService.getWorkspaceAiLimits(workspaceId);
+  const currentAgents = await aiAgentRepository.count({ workspaceId, filter: { deletedAt: null, status: { $ne: "archived" } } });
+  if (limits.maxAgents > 0 && currentAgents >= limits.maxAgents) {
+    throw new HttpError(409, `AI agent limit reached for this workspace. Plan allows ${limits.maxAgents} agent(s).`);
+  }
   const updates = normalizePayload(payload);
+  const model = await aiProviderConfigService.resolveGeminiModel(updates.modelName);
+  updates.modelName = model.model;
   const slug = await uniqueSlug({
     workspaceId,
     baseSlug: payload.slug || payload.name,
@@ -155,6 +228,8 @@ async function createAgent({ workspaceId, actorId, payload }) {
     ...updates,
     slug,
     status: updates.status || "draft",
+    version: 1,
+    versionHistory: [],
     createdBy: actorId || null,
     updatedBy: actorId || null,
   });
@@ -165,7 +240,19 @@ async function updateAgent({ workspaceId, agentId, actorId, payload }) {
   assertValidAgentId(agentId);
   const existing = await aiAgentRepository.findById({ workspaceId, agentId });
   if (!existing) throw new HttpError(404, "AI agent not found");
+  const limits = await aiAddonService.getWorkspaceAiLimits(workspaceId);
   const updates = normalizePayload(payload, { partial: true });
+  if (updates.modelName !== undefined) {
+    const model = await aiProviderConfigService.resolveGeminiModel(updates.modelName);
+    updates.modelName = model.model;
+  }
+  const nextStatus = String(updates.status || existing.status || "draft");
+  if (limits.maxAgents > 0 && existing.status === "archived" && nextStatus !== "archived") {
+    const currentAgents = await aiAgentRepository.count({ workspaceId, filter: { deletedAt: null, status: { $ne: "archived" } } });
+    if (currentAgents >= limits.maxAgents) {
+      throw new HttpError(409, `AI agent limit reached for this workspace. Plan allows ${limits.maxAgents} agent(s).`);
+    }
+  }
   if (payload.slug !== undefined || payload.name !== undefined) {
     updates.slug = await uniqueSlug({
       workspaceId,
@@ -175,7 +262,21 @@ async function updateAgent({ workspaceId, agentId, actorId, payload }) {
   }
   updates.updatedBy = actorId || null;
   if (updates.status === "archived" && !existing.archivedAt) updates.archivedAt = new Date();
-  const agent = await aiAgentRepository.update({ workspaceId, agentId, updates });
+  const nextVersion = Number(existing.version || 1) + 1;
+  updates.version = nextVersion;
+  const historyEntry = {
+    version: Number(existing.version || 1),
+    changedBy: actorId || null,
+    changedAt: new Date(),
+    reason: String(payload.changeReason || "agent_updated").trim().slice(0, 500),
+    snapshot: buildVersionSnapshot(existing),
+  };
+  const agent = await aiAgentRepository.update({
+    workspaceId,
+    agentId,
+    updates,
+    pushes: { versionHistory: { $each: [historyEntry], $slice: -25 } },
+  });
   return { success: true, agent: serializeAgent(agent) };
 }
 

@@ -46,6 +46,13 @@ const upload = buildMemoryUpload({
   ],
 });
 
+const headerLocationSchema = Joi.object({
+  latitude: Joi.number().min(-90).max(90).required(),
+  longitude: Joi.number().min(-180).max(180).required(),
+  name: Joi.string().trim().max(120).required(),
+  address: Joi.string().trim().max(240).required(),
+});
+
 router.post("/media", auth, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.reply"), requireInboxAccess, upload.single("file"), asyncHandler(uploadMessageMedia));
 router.get("/media/:id", auth, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.view"), requireInboxAccess, asyncHandler(downloadMessageMedia));
 
@@ -65,6 +72,7 @@ router.post(
       // For utility / marketing
       variables: Joi.array().items(Joi.string().allow("")).optional(),
       headerVariables: Joi.array().items(Joi.string().allow("")).optional(),
+      headerLocation: headerLocationSchema.optional(),
 
       // For authentication
       otpCode: Joi.string().trim().min(1).optional(),
@@ -132,6 +140,7 @@ router.post(
             to: Joi.string().min(8).max(20).required(),
             variables: Joi.array().items(Joi.string().allow("")).optional(),
             headerVariables: Joi.array().items(Joi.string().allow("")).optional(),
+            headerLocation: headerLocationSchema.optional(),
             otpCode: Joi.string().trim().min(1).optional(),
             buttonValues: Joi.array().items(Joi.string().allow("")).optional(),
             buttonTtlMinutes: Joi.array().items(Joi.number().integer().min(1).max(43200)).optional(),

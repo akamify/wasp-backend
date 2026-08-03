@@ -8,6 +8,10 @@ async function confirmAutoRenew(req, res) {
   res.json(await autoRenewService.confirmAutoRenew(req));
 }
 
+async function changePaymentMethod(req, res) {
+  res.json(await autoRenewService.changePaymentMethod(req));
+}
+
 async function disableAutoRenew(req, res) {
   res.json(await autoRenewService.disableAutoRenew(req));
 }
@@ -20,4 +24,4 @@ async function renewalSettings(req, res) {
   res.json(await autoRenewService.autoRenewSettings(req));
 }
 
-module.exports = { enableAutoRenew, confirmAutoRenew, disableAutoRenew, toggleAutoRenew, renewalSettings };
+module.exports = { enableAutoRenew, confirmAutoRenew, changePaymentMethod, disableAutoRenew, toggleAutoRenew, renewalSettings };

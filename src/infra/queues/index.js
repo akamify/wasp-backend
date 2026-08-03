@@ -2,6 +2,7 @@ const campaignQueue = require("@infra/queues/campaign.queue");
 const retryQueue = require("@infra/queues/retry.queue");
 const notificationQueue = require("@infra/queues/notification.queue");
 const webhookQueue = require("@infra/queues/webhook.queue");
+const aiRuntimeQueue = require("@infra/queues/aiRuntime.queue");
 const crmLeadAssignmentQueue = require("@infra/queues/crmLeadAssignment.queue");
 const crmAnalyticsQueue = require("@infra/queues/crmAnalytics.queue");
 const crmExportQueue = require("@infra/queues/crmExport.queue");
@@ -13,6 +14,7 @@ async function closeAllQueueResources() {
         retryQueue.closeRetryQueueResources(),
         notificationQueue.closeNotificationQueueResources(),
         webhookQueue.closeWebhookQueueResources(),
+        aiRuntimeQueue.closeAiRuntimeQueueResources(),
         crmLeadAssignmentQueue.closeCrmLeadAssignmentQueueResources(),
         crmAnalyticsQueue.closeCrmAnalyticsQueueResources(),
         crmExportQueue.closeCrmExportQueueResources(),
@@ -25,6 +27,7 @@ module.exports = {
     retryQueue,
     notificationQueue,
     webhookQueue,
+    aiRuntimeQueue,
     crmLeadAssignmentQueue,
     crmAnalyticsQueue,
     crmExportQueue,

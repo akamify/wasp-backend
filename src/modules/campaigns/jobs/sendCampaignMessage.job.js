@@ -124,6 +124,7 @@ async function sendCampaignMessageJob(job) {
         to,
         variables,
         headerVariables,
+        headerLocation,
         otpCode,
         buttonValues,
         buttonTtlMinutes,
@@ -168,6 +169,7 @@ async function sendCampaignMessageJob(job) {
     const runtime = {
         variables: variables || [],
         headerVariables: headerVariables || [],
+        headerLocation: headerLocation || null,
         otpCode: otpCode || "",
         buttonValues: buttonValues || [],
         buttonTtlMinutes: buttonTtlMinutes || [],
@@ -200,6 +202,7 @@ async function sendCampaignMessageJob(job) {
             to,
             variables,
             headerVariables,
+            headerLocation,
             otpCode,
             buttonValues,
             buttonTtlMinutes,

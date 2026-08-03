@@ -31,6 +31,7 @@ const {
   MESSAGE_CHARGE_SOURCE,
 } = require("@shared/constants/messageBilling");
 const { createTrackingToken } = require("@modules/analytics/services/customerEngagement.service");
+const { assertDailyOutboundMessageAllowed } = require("@modules/billing/services/workspaceQuota.service");
 
 function buildAttributionDefaults(existingToken) {
   return {
@@ -150,6 +151,7 @@ async function sendTemplateMessageForUser({
   languageCode,
   variables,
   headerVariables,
+  headerLocation,
   otpCode,
   buttonValues,
   buttonTtlMinutes,
@@ -163,6 +165,7 @@ async function sendTemplateMessageForUser({
   flowId,
   nodeId,
 }) {
+  await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const resolvedLanguageCode = String(languageCode || template?.languageCode || template?.language || "").trim();
   const templateLanguageCode = String(template?.languageCode || template?.language || "").trim();
   if (!templateLanguageCode || resolvedLanguageCode !== templateLanguageCode) {
@@ -175,6 +178,7 @@ async function sendTemplateMessageForUser({
   const sendComponents = buildComponentsFromTemplate(normalizedTemplate, {
     variables,
     headerVariables,
+    headerLocation,
     otpCode,
     buttonValues,
     buttonTtlMinutes,
@@ -285,6 +289,7 @@ async function sendTemplateMessageForUser({
       runtime: {
         variables: variables || [],
         headerVariables: headerVariables || [],
+        headerLocation: headerLocation || null,
         otpCode: otpCode || "",
         buttonValues: buttonValues || [],
         buttonTtlMinutes: buttonTtlMinutes || [],
@@ -386,6 +391,7 @@ async function sendTextMessageForUser({
   contactId,
   to,
   text,
+  idempotencyKey,
   sentBy,
   source,
   senderType,
@@ -394,7 +400,199 @@ async function sendTextMessageForUser({
   flowId,
   nodeId,
 }) {
+  const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
+  let reservedMessage = null;
+  if (normalizedIdempotencyKey) {
+    const existing = await Message.findOne({
+      workspaceId: userId,
+      idempotencyKey: normalizedIdempotencyKey,
+    });
+    if (existing) {
+      if (
+        existing.whatsappMessageId ||
+        ["sent", "accepted", "delivered", "read"].includes(String(existing.status || "").toLowerCase())
+      ) {
+        return {
+          message: existing,
+          apiResponse: null,
+          billing: {
+            metaBillingOwner: META_BILLING_OWNER,
+            platformWalletCharged: false,
+            messageChargeSource: MESSAGE_CHARGE_SOURCE.FREE_SERVICE_WINDOW,
+          },
+          idempotent: true,
+        };
+      }
+      if (String(existing.status || "").toLowerCase() === "processing" || existing.providerDispatchStartedAt) {
+        return {
+          message: existing,
+          apiResponse: null,
+          billing: {
+            metaBillingOwner: META_BILLING_OWNER,
+            platformWalletCharged: false,
+            messageChargeSource: MESSAGE_CHARGE_SOURCE.FREE_SERVICE_WINDOW,
+          },
+          idempotent: true,
+          pendingDispatch: true,
+        };
+      }
+      reservedMessage = existing;
+    }
+  }
+  await assertDailyOutboundMessageAllowed({ workspaceId: userId });
+
   const creds = await getCredentialsForUser(userId);
+  const now = new Date();
+  if (!reservedMessage) {
+    try {
+      reservedMessage = await Message.create({
+        workspaceId: userId,
+        wabaId: creds.wabaId,
+        phoneNumberId: creds.phoneNumberId,
+        ...(contactId ? { contactId } : {}),
+        phone: to,
+        direction: "outbound",
+        source,
+        senderType,
+        triggeredByMessageId,
+        ...(flowSessionId ? { flowSessionId } : {}),
+        ...(flowId ? { flowId } : {}),
+        ...(nodeId ? { nodeId } : {}),
+        idempotencyKey: normalizedIdempotencyKey,
+        status: "queued",
+        sentBy: sentBy || { kind: "owner" },
+        text,
+        displayText: text,
+        previewText: text,
+        type: "text",
+        payload: { to, text },
+        messageKind: source === "automation" ? "automation" : "service",
+        chargeAmount: 0,
+        chargeCategory: null,
+        platformWalletCharged: false,
+        chargeSource: MESSAGE_CHARGE_SOURCE.FREE_SERVICE_WINDOW,
+        metaBillingHandledBy: META_BILLING_HANDLED_BY,
+        ...buildAttributionDefaults(),
+      });
+    } catch (error) {
+      if (Number(error?.code) === 11000 && normalizedIdempotencyKey) {
+        reservedMessage = await Message.findOne({
+          workspaceId: userId,
+          idempotencyKey: normalizedIdempotencyKey,
+        });
+        if (
+          reservedMessage &&
+          (reservedMessage.whatsappMessageId ||
+            ["sent", "accepted", "delivered", "read"].includes(String(reservedMessage.status || "").toLowerCase()))
+        ) {
+          return {
+            message: reservedMessage,
+            apiResponse: null,
+            billing: {
+              metaBillingOwner: META_BILLING_OWNER,
+              platformWalletCharged: false,
+              messageChargeSource: MESSAGE_CHARGE_SOURCE.FREE_SERVICE_WINDOW,
+            },
+            idempotent: true,
+          };
+        }
+        if (
+          reservedMessage &&
+          (String(reservedMessage.status || "").toLowerCase() === "processing" || reservedMessage.providerDispatchStartedAt)
+        ) {
+          return {
+            message: reservedMessage,
+            apiResponse: null,
+            billing: {
+              metaBillingOwner: META_BILLING_OWNER,
+              platformWalletCharged: false,
+              messageChargeSource: MESSAGE_CHARGE_SOURCE.FREE_SERVICE_WINDOW,
+            },
+            idempotent: true,
+            pendingDispatch: true,
+          };
+        }
+      } else {
+        throw error;
+      }
+    }
+  } else {
+    await Message.updateOne(
+      { _id: reservedMessage._id, workspaceId: userId },
+      {
+        $set: {
+          wabaId: reservedMessage.wabaId || creds.wabaId,
+          phoneNumberId: reservedMessage.phoneNumberId || creds.phoneNumberId,
+          contactId: reservedMessage.contactId || contactId || null,
+          phone: to,
+          source,
+          senderType,
+          triggeredByMessageId,
+          flowSessionId: flowSessionId || null,
+          flowId: flowId || null,
+          nodeId: nodeId || null,
+          status: String(reservedMessage.status || "").toLowerCase() === "failed" ? "queued" : reservedMessage.status || "queued",
+          sentBy: sentBy || reservedMessage.sentBy || { kind: "owner" },
+          text,
+          displayText: text,
+          previewText: text,
+          payload: { to, text },
+          error: null,
+          ...(String(reservedMessage.status || "").toLowerCase() === "failed"
+            ? { providerDispatchStartedAt: null, providerDispatchCompletedAt: null }
+            : {}),
+        },
+      }
+    ).catch(() => {});
+    reservedMessage = await Message.findById(reservedMessage._id);
+  }
+
+  if (!reservedMessage) {
+    throw new Error("Outbound message reservation not found");
+  }
+
+  const reservedMessageId = reservedMessage._id;
+  const dispatchStartedAt = new Date();
+  reservedMessage = await Message.findOneAndUpdate(
+    {
+      _id: reservedMessageId,
+      workspaceId: userId,
+      $or: [
+        { status: "queued" },
+        { status: "failed" },
+      ],
+      providerDispatchStartedAt: null,
+    },
+    {
+      $set: {
+        status: "processing",
+        providerDispatchStartedAt: dispatchStartedAt,
+        providerDispatchCompletedAt: null,
+        error: null,
+      },
+    },
+    { returnDocument: "after" }
+  );
+  if (!reservedMessage) {
+    const existing = normalizedIdempotencyKey
+      ? await Message.findOne({ workspaceId: userId, idempotencyKey: normalizedIdempotencyKey })
+      : await Message.findById(reservedMessageId);
+    if (existing) {
+      return {
+        message: existing,
+        apiResponse: null,
+        billing: {
+          metaBillingOwner: META_BILLING_OWNER,
+          platformWalletCharged: false,
+          messageChargeSource: MESSAGE_CHARGE_SOURCE.FREE_SERVICE_WINDOW,
+        },
+        idempotent: true,
+        pendingDispatch: true,
+      };
+    }
+    throw new Error("Outbound message dispatch claim not available");
+  }
+
   let apiResponse;
   try {
     apiResponse = await sendTextMessage({
@@ -405,6 +603,17 @@ async function sendTextMessageForUser({
       graphApiVersion: creds.graphApiVersion,
     });
   } catch (err) {
+    await Message.updateOne(
+      { _id: reservedMessage._id, workspaceId: userId },
+      {
+        $set: {
+          status: "failed",
+          "statusTimestamps.failedAt": new Date(),
+          providerDispatchCompletedAt: new Date(),
+          error: outboundFailure(err),
+        },
+      }
+    ).catch(() => {});
     throwIfPhoneNotRegistered(err);
     throw err;
   }
@@ -412,40 +621,22 @@ async function sendTextMessageForUser({
   const waMessageId = Array.isArray(apiResponse?.messages) ? apiResponse.messages[0]?.id : undefined;
   const waId = Array.isArray(apiResponse?.contacts) ? apiResponse.contacts[0]?.wa_id : undefined;
   const resolvedPhone = waId ? String(waId) : to;
-  const now = new Date();
-
-  const message = await Message.create({
-    workspaceId: userId,
-    wabaId: creds.wabaId,
-    phoneNumberId: creds.phoneNumberId,
-    ...(contactId ? { contactId } : {}),
-    phone: resolvedPhone,
-    direction: "outbound",
-    source,
-    senderType,
-    triggeredByMessageId,
-    ...(flowSessionId ? { flowSessionId } : {}),
-    ...(flowId ? { flowId } : {}),
-    ...(nodeId ? { nodeId } : {}),
-    whatsappMessageId: waMessageId,
-    status: "sent",
-    statusTimestamps: { acceptedAt: now, sentAt: now },
-    sentAt: now,
-    sortAt: now,
-    sentBy: sentBy || { kind: "owner" },
-    text,
-    displayText: text,
-    previewText: text,
-    type: "text",
-    payload: { to, text },
-    messageKind: source === "automation" ? "automation" : "service",
-    chargeAmount: 0,
-    chargeCategory: null,
-    platformWalletCharged: false,
-    chargeSource: MESSAGE_CHARGE_SOURCE.FREE_SERVICE_WINDOW,
-    metaBillingHandledBy: META_BILLING_HANDLED_BY,
-    ...buildAttributionDefaults(),
-  });
+  const message = await Message.findOneAndUpdate(
+    { _id: reservedMessage._id, workspaceId: userId },
+    {
+      $set: {
+        phone: resolvedPhone,
+        whatsappMessageId: waMessageId,
+        status: "sent",
+        statusTimestamps: { acceptedAt: now, sentAt: now },
+        sentAt: now,
+        sortAt: now,
+        providerDispatchCompletedAt: now,
+        error: null,
+      },
+    },
+    { returnDocument: "after" }
+  );
 
   const conversation = await touchConversation({ userId, wabaId: creds.wabaId, phoneNumberId: creds.phoneNumberId, phone: resolvedPhone, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
   await WhatsAppCredentials.updateOne(
@@ -505,6 +696,7 @@ async function sendInteractiveListMessageForUser({
   flowId,
   nodeId,
 }) {
+  await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const creds = await getCredentialsForUser(userId);
   let apiResponse;
   try {
@@ -624,6 +816,7 @@ async function sendInteractiveButtonMessageForUser({
   flowId,
   nodeId,
 }) {
+  await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const normalizedButtons = (buttons || []).map((button) => ({
     id: String(button?.id || "").trim(),
     title: String(button?.title || "").trim(),
@@ -859,6 +1052,7 @@ async function sendMediaMessageForUser({
   flowId,
   nodeId,
 }) {
+  await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const normalizedType = String(type || "").toLowerCase();
   const creds = await getCredentialsForUser(userId);
   let apiResponse;

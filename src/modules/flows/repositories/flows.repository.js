@@ -6,6 +6,10 @@ async function createFlow(data) {
   return Flow.create(data);
 }
 
+async function countStoredFlows({ workspaceId }) {
+  return Flow.countDocuments({ workspaceId, deletedAt: null });
+}
+
 async function findFlows({ workspaceId, status, search, skip, limit }) {
   const filter = { workspaceId, deletedAt: null };
   if (status) filter.status = status;
@@ -146,6 +150,7 @@ async function findApprovedTemplate({ workspaceId, name, languageCode }) {
 
 module.exports = {
   createFlow,
+  countStoredFlows,
   findFlows,
   findFlowById,
   updateFlowById,

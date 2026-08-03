@@ -40,6 +40,15 @@ const WorkspaceSchema = new mongoose.Schema(
       autoAssignFromTime: { type: String, default: null }, // "HH:mm" (server local time)
       autoAssignToTime: { type: String, default: null }, // "HH:mm" (server local time)
     },
+    aiAgentEnabled: { type: Boolean, default: false, index: true },
+    aiSubscriptionId: { type: mongoose.Schema.Types.ObjectId, ref: "AiSubscription", default: null, index: true },
+    aiIncludedCredits: { type: Number, default: 0, min: 0 },
+    aiTotalCredits: { type: Number, default: 0, min: 0 },
+    aiRemainingCredits: { type: Number, default: 0, min: 0 },
+    aiRemainingTokens: { type: Number, default: 0, min: 0 },
+    aiRenewDate: { type: Date, default: null, index: true },
+    aiAddonActivatedAt: { type: Date, default: null },
+    aiAddonPlanKey: { type: String, default: "", trim: true },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }

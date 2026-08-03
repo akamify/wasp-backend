@@ -1,18 +1,16 @@
 const express = require("express");
 const { auth } = require("@core/middleware/auth");
-const { requireWorkspace } = require("@core/middleware/requireWorkspace");
 const { requireBillingFeature } = require("@core/middleware/requireBillingFeature");
+const { requireWorkspace } = require("@core/middleware/requireWorkspace");
 const { validate } = require("@core/middleware/validate");
 const { requireWorkspacePermission } = require("@modules/workspaces/middleware/requireWorkspacePermission");
+const { requireAiAgentAccess } = require("@modules/ai-agents/middleware/requireAiAgentAccess");
 const { asyncHandler } = require("@shared/utils/asyncHandler");
 const { buildMemoryUpload } = require("@shared/utils/multerUpload");
 const aiAgentsController = require("@modules/ai-agents/controllers/aiAgents.controller");
 const aiAgentsValidation = require("@modules/ai-agents/validations/aiAgents.validation");
 
 const router = express.Router();
-const requireAiAgentAccess = requireBillingFeature("automationPageAccess", {
-  message: "Your current plan does not include AI agent access.",
-});
 const knowledgeUpload = buildMemoryUpload({
   maxFileSizeBytes: 10 * 1024 * 1024,
   allowedMimeTypes: [
@@ -26,7 +24,129 @@ const knowledgeUpload = buildMemoryUpload({
   ],
 });
 
-router.use(auth, requireWorkspace, requireAiAgentAccess);
+router.use(auth, requireWorkspace);
+
+router.get(
+  "/addon",
+  requireWorkspacePermission("automation.view"),
+  asyncHandler(aiAgentsController.addonStatus),
+);
+router.post(
+  "/addon/purchase",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to purchase AI Agents." }),
+  requireWorkspacePermission("billing.manage"),
+  asyncHandler(aiAgentsController.purchaseAddon),
+);
+router.get(
+  "/dashboard",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("automation.view"),
+  validate(aiAgentsValidation.dashboardQuerySchema, "query"),
+  asyncHandler(aiAgentsController.dashboard),
+);
+router.get(
+  "/addon/transactions",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("aiBilling.view"),
+  validate(aiAgentsValidation.addonTransactionsQuerySchema, "query"),
+  asyncHandler(aiAgentsController.listAddonTransactions),
+);
+router.get(
+  "/billing/summary",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("aiBilling.view"),
+  validate(aiAgentsValidation.billingAnalyticsQuerySchema, "query"),
+  asyncHandler(aiAgentsController.billingSummary),
+);
+router.get(
+  "/billing/statements",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("aiBilling.view"),
+  validate(aiAgentsValidation.billingStatementsQuerySchema, "query"),
+  asyncHandler(aiAgentsController.billingStatements),
+);
+router.get(
+  "/billing/statements/:periodKey",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("aiBilling.view"),
+  asyncHandler(aiAgentsController.billingStatement),
+);
+router.get(
+  "/billing/statements/:periodKey/download",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("aiBilling.reports"),
+  asyncHandler(aiAgentsController.downloadBillingStatement),
+);
+router.get(
+  "/billing/timeline",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("aiBilling.view"),
+  validate(aiAgentsValidation.billingAnalyticsQuerySchema, "query"),
+  asyncHandler(aiAgentsController.billingTimeline),
+);
+router.get(
+  "/billing/analytics",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("aiBilling.view"),
+  validate(aiAgentsValidation.billingAnalyticsQuerySchema, "query"),
+  asyncHandler(aiAgentsController.billingAnalytics),
+);
+router.get(
+  "/billing/usage-explorer",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("aiBilling.view"),
+  validate(aiAgentsValidation.billingUsageExplorerQuerySchema, "query"),
+  asyncHandler(aiAgentsController.billingUsageExplorer),
+);
+router.get(
+  "/billing/budget",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("aiBilling.view"),
+  asyncHandler(aiAgentsController.billingBudget),
+);
+router.put(
+  "/billing/budget",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("aiBilling.budget"),
+  validate(aiAgentsValidation.billingBudgetSchema),
+  asyncHandler(aiAgentsController.updateBillingBudget),
+);
+router.get(
+  "/billing/reports",
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess,
+  requireWorkspacePermission("aiBilling.reports"),
+  validate(aiAgentsValidation.billingReportQuerySchema, "query"),
+  asyncHandler(aiAgentsController.billingReport),
+);
+
+router.use(
+  requireBillingFeature("aiAgentsPageAccess", { message: "Upgrade plan to access AI Agents." }),
+  requireAiAgentAccess
+);
+router.post(
+  "/addon/topups",
+  requireWorkspacePermission("aiBilling.manage"),
+  validate(aiAgentsValidation.addonTopupSchema),
+  asyncHandler(aiAgentsController.purchaseAddonTopup),
+);
+router.post(
+  "/addon/transactions/adjust",
+  requireWorkspacePermission("aiBilling.manage"),
+  validate(aiAgentsValidation.addonAdjustmentSchema),
+  asyncHandler(aiAgentsController.applyAddonAdjustment),
+);
 
 router.get(
   "/",

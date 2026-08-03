@@ -3,20 +3,28 @@ const { getFreePlanConfig } = require("@modules/billing/services/freePlan.servic
 const { isPlanRestrictionsEnabled } = require("@modules/billing/utils/planRestrictionToggle");
 
 function normalizeLimits(raw = {}) {
+  const pick = (value, fallback = 0) => (value === null ? null : (value === undefined ? fallback : value));
   return {
-    maxContacts: raw.maxContacts ?? 0,
-    maxTemplates: raw.maxTemplates ?? 0,
-    maxEmployees: raw.maxAgents ?? raw.maxEmployees ?? 0,
-    maxAgents: raw.maxAgents ?? raw.maxEmployees ?? 0,
-    maxCampaignsPerMonth: raw.maxCampaignsPerMonth ?? 0,
-    maxContactsExport: raw.maxContactsExport ?? raw.maxExportsPerMonth ?? 0,
-    maxTags: raw.maxTags ?? 0,
-    maxCustomAttributes: raw.maxCustomAttributes ?? 0,
-    maxWebhooks: raw.maxWebhooks ?? 0,
-    messageRatePerSec: raw.messageRatePerSec ?? 0,
-    maxFlows: raw.maxFlows ?? 0,
-    maxTeams: raw.maxTeams ?? 0,
+    maxContacts: pick(raw.maxContacts),
+    maxTemplates: pick(raw.maxTemplates),
+    maxEmployees: pick(raw.maxAgents, raw.maxEmployees ?? 0),
+    maxAgents: pick(raw.maxAgents, raw.maxEmployees ?? 0),
+    maxApiKeys: pick(raw.maxApiKeys),
+    maxCampaignsPerMonth: pick(raw.maxCampaignsPerMonth),
+    maxContactsExport: pick(raw.maxContactsExport, raw.maxExportsPerMonth ?? 0),
+    maxTags: pick(raw.maxTags),
+    maxCustomAttributes: pick(raw.maxCustomAttributes),
+    maxStorageMb: pick(raw.maxStorageMb),
+    maxWebhooks: pick(raw.maxWebhooks),
+    messageRatePerSec: pick(raw.messageRatePerSec),
+    maxFlows: pick(raw.maxFlows),
+    maxMediaSizeMb: pick(raw.maxMediaSizeMb),
+    dailyMessageLimit: pick(raw.dailyMessageLimit),
   };
+}
+
+function pickLimit(value, fallback = 0) {
+  return value === null ? null : (value === undefined ? fallback : value);
 }
 
 function usageMetric(used, limit) {
@@ -36,18 +44,21 @@ async function currentSubscription(req) {
   if (!active) {
     const freeConfig = await getFreePlanConfig();
     const freeLimits = {
-      maxContacts: freeConfig?.limits?.maxContacts ?? 0,
-      maxTemplates: freeConfig?.limits?.maxTemplates ?? 0,
-      maxEmployees: 0,
-      maxAgents: freeConfig?.limits?.maxAgents ?? 0,
-      maxCampaignsPerMonth: freeConfig?.limits?.maxCampaignsPerMonth ?? 0,
-      maxContactsExport: freeConfig?.limits?.maxContactsExport ?? 0,
-      maxTags: freeConfig?.limits?.maxTags ?? 10,
-      maxCustomAttributes: freeConfig?.limits?.maxCustomAttributes ?? 5,
-      maxWebhooks: freeConfig?.limits?.maxWebhooks ?? 0,
-      messageRatePerSec: freeConfig?.limits?.messageRatePerSec ?? 5,
-      maxFlows: freeConfig?.limits?.maxFlows ?? 0,
-      maxTeams: freeConfig?.limits?.maxTeams ?? 0,
+      maxContacts: pickLimit(freeConfig?.limits?.maxContacts, 0),
+      maxTemplates: pickLimit(freeConfig?.limits?.maxTemplates, 0),
+      maxEmployees: pickLimit(freeConfig?.limits?.maxAgents, 0),
+      maxAgents: pickLimit(freeConfig?.limits?.maxAgents, 0),
+      maxApiKeys: pickLimit(freeConfig?.limits?.maxApiKeys, 0),
+      maxCampaignsPerMonth: pickLimit(freeConfig?.limits?.maxCampaignsPerMonth, 0),
+      maxContactsExport: pickLimit(freeConfig?.limits?.maxContactsExport, 0),
+      maxTags: pickLimit(freeConfig?.limits?.maxTags, 10),
+      maxCustomAttributes: pickLimit(freeConfig?.limits?.maxCustomAttributes, 5),
+      maxStorageMb: pickLimit(freeConfig?.limits?.maxStorageMb, 0),
+      maxWebhooks: pickLimit(freeConfig?.limits?.maxWebhooks, 0),
+      messageRatePerSec: pickLimit(freeConfig?.limits?.messageRatePerSec, 5),
+      maxFlows: pickLimit(freeConfig?.limits?.maxFlows, 0),
+      maxMediaSizeMb: pickLimit(freeConfig?.limits?.maxMediaSizeMb, 0),
+      dailyMessageLimit: pickLimit(freeConfig?.limits?.dailyMessageLimit, 0),
     };
     return {
       success: true,
@@ -67,11 +78,19 @@ async function currentSubscription(req) {
         templates: usageMetric(usageCounts.templatesCount, freeLimits.maxTemplates),
         employees: usageMetric(usageCounts.employeesCount, freeLimits.maxAgents),
         campaigns: usageMetric(usageCounts.campaignsCount, freeLimits.maxCampaignsPerMonth),
+        apiKeys: usageMetric(usageCounts.apiKeysCount, freeLimits.maxApiKeys),
+        webhooks: usageMetric(usageCounts.webhooksCount, freeLimits.maxWebhooks),
+        flows: usageMetric(usageCounts.flowsCount, freeLimits.maxFlows),
+        storage: usageMetric(Number(((usageCounts.storageBytes || 0) / (1024 * 1024)).toFixed(2)), freeLimits.maxStorageMb),
+        dailyMessages: usageMetric(usageCounts.outboundMessagesTodayCount, freeLimits.dailyMessageLimit),
       },
     };
   }
 
   const limits = normalizeLimits(active?.snapshot?.limits || {});
+  const hasPendingMandateSetup = Boolean(active?.metadata?.pendingMandateSetup?.razorpaySubscriptionId);
+  const autoRenewEligible = active.planSlug !== "free" && ["active", "past_due", "grace_period"].includes(String(active.status || ""));
+  const fallbackMode = hasPendingMandateSetup ? "pending_mandate" : active.autoRenewEnabled ? "none" : active.planSlug !== "free" ? "manual_renew" : "";
 
   return {
     success: true,
@@ -83,6 +102,7 @@ async function currentSubscription(req) {
       status: active.status,
       currentPeriodStart: active.currentPeriodStart,
       currentPeriodEnd: active.currentPeriodEnd,
+      autoRenewEligible,
       autoRenewEnabled: Boolean(active.autoRenewEnabled),
       renewalMethod: active.renewalMethod || "",
       renewalStatus: active.renewalStatus || "",
@@ -92,7 +112,16 @@ async function currentSubscription(req) {
       lastRenewalAttemptAt: active.lastRenewalAttemptAt || null,
       nextRenewalAttemptAt: active.nextRenewalAttemptAt || null,
       mandateStatus: active.mandateStatus || "not_setup",
+      fallbackMode,
       paymentMethod: active.paymentMethodSnapshot || null,
+      pendingMandateSetup: active.metadata?.pendingMandateSetup
+        ? {
+            razorpaySubscriptionId: active.metadata.pendingMandateSetup.razorpaySubscriptionId || "",
+            replaceExisting: Boolean(active.metadata.pendingMandateSetup.replaceExisting),
+            createdAt: active.metadata.pendingMandateSetup.createdAt || null,
+            providerStatus: active.metadata.pendingMandateSetup.providerStatus || "",
+          }
+        : null,
       cancelAtPeriodEnd: Boolean(active.cancelAtPeriodEnd),
       scheduledChange: active.scheduledChange?.planId
         ? {
@@ -143,6 +172,11 @@ async function currentSubscription(req) {
       templates: usageMetric(usageCounts.templatesCount, limits.maxTemplates),
       employees: usageMetric(usageCounts.employeesCount, limits.maxAgents ?? limits.maxEmployees),
       campaigns: usageMetric(usageCounts.campaignsCount, limits.maxCampaignsPerMonth),
+      apiKeys: usageMetric(usageCounts.apiKeysCount, limits.maxApiKeys),
+      webhooks: usageMetric(usageCounts.webhooksCount, limits.maxWebhooks),
+      flows: usageMetric(usageCounts.flowsCount, limits.maxFlows),
+      storage: usageMetric(Number(((usageCounts.storageBytes || 0) / (1024 * 1024)).toFixed(2)), limits.maxStorageMb),
+      dailyMessages: usageMetric(usageCounts.outboundMessagesTodayCount, limits.dailyMessageLimit),
     },
   };
 }

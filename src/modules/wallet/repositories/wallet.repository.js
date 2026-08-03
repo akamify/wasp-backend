@@ -30,6 +30,15 @@ async function createTransaction(data) {
   return Transaction.create(data);
 }
 
+async function findTransactionByProviderRef({ provider, providerRef, type = "credit" }) {
+  if (!provider || !providerRef) return null;
+  return Transaction.findOne({
+    provider: String(provider),
+    providerRef: String(providerRef),
+    type: String(type),
+  });
+}
+
 async function reserveWalletFunds(workspaceId, amount) {
   return Wallet.findOneAndUpdate(
     {
@@ -88,6 +97,7 @@ module.exports = {
   debitWallet,
   creditWallet,
   createTransaction,
+  findTransactionByProviderRef,
   reserveWalletFunds,
   releaseWalletFunds,
   finalizeWalletFunds,

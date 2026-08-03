@@ -35,7 +35,7 @@ async function resolveWorkspaceAccess({ workspaceId, userId }) {
   const workspace = await Workspace.findOne({
     _id: workspaceId,
     isActive: true,
-    status: { $ne: "deleted" },
+    status: "active",
   });
   if (!workspace) return null;
 

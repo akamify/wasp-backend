@@ -1,11 +1,19 @@
 const Joi = require("joi");
 
+const headerLocationSchema = Joi.object({
+    latitude: Joi.number().min(-90).max(90).required(),
+    longitude: Joi.number().min(-180).max(180).required(),
+    name: Joi.string().trim().max(120).required(),
+    address: Joi.string().trim().max(240).required(),
+});
+
 const recipientSchema = Joi.alternatives().try(
     Joi.string().min(8).max(30),
     Joi.object({
         to: Joi.string().min(8).max(30).required(),
         variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
         headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+        headerLocation: headerLocationSchema.optional(),
         otpCode: Joi.string().allow("").max(20).optional(),
         buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
         buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
@@ -40,6 +48,7 @@ const estimateSchema = Joi.object({
         runtime: Joi.object({
             variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
             headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+            headerLocation: headerLocationSchema.optional(),
             otpCode: Joi.string().allow("").max(20).optional(),
             buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
             buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),
@@ -104,6 +113,7 @@ const audienceSchema = Joi.object({
     runtime: Joi.object({
         variables: Joi.array().items(Joi.string().allow("")).max(20).optional(),
         headerVariables: Joi.array().items(Joi.string().allow("")).max(10).optional(),
+        headerLocation: headerLocationSchema.optional(),
         otpCode: Joi.string().allow("").max(20).optional(),
         buttonValues: Joi.array().items(Joi.string().allow("")).max(10).optional(),
         buttonTtlMinutes: Joi.array().items(Joi.number().min(0).max(43200)).max(10).optional(),

@@ -62,6 +62,12 @@ function buildRecipientFromRuntime(to, runtime) {
         to,
         variables: Array.isArray(runtime?.variables) ? runtime.variables : [],
         headerVariables: Array.isArray(runtime?.headerVariables) ? runtime.headerVariables : [],
+        headerLocation: runtime?.headerLocation && typeof runtime.headerLocation === "object" ? {
+            latitude: Number(runtime.headerLocation.latitude),
+            longitude: Number(runtime.headerLocation.longitude),
+            name: String(runtime.headerLocation.name || ""),
+            address: String(runtime.headerLocation.address || ""),
+        } : undefined,
         otpCode: runtime?.otpCode || undefined,
         buttonValues: Array.isArray(runtime?.buttonValues) ? runtime.buttonValues : [],
         buttonTtlMinutes: Array.isArray(runtime?.buttonTtlMinutes) ? runtime.buttonTtlMinutes : [],
@@ -305,7 +311,7 @@ async function createCampaign(req) {
             for (const recipient of normalizedRecipients) {
                 try {
                     await waitForCampaignSendSlot({ workspaceId: req.workspace.id, wabaId: template.wabaId });
-                    await sendTemplateMessageForUser({ userId: req.workspace.id, campaignId: String(campaign._id), template, to: recipient.to, variables: recipient.variables, headerVariables: recipient.headerVariables, otpCode: recipient.otpCode, buttonValues: recipient.buttonValues, buttonTtlMinutes: recipient.buttonTtlMinutes, flowTokens: recipient.flowTokens, flowActionData: recipient.flowActionData });
+                    await sendTemplateMessageForUser({ userId: req.workspace.id, campaignId: String(campaign._id), template, to: recipient.to, variables: recipient.variables, headerVariables: recipient.headerVariables, headerLocation: recipient.headerLocation, otpCode: recipient.otpCode, buttonValues: recipient.buttonValues, buttonTtlMinutes: recipient.buttonTtlMinutes, flowTokens: recipient.flowTokens, flowActionData: recipient.flowActionData });
                     sentCount += 1;
                 } catch (err) {
                     failedCount += 1;
@@ -313,7 +319,7 @@ async function createCampaign(req) {
                     lastFailure = storedError.providerMessage || storedError.message || "Campaign send failed";
                     if (!err?.templateFailurePersisted) try {
                         const now = new Date();
-                        await Message.create({ workspaceId: req.workspace.id, wabaId: template.wabaId, campaignId: campaign._id, templateId: template._id, phone: recipient.to, direction: "outbound", status: "failed", statusTimestamps: { failedAt: now }, text: "", payload: { to: recipient.to, template: { id: String(template._id), name: template.name, language: template.language }, runtime: { variables: recipient.variables || [], headerVariables: recipient.headerVariables || [], otpCode: recipient.otpCode || "", buttonValues: recipient.buttonValues || [], buttonTtlMinutes: recipient.buttonTtlMinutes || [], flowTokens: recipient.flowTokens || [], flowActionData: recipient.flowActionData || [] } }, error: storedError });
+                        await Message.create({ workspaceId: req.workspace.id, wabaId: template.wabaId, campaignId: campaign._id, templateId: template._id, phone: recipient.to, direction: "outbound", status: "failed", statusTimestamps: { failedAt: now }, text: "", payload: { to: recipient.to, template: { id: String(template._id), name: template.name, language: template.language }, runtime: { variables: recipient.variables || [], headerVariables: recipient.headerVariables || [], headerLocation: recipient.headerLocation || null, otpCode: recipient.otpCode || "", buttonValues: recipient.buttonValues || [], buttonTtlMinutes: recipient.buttonTtlMinutes || [], flowTokens: recipient.flowTokens || [], flowActionData: recipient.flowActionData || [] } }, error: storedError });
                     } catch {}
                     if (Number(err?.statusCode || err?.status) === 402) {
                         walletBlocked = true;

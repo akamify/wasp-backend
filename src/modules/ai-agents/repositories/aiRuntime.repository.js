@@ -86,8 +86,24 @@ function clearTestMemory({ workspaceId, agentId, contactId }) {
   );
 }
 
-function createUsageLog(payload) {
-  return AiUsageLog.create(payload);
+function createUsageLog(payload, options = {}) {
+  const executionKey = String(payload?.executionKey || "").trim();
+  if (!executionKey) return AiUsageLog.create(payload);
+  const mergeFields = options?.mergeOnExisting && options?.mergeFields && typeof options.mergeFields === "object"
+    ? options.mergeFields
+    : null;
+  return AiUsageLog.findOneAndUpdate(
+    { workspaceId: payload.workspaceId, executionKey },
+    {
+      $setOnInsert: payload,
+      ...(mergeFields ? { $set: mergeFields } : {}),
+    },
+    {
+      upsert: true,
+      returnDocument: "after",
+      setDefaultsOnInsert: true,
+    }
+  );
 }
 
 module.exports = {

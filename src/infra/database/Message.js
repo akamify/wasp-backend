@@ -130,6 +130,24 @@ const MessageSchema = new mongoose.Schema(
     flowSessionId: { type: mongoose.Schema.Types.ObjectId, ref: "FlowSession", default: null, index: true },
     flowId: { type: mongoose.Schema.Types.ObjectId, ref: "Flow", default: null, index: true },
     nodeId: { type: String, trim: true, default: null },
+    aiAgentId: { type: mongoose.Schema.Types.ObjectId, ref: "AiAgent", default: null, index: true },
+    aiConversationId: { type: mongoose.Schema.Types.ObjectId, ref: "AiConversation", default: null, index: true },
+    aiExecutionKey: { type: String, trim: true, default: null, index: true },
+    aiExecutionStartedAt: { type: Date, default: null, index: true },
+    aiStatus: {
+      type: String,
+      enum: ["processing", "replied", "handover", "skipped", "failed"],
+      default: null,
+      index: true,
+    },
+    aiAction: { type: String, enum: ["reply", "handover", "blocked"], default: null },
+    aiProcessedAt: { type: Date, default: null, index: true },
+    aiReplyMessageId: { type: mongoose.Schema.Types.ObjectId, ref: "Message", default: null },
+    aiReason: { type: String, trim: true, default: null },
+    aiError: { type: String, trim: true, default: null },
+    idempotencyKey: { type: String, trim: true, default: null, index: true },
+    providerDispatchStartedAt: { type: Date, default: null, index: true },
+    providerDispatchCompletedAt: { type: Date, default: null, index: true },
     buttons: {
       type: [
         {
@@ -220,6 +238,25 @@ MessageSchema.index(
   }
 );
 MessageSchema.index({ workspaceId: 1, contactId: 1, direction: 1, createdAt: -1 });
+MessageSchema.index(
+  { workspaceId: 1, aiExecutionKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      direction: "inbound",
+      aiExecutionKey: { $type: "string" },
+    },
+  }
+);
+MessageSchema.index(
+  { workspaceId: 1, idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      idempotencyKey: { $type: "string" },
+    },
+  }
+);
 MessageSchema.index({ workspaceId: 1, campaignId: 1, "tracking.clicked": 1 });
 MessageSchema.index({ workspaceId: 1, templateId: 1, "conversion.converted": 1 });
 MessageSchema.index(
