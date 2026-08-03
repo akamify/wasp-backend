@@ -1,7 +1,9 @@
 const axios = require("axios");
-const { getCredentialsForUser } = require("@shared/services/credentialsService");
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { getMetaAppConfig } = require("@core/config/metaAppConfig");
+const { getToken, META_TOKEN_TYPES } = require("@modules/meta/services/tokenProvider.service");
+const { findLatestConnectionDocument } = require("@shared/services/whatsappConnectionService");
+const { decryptString } = require("@shared/utils/crypto");
 
 function graphBaseUrl(graphApiVersion) {
   const version = graphApiVersion || process.env.META_GRAPH_VERSION || "v22.0";
@@ -31,13 +33,37 @@ function normalizeMetaError(err) {
 async function metaSubscriptionHealth(req, res) {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
 
-  const [creds, credsDoc] = await Promise.all([
-    getCredentialsForUser(req.workspace.id),
+  const [connectionDoc, credsDoc] = await Promise.all([
+    findLatestConnectionDocument(
+      req.workspace.id,
+      "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain onboardingStage registrationStatus"
+    ),
     WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select("lastWebhookAt lastWebhookField lastWebhookObject"),
   ]);
+  if (!connectionDoc) {
+    return res.json({
+      success: true,
+      healthy: false,
+      checks: { credentialsLoaded: false },
+      issues: ["No WhatsApp onboarding record found for this workspace."],
+      webhook: {
+        lastWebhookAt: credsDoc?.lastWebhookAt ? credsDoc.lastWebhookAt.toISOString() : null,
+        lastWebhookField: credsDoc?.lastWebhookField || null,
+        lastWebhookObject: credsDoc?.lastWebhookObject || null,
+      },
+    });
+  }
+
+  const creds = {
+    accessToken: connectionDoc.accessTokenEnc ? decryptString(connectionDoc.accessTokenEnc) : "",
+    phoneNumberId: String(connectionDoc.phoneNumberId || connectionDoc.phoneNumberIdPlain || "").trim(),
+    wabaId: String(connectionDoc.wabaId || connectionDoc.businessAccountIdPlain || "").trim(),
+    graphApiVersion: connectionDoc.graphApiVersion,
+  };
   const baseURL = graphBaseUrl(creds.graphApiVersion);
   const client = axios.create({ baseURL, timeout: 20000 });
-  const headers = { Authorization: `Bearer ${creds.accessToken}` };
+  const systemUserToken = await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER });
+  const headers = { Authorization: `Bearer ${systemUserToken}` };
   let appId = "";
   let appSecret = "";
   try {
@@ -53,11 +79,11 @@ async function metaSubscriptionHealth(req, res) {
       params: { fields: "id,display_phone_number,verified_name,status,quality_rating" },
     }),
     client.get(`/${creds.wabaId}/phone_numbers`, { headers, params: { limit: 200 } }),
-    appId && appSecret
+    appId && appSecret && creds.accessToken
       ? client.get("/debug_token", {
+          headers,
           params: {
             input_token: creds.accessToken,
-            access_token: `${appId}|${appSecret}`,
           },
         })
       : Promise.resolve({ data: null }),
@@ -111,6 +137,10 @@ async function metaSubscriptionHealth(req, res) {
     healthy: issues.length === 0,
     checks,
     issues,
+    lifecycle: {
+      onboardingStage: connectionDoc.onboardingStage || null,
+      registrationStatus: connectionDoc.registrationStatus || null,
+    },
     webhook: {
       lastWebhookAt: credsDoc?.lastWebhookAt ? credsDoc.lastWebhookAt.toISOString() : null,
       lastWebhookField: credsDoc?.lastWebhookField || null,

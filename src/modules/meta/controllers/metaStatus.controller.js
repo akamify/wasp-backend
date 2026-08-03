@@ -6,6 +6,7 @@ const axios = require("axios");
 const {
   computeConnectionStatus,
   computeRegistrationProgress,
+  inferOnboardingStage,
   inferRegistrationStatus,
   isReadyConnection,
 } = require("@modules/meta/services/connectionStatus.service");
@@ -193,11 +194,13 @@ async function metaStatus(req, res) {
   const connectionStatus = computeConnectionStatus(doc);
   const registrationStatus = inferRegistrationStatus(doc);
   const registrationProgress = computeRegistrationProgress(doc);
+  const lifecycleState = inferOnboardingStage(doc);
 
   return res.json({
     success: true,
     status: isReadyConnection(doc) ? "active" : doc.isValid ? "active" : "pending",
     connectionStatus,
+    lifecycleState,
     registrationStatus,
     registrationProgress,
     credentials: {

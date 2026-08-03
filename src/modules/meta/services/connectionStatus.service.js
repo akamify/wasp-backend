@@ -13,6 +13,7 @@ const SETUP_STEPS = [
   "REGISTER_PHONE",
   "SYNC_METADATA",
   "SYNC_TEMPLATES",
+  "VERIFY_CONNECTION",
   "READY",
 ];
 
@@ -104,6 +105,9 @@ function computeRegistrationProgress(doc) {
   if (inferRegistrationStatus(doc) === REGISTRATION_STATUSES.COMPLETED) completed.add("REGISTER_PHONE");
   if (String(doc?.metadataFetchStatus || "") === "complete") completed.add("SYNC_METADATA");
   if (String(doc?.templateSyncStatus || "") === TEMPLATE_SYNC_STATUSES.COMPLETED) completed.add("SYNC_TEMPLATES");
+  if ([ONBOARDING_STAGES.READY, ONBOARDING_STAGES.READY_WITH_WARNINGS].includes(String(doc?.onboardingStage || ""))) {
+    completed.add("VERIFY_CONNECTION");
+  }
   if (isReadyConnection(doc)) completed.add("READY");
 
   return {
