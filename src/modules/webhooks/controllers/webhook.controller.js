@@ -12,6 +12,7 @@ const { publishWorkspaceEvent, publishToWorkspace } = require("@shared/services/
 const { getCrmLeadAssignmentQueue } = require("@infra/queues/crmLeadAssignment.queue");
 const { getAiRuntimeQueue } = require("@infra/queues/aiRuntime.queue");
 const { Workspace } = require("@infra/database/Workspace");
+const { refreshWhatsAppConnectionMetadata } = require("@shared/services/whatsappConnectionMetadataService");
 const {
   normalizeWhatsAppWebhookMessages,
 } = require("@shared/services/whatsappWebhookNormalizer");
@@ -274,6 +275,14 @@ async function receive(req, res) {
           { $set: update }
         );
 
+        continue;
+      }
+
+      if (field === "phone_number_name_update" || field === "account_update" || field === "account_alerts") {
+        const wabaId = entry?.id ? String(entry.id) : "";
+        const tenant = wabaId ? await findTenantByWabaId(wabaId) : null;
+        if (!tenant?.workspaceId) continue;
+        await refreshWhatsAppConnectionMetadata(String(tenant.workspaceId)).catch(() => null);
         continue;
       }
 

@@ -30,6 +30,18 @@ function isEmbeddedSignupConnection(doc) {
   );
 }
 
+async function findLatestConnectionDocument(workspaceId, select = "", options = {}) {
+  const docs = await WhatsAppCredentials.find({
+    workspaceId,
+    status: { $ne: "disconnected" },
+    ...(options.onlyEmbeddedSignup ? { connectionMethod: "embedded_signup" } : {}),
+  })
+    .sort({ updatedAt: -1, createdAt: -1, isActive: -1 })
+    .select(select);
+  if (!docs.length) return null;
+  return docs.find(isEmbeddedSignupConnection) || docs[0] || null;
+}
+
 async function findActiveConnectionDocument(workspaceId, select = "", options = {}) {
   const docs = await WhatsAppCredentials.find(activeConnectionFilter(workspaceId, options))
     .sort({ connectedAt: -1, updatedAt: -1 })
@@ -41,7 +53,7 @@ async function findActiveConnectionDocument(workspaceId, select = "", options = 
 async function resolveActiveConnection(workspaceId, options = {}) {
   const doc = await findActiveConnectionDocument(
     workspaceId,
-    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc +tokenDebugSummary phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain graphApiVersion displayPhoneNumber wabaName connectedAt connectionMode tokenType",
+    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc +tokenDebugSummary phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain graphApiVersion displayPhoneNumber wabaName connectedAt connectionMode tokenType onboardingStage registrationStatus templateSyncStatus isValid isActive status",
     options
   );
   if (!doc) return null;
@@ -79,6 +91,7 @@ async function requireEmbeddedSignupConnection(workspaceId) {
 
 module.exports = {
   activeConnectionFilter,
+  findLatestConnectionDocument,
   findActiveConnectionDocument,
   isEmbeddedSignupConnection,
   requireEmbeddedSignupConnection,

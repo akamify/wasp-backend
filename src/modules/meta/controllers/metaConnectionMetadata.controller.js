@@ -48,7 +48,7 @@ async function forceEmbeddedActiveConnection(req, res) {
   await templatesService.syncMetaTemplates({ workspace: req.workspace, body: {} }).catch(() => null);
 
   const latest = await WhatsAppCredentials.findById(embedded._id).select(
-    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain wabaName verifiedName nameStatus qualityRating codeVerificationStatus platformType accountMode throughput messagingLimitTier messagingLimitTierCached businessProfile lastMetadataSyncAt metadataFetchStatus metadataWarnings isValid isActive connectionMode tokenType tokenDebugSummary"
+    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain wabaName verifiedName nameStatus qualityRating codeVerificationStatus platformType accountMode throughput messagingLimitTier messagingLimitTierCached businessProfile lastMetadataSyncAt lastMetaSyncAt metadataFetchStatus metadataWarnings isValid isActive connectionMode tokenType tokenDebugSummary onboardingStage registrationStatus registrationVersion phoneRegistrationState registrationLastAttemptAt registrationCompletedAt registrationRetryCount registrationLastError businessManagerId templateSyncStatus templateSyncCompletedAt templateSyncLastError"
   );
   return res.json({ success: true, connection: serializeWhatsAppConnection(latest) });
 }

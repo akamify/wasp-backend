@@ -3,6 +3,13 @@ const { Message } = require("@infra/database/Message");
 const { decryptString } = require("@shared/utils/crypto");
 const { isMetaAuthorizationWarning } = require("@shared/services/whatsappConnectionMetadataService");
 const axios = require("axios");
+const {
+  computeConnectionStatus,
+  computeRegistrationProgress,
+  inferRegistrationStatus,
+  isReadyConnection,
+} = require("@modules/meta/services/connectionStatus.service");
+const { getMetaGraphVersion } = require("@modules/meta/services/metaGraph.service");
 
 function parseTierLimitToNumber(tier) {
   const s = String(tier || "").trim().toUpperCase();
@@ -27,7 +34,7 @@ function mask(value) {
 }
 
 function graphBaseUrl(graphApiVersion) {
-  const version = graphApiVersion || process.env.META_GRAPH_VERSION || "v22.0";
+  const version = getMetaGraphVersion(graphApiVersion);
   return `https://graph.facebook.com/${version}`;
 }
 
@@ -64,13 +71,22 @@ async function metaStatus(req, res) {
   res.set("Cache-Control", "no-store");
 
   const doc = await WhatsAppCredentials.findOne({ workspaceId: req.workspace.id, isActive: { $ne: false } }).select(
-    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid lastValidatedAt createdAt updatedAt messagingLimitTierCached messagingLimitCurrentCached messagingLimitNextCached lastLimitsUpdateAt displayPhoneNumber verifiedName qualityRating codeVerificationStatus nameStatus platformType throughput accountMode businessProfile metadataWarnings lastSuccessfulSendAt lastStatusWebhookAt"
+    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc graphApiVersion isValid lastValidatedAt createdAt updatedAt messagingLimitTierCached messagingLimitCurrentCached messagingLimitNextCached lastLimitsUpdateAt displayPhoneNumber verifiedName qualityRating codeVerificationStatus nameStatus platformType throughput accountMode businessProfile metadataWarnings lastSuccessfulSendAt lastStatusWebhookAt onboardingStage registrationStatus registrationVersion phoneRegistrationState registrationLastAttemptAt registrationCompletedAt registrationRetryCount registrationLastError businessManagerId templateSyncStatus templateSyncCompletedAt templateSyncLastError lastMetaSyncAt"
   );
 
   if (!doc) {
     return res.json({
       success: true,
       status: "disconnected",
+      connectionStatus: "NOT_CONNECTED",
+      registrationStatus: "NOT_STARTED",
+      registrationProgress: {
+        completedSteps: [],
+        totalSteps: 7,
+        currentStep: "CONNECT_META",
+        percent: 0,
+        steps: [],
+      },
       credentials: null,
       cloudApiActive: false,
       canSendServiceMessages: false,
@@ -174,9 +190,16 @@ async function metaStatus(req, res) {
     setupWarnings.push("Code verification metadata is expired; the operational Cloud API connection remains active.");
   }
 
+  const connectionStatus = computeConnectionStatus(doc);
+  const registrationStatus = inferRegistrationStatus(doc);
+  const registrationProgress = computeRegistrationProgress(doc);
+
   return res.json({
     success: true,
-    status: doc.isValid ? "active" : "pending",
+    status: isReadyConnection(doc) ? "active" : doc.isValid ? "active" : "pending",
+    connectionStatus,
+    registrationStatus,
+    registrationProgress,
     credentials: {
       id: String(doc._id),
       phoneNumberId: mask(phoneNumberId),
@@ -199,6 +222,15 @@ async function metaStatus(req, res) {
     lastStatusWebhookAt,
     setupWarnings,
     blockingIssues,
+    registrationLastAttempt: doc.registrationLastAttemptAt || null,
+    registrationCompletedAt: doc.registrationCompletedAt || null,
+    registrationRetryCount: Number(doc.registrationRetryCount || 0),
+    registrationLastError: doc.registrationLastError || null,
+    businessManagerId: doc.businessManagerId || null,
+    templateSyncStatus: doc.templateSyncStatus || null,
+    templateSyncCompletedAt: doc.templateSyncCompletedAt || null,
+    lastMetaSync: doc.lastMetaSyncAt || null,
+    canRetry: ["PIN_REQUIRED", "FAILED", "PENDING", "RETRYING"].includes(registrationStatus),
     metaBillingOwner: "platform_or_connected_waba",
     limits: {
       messagingLimitTier: doc.messagingLimitTierCached || apiTier || null,

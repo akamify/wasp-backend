@@ -1,4 +1,9 @@
 const mongoose = require("mongoose");
+const {
+  ONBOARDING_STAGES,
+  REGISTRATION_STATUSES,
+  TEMPLATE_SYNC_STATUSES,
+} = require("@modules/meta/constants/embeddedSignup.constants");
 
 const WhatsAppCredentialsSchema = new mongoose.Schema(
   {
@@ -34,6 +39,7 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
     wabaCurrency: { type: String, default: null },
     wabaTimezoneId: { type: String, default: null },
     messageTemplateNamespace: { type: String, default: null },
+    businessManagerId: { type: String, default: null, index: true },
     verifiedName: { type: String, default: null },
     nameStatus: { type: String, default: null },
     qualityRating: { type: String, default: null },
@@ -59,6 +65,41 @@ const WhatsAppCredentialsSchema = new mongoose.Schema(
       index: true,
     },
     metadataWarnings: { type: [String], default: [] },
+    onboardingStage: {
+      type: String,
+      enum: Object.values(ONBOARDING_STAGES),
+      default: ONBOARDING_STAGES.NOT_STARTED,
+      index: true,
+    },
+    registrationStatus: {
+      type: String,
+      enum: Object.values(REGISTRATION_STATUSES),
+      default: REGISTRATION_STATUSES.NOT_STARTED,
+      index: true,
+    },
+    registrationVersion: { type: String, default: null },
+    phoneRegistrationState: { type: String, default: null },
+    registrationLastAttemptAt: { type: Date, default: null },
+    registrationCompletedAt: { type: Date, default: null },
+    embeddedSignupCompletedAt: { type: Date, default: null },
+    registrationDeadlineAt: { type: Date, default: null },
+    registrationExpired: { type: Boolean, default: false, index: true },
+    registrationRetryCount: { type: Number, default: 0 },
+    registrationLastError: { type: String, default: null },
+    registrationLastErrorCode: { type: String, default: null },
+    registrationRetryAllowed: { type: Boolean, default: null },
+    registrationRetryAfterAt: { type: Date, default: null },
+    registrationRecommendedAction: { type: String, default: null },
+    phoneRegistrationPinEnc: { type: String, default: null, select: false },
+    phoneRegistrationPinUpdatedAt: { type: Date, default: null },
+    lastMetaSyncAt: { type: Date, default: null },
+    templateSyncStatus: {
+      type: String,
+      enum: Object.values(TEMPLATE_SYNC_STATUSES),
+      default: TEMPLATE_SYNC_STATUSES.NOT_STARTED,
+    },
+    templateSyncLastError: { type: String, default: null },
+    templateSyncCompletedAt: { type: Date, default: null },
     isActive: { type: Boolean, default: true, index: true },
     businessTokenEnc: { type: String, default: null, select: false },
     connectionMethod: { type: String, enum: ["embedded_signup"], default: "embedded_signup", index: true },

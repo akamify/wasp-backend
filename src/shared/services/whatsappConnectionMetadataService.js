@@ -1,5 +1,13 @@
 const axios = require("axios");
-const { resolveActiveConnection, maskId, isEmbeddedSignupConnection } = require("@shared/services/whatsappConnectionService");
+const { resolveActiveConnection, findLatestConnectionDocument, maskId, isEmbeddedSignupConnection } = require("@shared/services/whatsappConnectionService");
+const {
+  computeConnectionStatus,
+  computeRegistrationProgress,
+  inferOnboardingStage,
+  inferRegistrationStatus,
+  isReadyConnection,
+} = require("@modules/meta/services/connectionStatus.service");
+const { getMetaGraphVersion } = require("@modules/meta/services/metaGraph.service");
 
 const WABA_FIELDS = "id,name,currency,timezone_id,message_template_namespace";
 const PHONE_FIELDS =
@@ -8,7 +16,7 @@ const MINIMAL_PHONE_FIELDS = "id,display_phone_number";
 const PROFILE_FIELDS = "about,address,description,email,profile_picture_url,websites,vertical";
 
 function graphBaseUrl(graphApiVersion) {
-  const version = graphApiVersion || process.env.META_GRAPH_VERSION || "v22.0";
+  const version = getMetaGraphVersion(graphApiVersion);
   return `https://graph.facebook.com/${version}`;
 }
 
@@ -66,30 +74,20 @@ function normalizeBusinessProfile(profile) {
   };
 }
 
-function computeConnectionStatus(connection) {
-  if (!connection) return "error";
-  const metadataFetchStatus = String(connection.metadataFetchStatus || "pending").toLowerCase();
-  const codeVerificationStatus = String(connection.codeVerificationStatus || "").toUpperCase();
-  const nameStatus = String(connection.nameStatus || "").toUpperCase();
-  const metadataWarnings = Array.isArray(connection.metadataWarnings) ? connection.metadataWarnings : [];
-  const platformType = String(connection.platformType || "").toUpperCase();
-  const accountMode = String(connection.accountMode || "").toUpperCase();
-  if (metadataWarnings.some(isMetaAuthorizationWarning)) return "reauthorization_required";
-  if ((connection.phoneNumberId || connection.phoneNumberIdPlain) && platformType === "CLOUD_API" && accountMode === "LIVE") return "connected";
-  if (codeVerificationStatus && codeVerificationStatus !== "VERIFIED") return "pending_verification";
-  if (["PENDING", "IN_REVIEW"].includes(nameStatus)) return "pending_display_name_review";
-  if (metadataFetchStatus === "error") return "error";
-  if (metadataFetchStatus !== "complete") return "metadata_partial";
-  if (connection.phoneNumberId || connection.phoneNumberIdPlain) return "connected";
-  return "metadata_partial";
-}
-
 function serializeWhatsAppConnection(doc) {
   if (!doc) {
     return {
       connected: false,
       status: "disconnected",
-      connectionStatus: "error",
+      connectionStatus: "NOT_CONNECTED",
+      registrationStatus: "NOT_STARTED",
+      registrationProgress: {
+        completedSteps: [],
+        totalSteps: 7,
+        currentStep: "CONNECT_META",
+        percent: 0,
+        steps: [],
+      },
       metadataFetchStatus: "pending",
       metadataWarnings: [],
     };
@@ -99,10 +97,18 @@ function serializeWhatsAppConnection(doc) {
   const tokenDebug = doc.tokenDebugSummary || null;
   const metadataWarnings = Array.isArray(doc.metadataWarnings) ? doc.metadataWarnings : [];
   const manualOrLegacyConnection = !isEmbeddedSignupConnection(doc);
+  const registrationStatus = inferRegistrationStatus(doc);
+  const onboardingStage = inferOnboardingStage(doc);
+  const registrationProgress = computeRegistrationProgress(doc);
+  const connectionStatus = computeConnectionStatus(doc);
   return {
-    connected: Boolean(doc.isActive && doc.isValid),
+    connected: isReadyConnection(doc),
     status: doc.status || (doc.isValid ? "active" : "pending"),
-    connectionStatus: computeConnectionStatus(doc),
+    connectionStatus,
+    lifecycleState: onboardingStage,
+    onboardingStage,
+    registrationStatus,
+    registrationProgress,
     connectionMode: doc.connectionMode || null,
     tokenType: doc.tokenType || null,
     tokenDebug: tokenDebug
@@ -134,13 +140,36 @@ function serializeWhatsAppConnection(doc) {
     messagingLimitTier: doc.messagingLimitTier || doc.messagingLimitTierCached || null,
     throughput: doc.throughput ?? null,
     businessProfile: doc.businessProfile || null,
+    businessManagerId: doc.businessManagerId || null,
     lastMetadataSyncAt: doc.lastMetadataSyncAt || null,
+    lastMetaSync: doc.lastMetaSyncAt || doc.lastMetadataSyncAt || null,
     metadataFetchStatus: doc.metadataFetchStatus || "pending",
     metadataWarnings,
     authorizationRequired: metadataWarnings.some(isMetaAuthorizationWarning),
     webhookSubscribed: Boolean(doc.webhookSubscribed),
     connectedAt: doc.connectedAt || null,
     lastError: doc.lastError || null,
+    registrationLastAttempt: doc.registrationLastAttemptAt || null,
+    registrationCompletedAt: doc.registrationCompletedAt || null,
+    embeddedSignupCompletedAt: doc.embeddedSignupCompletedAt || null,
+    registrationDeadlineAt: doc.registrationDeadlineAt || null,
+    registrationExpired: Boolean(doc.registrationExpired),
+    registrationRetryCount: Number(doc.registrationRetryCount || 0),
+    registrationLastError: doc.registrationLastError || null,
+    registrationLastErrorCode: doc.registrationLastErrorCode || null,
+    registrationRetryAllowed: doc.registrationRetryAllowed == null ? null : Boolean(doc.registrationRetryAllowed),
+    registrationRetryAfterAt: doc.registrationRetryAfterAt || null,
+    registrationRecommendedAction: doc.registrationRecommendedAction || null,
+    canRetry:
+      !doc.registrationExpired &&
+      [ "PIN_REQUIRED", "FAILED", "PENDING", "RETRYING" ].includes(registrationStatus),
+    templateSyncStatus: doc.templateSyncStatus || null,
+    templateSyncCompletedAt: doc.templateSyncCompletedAt || null,
+    warnings: [
+      ...(metadataWarnings || []),
+      ...(doc.registrationLastError ? [doc.registrationLastError] : []),
+      ...(doc.templateSyncLastError ? [doc.templateSyncLastError] : []),
+    ].filter(Boolean),
     // Preserve the existing frontend response keys during migration.
     waba_name: doc.wabaName || null,
     waba_id_masked: maskId(wabaId) || null,
@@ -152,8 +181,10 @@ function serializeWhatsAppConnection(doc) {
   };
 }
 
-async function refreshWhatsAppConnectionMetadata(workspaceId) {
-  const connection = await resolveActiveConnection(workspaceId, { requireValid: false });
+async function refreshWhatsAppConnectionMetadata(workspaceId, options = {}) {
+  const connection = options.connection
+    ? options.connection
+    : await resolveActiveConnection(workspaceId, { requireValid: false });
   if (!connection) return null;
 
   const client = axios.create({
@@ -251,6 +282,7 @@ async function refreshWhatsAppConnectionMetadata(workspaceId) {
   }
 
   patch.metadataWarnings = warnings;
+  patch.lastMetaSyncAt = patch.lastMetadataSyncAt;
   patch.metadataFetchStatus =
     successfulStages === 0
       ? "error"
@@ -270,7 +302,12 @@ async function refreshWhatsAppConnectionMetadata(workspaceId) {
 }
 
 async function cacheWhatsAppBusinessProfile(workspaceId, profile) {
-  const connection = await resolveActiveConnection(workspaceId, { requireValid: false });
+  const doc = await findLatestConnectionDocument(
+    workspaceId,
+    "businessProfile",
+    { onlyEmbeddedSignup: false }
+  );
+  const connection = doc ? { doc } : await resolveActiveConnection(workspaceId, { requireValid: false });
   if (!connection) return null;
   const normalized = normalizeBusinessProfile(profile);
   const existing = connection.doc.businessProfile?.toObject

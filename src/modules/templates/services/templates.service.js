@@ -1093,7 +1093,7 @@ async function syncStatus(req) {
 }
 
 async function syncMetaTemplates(req) {
-  const connection = await requireActiveConnection(req.workspace.id);
+  const connection = req.metaConnectionOverride || (await requireActiveConnection(req.workspace.id));
   const exactName = req.body?.name ? String(req.body.name).trim() : undefined;
   let remoteTemplates;
   try {

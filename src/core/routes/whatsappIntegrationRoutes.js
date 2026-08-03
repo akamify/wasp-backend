@@ -8,6 +8,7 @@ const {
   exchangeEmbeddedSignupCode,
   getWhatsAppConnection,
   disconnectWhatsAppConnection,
+  completePhoneRegistration,
 } = require("@modules/meta/controllers/metaEmbeddedSignup.controller");
 const { refreshConnectionMetadata, forceEmbeddedActiveConnection: forceEmbeddedActiveFromMeta } = require("@modules/meta/controllers/metaConnectionMetadata.controller");
 const { syncMetaTemplates } = require("@modules/templates/controllers/templates.controller");
@@ -26,9 +27,22 @@ router.post(
       code: Joi.string().allow("", null).optional(),
       waba_id: Joi.string().allow("", null).optional(),
       phone_number_id: Joi.string().allow("", null).optional(),
+      pin: Joi.string().trim().pattern(/^\d{6}$/).allow("", null).optional(),
     })
   ),
   asyncHandler(exchangeEmbeddedSignupCode)
+);
+router.post(
+  "/connection/complete-registration",
+  auth,
+  requireWorkspace,
+  requireWorkspacePermission("whatsapp.connect"),
+  validate(
+    Joi.object({
+      pin: Joi.string().trim().pattern(/^\d{6}$/).required(),
+    })
+  ),
+  asyncHandler(completePhoneRegistration)
 );
 router.post("/disconnect", auth, requireWorkspace, requireWorkspacePermission("whatsapp.disconnect"), asyncHandler(disconnectWhatsAppConnection));
 router.post("/connection/refresh-metadata", auth, requireWorkspace, requireWorkspacePermission("whatsapp.view"), asyncHandler(refreshConnectionMetadata));

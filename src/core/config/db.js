@@ -103,6 +103,24 @@ async function backfillScopedFields(db) {
     { isActive: { $exists: false } },
     { $set: { isActive: true } }
   );
+  await db.collection("whatsappcredentials").updateMany(
+    { registrationExpired: { $exists: false } },
+    { $set: { registrationExpired: false } }
+  );
+  await db.collection("whatsappcredentials").updateMany(
+    {
+      isActive: true,
+      isValid: true,
+      status: "active",
+      $or: [{ onboardingStage: { $exists: false } }, { onboardingStage: null }, { onboardingStage: "" }],
+    },
+    {
+      $set: {
+        onboardingStage: "READY",
+        registrationStatus: "COMPLETED",
+      },
+    }
+  );
   await db.collection("templates").updateMany(
     { languageCode: { $exists: false } },
     [{ $set: { languageCode: "$language" } }]

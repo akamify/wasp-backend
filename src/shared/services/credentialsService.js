@@ -3,10 +3,14 @@ const { decryptString } = require("@shared/utils/crypto");
 const { hashForLookup } = require("@shared/utils/hash");
 const { HttpError } = require("@shared/utils/httpError");
 const { requireEmbeddedSignupConnection } = require("@shared/services/whatsappConnectionService");
+const { isReadyConnection } = require("@modules/meta/services/connectionStatus.service");
 
 async function getCredentialsForUser(userId) {
   const connection = await requireEmbeddedSignupConnection(userId);
   if (!connection) throw new HttpError(400, "Active WhatsApp connection not configured");
+  if (!isReadyConnection(connection.doc)) {
+    throw new HttpError(409, "WhatsApp onboarding is not ready yet. Complete phone registration and sync before sending messages.");
+  }
 
   return {
     accessToken: connection.accessToken,
