@@ -8,7 +8,7 @@ const AdminLoginEventSchema = new mongoose.Schema(
     method: { type: String, default: "password" },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
-);
+); 
 
 AdminLoginEventSchema.index({ adminAccountId: 1, createdAt: -1 });
 
