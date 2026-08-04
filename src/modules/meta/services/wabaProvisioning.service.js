@@ -58,8 +58,15 @@ async function ensureSystemUserProvisionedOnWaba({ wabaId, graphApiVersion }) {
     accessToken,
     wabaId,
   }).catch((err) => {
-    throw new HttpError(400, "Could not fetch WABA ownership details.", {
+    const statusCode = Number(err?.response?.status || err?.statusCode || 400);
+    throw new HttpError(statusCode >= 400 && statusCode < 600 ? statusCode : 400, "Could not fetch WABA ownership details.", {
+      step: "fetch_waba_owner_business_info",
+      endpoint: `/${wabaId}`,
       message: sanitizeMetaError(err, "WABA ownership lookup failed"),
+      status: err?.response?.status || null,
+      code: err?.response?.data?.error?.code || null,
+      subcode: err?.response?.data?.error?.error_subcode || null,
+      fbtraceId: err?.response?.data?.error?.fbtrace_id || null,
     });
   });
 
@@ -73,8 +80,15 @@ async function ensureSystemUserProvisionedOnWaba({ wabaId, graphApiVersion }) {
     if (/already|duplicate|exists/i.test(String(message))) {
       return null;
     }
-    throw new HttpError(400, "Could not provision the selected WABA for messaging.", {
+    const statusCode = Number(err?.response?.status || err?.statusCode || 400);
+    throw new HttpError(statusCode >= 400 && statusCode < 600 ? statusCode : 400, "Could not provision the selected WABA for messaging.", {
+      step: "assign_system_user_to_waba",
+      endpoint: `/${wabaId}/assigned_users`,
       message,
+      status: err?.response?.status || null,
+      code: err?.response?.data?.error?.code || null,
+      subcode: err?.response?.data?.error?.error_subcode || null,
+      fbtraceId: err?.response?.data?.error?.fbtrace_id || null,
     });
   });
 
@@ -85,8 +99,15 @@ async function ensureSystemUserProvisionedOnWaba({ wabaId, graphApiVersion }) {
       wabaId,
       businessManagerId: waba.businessManagerId,
     }).catch((err) => {
-      throw new HttpError(400, "Could not verify WABA system user assignment.", {
+      const statusCode = Number(err?.response?.status || err?.statusCode || 400);
+      throw new HttpError(statusCode >= 400 && statusCode < 600 ? statusCode : 400, "Could not verify WABA system user assignment.", {
+        step: "verify_waba_assigned_users",
+        endpoint: `/${wabaId}/assigned_users`,
         message: sanitizeMetaError(err, "WABA assigned users lookup failed"),
+        status: err?.response?.status || null,
+        code: err?.response?.data?.error?.code || null,
+        subcode: err?.response?.data?.error?.error_subcode || null,
+        fbtraceId: err?.response?.data?.error?.fbtrace_id || null,
       });
     });
 

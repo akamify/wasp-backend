@@ -15,8 +15,15 @@ async function ensureWebhookSubscription({
     }
     return true;
   } catch (err) {
-    throw new HttpError(400, "Could not subscribe WABA to webhook.", {
+    const statusCode = Number(err?.response?.status || err?.statusCode || 400);
+    throw new HttpError(statusCode >= 400 && statusCode < 600 ? statusCode : 400, "Could not subscribe WABA to webhook.", {
+      step: "subscribe_waba_webhook",
+      endpoint: `/${wabaId}/subscribed_apps`,
       message: sanitizeMetaError(err, "WABA webhook subscription failed"),
+      status: err?.response?.status || null,
+      code: err?.response?.data?.error?.code || null,
+      subcode: err?.response?.data?.error?.error_subcode || null,
+      fbtraceId: err?.response?.data?.error?.fbtrace_id || null,
     });
   }
 }

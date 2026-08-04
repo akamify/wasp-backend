@@ -53,7 +53,6 @@ const TEMPLATE_SYNC_STATUSES = {
 const REGISTRATION_VERSION = "v1";
 
 const REQUIRED_EMBEDDED_SIGNUP_SCOPES = [
-  "business_management",
   "whatsapp_business_management",
   "whatsapp_business_messaging",
 ];

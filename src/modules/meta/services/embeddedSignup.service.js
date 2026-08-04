@@ -14,7 +14,7 @@ const {
   TEMPLATE_SYNC_STATUSES,
 } = require("@modules/meta/constants/embeddedSignup.constants");
 const { createMetaClient, getMetaGraphVersion } = require("@modules/meta/services/metaGraph.service");
-const { sanitizeMetaError } = require("@modules/meta/services/metaError.service");
+const { normalizeMetaError, sanitizeMetaError } = require("@modules/meta/services/metaError.service");
 const { ensureWebhookSubscription } = require("@modules/meta/services/webhookSubscription.service");
 const { classifyRegistrationError, registerPhoneNumber } = require("@modules/meta/services/phoneRegistration.service");
 const { syncConnectionMetadata } = require("@modules/meta/services/metadataSync.service");
@@ -52,6 +52,41 @@ function buildRegistrationWindow(baseDate = new Date()) {
   const embeddedSignupCompletedAt = new Date(baseDate);
   const registrationDeadlineAt = new Date(embeddedSignupCompletedAt.getTime() + REGISTRATION_WINDOW_MS);
   return { embeddedSignupCompletedAt, registrationDeadlineAt };
+}
+
+function buildMetaStepError(err, {
+  step,
+  endpoint,
+  tokenType,
+  message,
+  workspaceId,
+  extraDetails = {},
+}) {
+  const normalized = normalizeMetaError(err, message);
+  const statusCode = Number(normalized.status || err?.statusCode || 0) || 500;
+  const details = {
+    step,
+    endpoint,
+    tokenType,
+    workspaceId: workspaceId ? String(workspaceId) : null,
+    meta: normalized,
+    providerError: normalized.message,
+    ...extraDetails,
+  };
+
+  console.error("[meta-embedded-signup] step failed", {
+    step,
+    endpoint,
+    tokenType,
+    workspaceId: workspaceId ? String(workspaceId) : null,
+    status: normalized.status,
+    code: normalized.code,
+    subcode: normalized.subcode,
+    fbtraceId: normalized.fbtraceId,
+    message: normalized.message,
+  });
+
+  return new HttpError(statusCode >= 400 && statusCode < 600 ? statusCode : 500, message, details);
 }
 
 async function exchangeCodeForToken(code) {
@@ -420,11 +455,27 @@ async function executeEmbeddedSignupExchange({
   phoneNumberId,
   pin,
 }) {
-  const { token, appId } = await exchangeCodeForToken(code);
+  const { token, appId } = await exchangeCodeForToken(code).catch((err) => {
+    throw buildMetaStepError(err, {
+      step: "exchange_code_for_token",
+      endpoint: "/oauth/access_token",
+      tokenType: META_TOKEN_TYPES.APP_ACCESS,
+      message: "Meta code exchange failed.",
+      workspaceId: workspace?.id,
+    });
+  });
   const graphApiVersion = getMetaGraphVersion();
   const debugTokenData = await debugBusinessToken({
     token,
     graphApiVersion,
+  }).catch((err) => {
+    throw buildMetaStepError(err, {
+      step: "debug_business_token",
+      endpoint: "/debug_token",
+      tokenType: META_TOKEN_TYPES.SYSTEM_USER,
+      message: "Meta token validation failed.",
+      workspaceId: workspace?.id,
+    });
   });
   validateTokenScopes(debugTokenData, wabaId, appId);
 
@@ -432,6 +483,15 @@ async function executeEmbeddedSignupExchange({
     wabaId,
     phoneNumberId,
     graphApiVersion,
+  }).catch((err) => {
+    throw buildMetaStepError(err, {
+      step: "discover_phone_number",
+      endpoint: `/${wabaId}/phone_numbers`,
+      tokenType: META_TOKEN_TYPES.SYSTEM_USER,
+      message: "Meta phone discovery failed.",
+      workspaceId: workspace?.id,
+      extraDetails: { wabaId },
+    });
   });
 
   if (!matchedPhone) {
@@ -452,11 +512,51 @@ async function executeEmbeddedSignupExchange({
   const provisioning = await ensureSystemUserProvisionedOnWaba({
     wabaId,
     graphApiVersion,
+  }).catch((err) => {
+    if (err?.statusCode) {
+      console.error("[meta-embedded-signup] step failed", {
+        step: "provision_waba_system_user",
+        endpoint: `/${wabaId}/assigned_users`,
+        tokenType: META_TOKEN_TYPES.SYSTEM_USER,
+        workspaceId: workspace?.id ? String(workspace.id) : null,
+        message: err.message,
+        details: err.details || null,
+      });
+      throw err;
+    }
+    throw buildMetaStepError(err, {
+      step: "provision_waba_system_user",
+      endpoint: `/${wabaId}/assigned_users`,
+      tokenType: META_TOKEN_TYPES.SYSTEM_USER,
+      message: "Meta WABA provisioning failed.",
+      workspaceId: workspace?.id,
+      extraDetails: { wabaId },
+    });
   });
   await ensureWebhookSubscription({
     client,
     accessToken: systemUserToken,
     wabaId,
+  }).catch((err) => {
+    if (err?.statusCode) {
+      console.error("[meta-embedded-signup] step failed", {
+        step: "subscribe_waba_webhook",
+        endpoint: `/${wabaId}/subscribed_apps`,
+        tokenType: META_TOKEN_TYPES.SYSTEM_USER,
+        workspaceId: workspace?.id ? String(workspace.id) : null,
+        message: err.message,
+        details: err.details || null,
+      });
+      throw err;
+    }
+    throw buildMetaStepError(err, {
+      step: "subscribe_waba_webhook",
+      endpoint: `/${wabaId}/subscribed_apps`,
+      tokenType: META_TOKEN_TYPES.SYSTEM_USER,
+      message: "Meta webhook subscription failed.",
+      workspaceId: workspace?.id,
+      extraDetails: { wabaId },
+    });
   });
 
   const registrationStatus = pin ? REGISTRATION_STATUSES.REGISTERING : REGISTRATION_STATUSES.PIN_REQUIRED;
