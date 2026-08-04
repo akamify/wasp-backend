@@ -9,7 +9,11 @@ const {
 } = require("@shared/services/whatsappConnectionMetadataService");
 const { findLatestConnectionDocument, isEmbeddedSignupConnection } = require("@shared/services/whatsappConnectionService");
 const templatesService = require("@modules/templates/services/templates.service");
-const { executeEmbeddedSignupExchange, retryPhoneRegistration } = require("@modules/meta/services/embeddedSignup.service");
+const {
+  changeEmbeddedSignupPin,
+  executeEmbeddedSignupExchange,
+  retryPhoneRegistration,
+} = require("@modules/meta/services/embeddedSignup.service");
 const { graphBaseUrl } = require("@modules/meta/services/metaGraph.service");
 
 function mask(value) {
@@ -51,6 +55,22 @@ async function exchangeEmbeddedSignupCode(req, res) {
 async function completePhoneRegistration(req, res) {
   const pin = String(req.body?.pin || "").trim();
   const connection = await retryPhoneRegistration({
+    workspace: req.workspace,
+    pin,
+    actorUserId: req.user?.id || null,
+  });
+  const latest = await WhatsAppCredentials.findById(connection._id).select(
+    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain wabaName verifiedName nameStatus qualityRating codeVerificationStatus platformType accountMode throughput messagingLimitTier messagingLimitTierCached businessProfile lastMetadataSyncAt lastMetaSyncAt metadataFetchStatus metadataWarnings isValid isActive connectionMode tokenType tokenDebugSummary onboardingStage registrationStatus registrationVersion phoneRegistrationState registrationLastAttemptAt registrationCompletedAt embeddedSignupCompletedAt registrationDeadlineAt registrationExpired registrationRetryCount registrationLastError registrationLastErrorCode registrationRetryAllowed registrationRetryAfterAt registrationRecommendedAction businessManagerId templateSyncStatus templateSyncCompletedAt templateSyncLastError"
+  );
+  return res.json({
+    success: true,
+    connection: serializeWhatsAppConnection(latest),
+  });
+}
+
+async function changePhonePin(req, res) {
+  const pin = String(req.body?.pin || "").trim();
+  const connection = await changeEmbeddedSignupPin({
     workspace: req.workspace,
     pin,
     actorUserId: req.user?.id || null,
@@ -150,6 +170,7 @@ async function forceEmbeddedActiveConnection(req, res) {
 }
 
 module.exports = {
+  changePhonePin,
   completePhoneRegistration,
   disconnectWhatsAppConnection,
   exchangeEmbeddedSignupCode,

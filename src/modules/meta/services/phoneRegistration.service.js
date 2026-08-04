@@ -73,4 +73,38 @@ async function registerPhoneNumber({
   });
 }
 
-module.exports = { classifyRegistrationError, registerPhoneNumber };
+async function changeTwoStepVerificationPin({
+  accessToken,
+  phoneNumberId,
+  pin,
+  graphApiVersion,
+}) {
+  const client = createMetaClient({ graphApiVersion, timeout: 20000 });
+
+  try {
+    const response = await client.post(
+      `/${phoneNumberId}`,
+      { pin },
+      {
+        headers: authHeaders(accessToken, { "Content-Type": "application/json" }),
+      }
+    );
+    return {
+      success: true,
+      data: response?.data || null,
+    };
+  } catch (err) {
+    const details = classifyRegistrationError(err);
+    throw new HttpError(400, "Changing the WhatsApp PIN failed.", {
+      pinChange: details,
+      retryable: details.retryable,
+      providerError: details.message,
+    });
+  }
+}
+
+module.exports = {
+  changeTwoStepVerificationPin,
+  classifyRegistrationError,
+  registerPhoneNumber,
+};

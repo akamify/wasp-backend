@@ -9,6 +9,7 @@ const {
   getWhatsAppConnection,
   disconnectWhatsAppConnection,
   completePhoneRegistration,
+  changePhonePin,
 } = require("@modules/meta/controllers/metaEmbeddedSignup.controller");
 const { refreshConnectionMetadata, forceEmbeddedActiveConnection: forceEmbeddedActiveFromMeta } = require("@modules/meta/controllers/metaConnectionMetadata.controller");
 const { syncMetaTemplates } = require("@modules/templates/controllers/templates.controller");
@@ -43,6 +44,18 @@ router.post(
     })
   ),
   asyncHandler(completePhoneRegistration)
+);
+router.post(
+  "/connection/change-pin",
+  auth,
+  requireWorkspace,
+  requireWorkspacePermission("whatsapp.connect"),
+  validate(
+    Joi.object({
+      pin: Joi.string().trim().pattern(/^\d{6}$/).required(),
+    })
+  ),
+  asyncHandler(changePhonePin)
 );
 router.post("/disconnect", auth, requireWorkspace, requireWorkspacePermission("whatsapp.disconnect"), asyncHandler(disconnectWhatsAppConnection));
 router.post("/connection/refresh-metadata", auth, requireWorkspace, requireWorkspacePermission("whatsapp.view"), asyncHandler(refreshConnectionMetadata));

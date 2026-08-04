@@ -16,7 +16,11 @@ const {
 const { createMetaClient, getMetaGraphVersion } = require("@modules/meta/services/metaGraph.service");
 const { normalizeMetaError, sanitizeMetaError } = require("@modules/meta/services/metaError.service");
 const { ensureWebhookSubscription } = require("@modules/meta/services/webhookSubscription.service");
-const { classifyRegistrationError, registerPhoneNumber } = require("@modules/meta/services/phoneRegistration.service");
+const {
+  changeTwoStepVerificationPin,
+  classifyRegistrationError,
+  registerPhoneNumber,
+} = require("@modules/meta/services/phoneRegistration.service");
 const { syncConnectionMetadata } = require("@modules/meta/services/metadataSync.service");
 const { syncTemplatesForWorkspace } = require("@modules/meta/services/templateSync.service");
 const { decryptPin, encryptPin } = require("@modules/meta/services/pinLifecycle.service");
@@ -634,7 +638,50 @@ async function retryPhoneRegistration({
   return doc;
 }
 
+async function changeEmbeddedSignupPin({
+  workspace,
+  pin,
+  actorUserId,
+}) {
+  const doc = await findLatestConnectionDocument(
+    workspace.id,
+    "+accessTokenEnc +phoneRegistrationPinEnc +businessAccountIdEnc +phoneNumberIdEnc graphApiVersion phoneNumberId wabaId onboardingStage registrationStatus phoneRegistrationState phoneRegistrationPinUpdatedAt embeddedSignupCompletedAt registrationDeadlineAt registrationExpired",
+    { onlyEmbeddedSignup: true }
+  );
+  if (!doc) throw new HttpError(404, "WhatsApp onboarding record not found");
+
+  const embeddedAccessToken = doc.accessTokenEnc ? decryptString(doc.accessTokenEnc) : "";
+  if (!embeddedAccessToken) {
+    throw new HttpError(500, "Missing embedded signup access token for PIN change.");
+  }
+
+  await changeTwoStepVerificationPin({
+    accessToken: embeddedAccessToken,
+    phoneNumberId: String(doc.phoneNumberId),
+    pin,
+    graphApiVersion: doc.graphApiVersion,
+  });
+
+  const now = new Date();
+  await doc.updateOne({
+    $set: {
+      phoneRegistrationPinEnc: encryptPin(pin),
+      phoneRegistrationPinUpdatedAt: now,
+      registrationLastError: null,
+      registrationLastErrorCode: null,
+      registrationRetryAllowed: true,
+      registrationRetryAfterAt: null,
+      registrationRecommendedAction: "Use the updated PIN to finish WhatsApp phone registration.",
+      lastEditedAt: now,
+      lastEditedBy: actorUserId || null,
+    },
+  });
+
+  return doc;
+}
+
 module.exports = {
+  changeEmbeddedSignupPin,
   executeEmbeddedSignupExchange,
   retryPhoneRegistration,
 };
