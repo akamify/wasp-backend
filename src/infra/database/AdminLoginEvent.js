@@ -9,7 +9,7 @@ const AdminLoginEventSchema = new mongoose.Schema(
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 ); 
-
+ 
 AdminLoginEventSchema.index({ adminAccountId: 1, createdAt: -1 });
 
 const AdminLoginEvent = mongoose.model("AdminLoginEvent", AdminLoginEventSchema);
