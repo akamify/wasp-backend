@@ -139,11 +139,10 @@ function validateTokenScopes(debugTokenData, wabaId, appId) {
   return grantedScopes;
 }
 
-async function discoverPhoneNumber({ wabaId, phoneNumberId, graphApiVersion }) {
+async function discoverPhoneNumber({ wabaId, phoneNumberId, graphApiVersion, accessToken }) {
   const client = createMetaClient({ graphApiVersion, timeout: 20000 });
-  const systemUserToken = await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER });
   const response = await client.get(`/${wabaId}/phone_numbers`, {
-    headers: { Authorization: `Bearer ${systemUserToken}` },
+    headers: { Authorization: `Bearer ${accessToken}` },
     params: { fields: "id,display_phone_number" },
   });
   const phones = Array.isArray(response?.data?.data) ? response.data.data : [];
@@ -479,34 +478,6 @@ async function executeEmbeddedSignupExchange({
   });
   validateTokenScopes(debugTokenData, wabaId, appId);
 
-  const { matchedPhone, phones } = await discoverPhoneNumber({
-    wabaId,
-    phoneNumberId,
-    graphApiVersion,
-  }).catch((err) => {
-    throw buildMetaStepError(err, {
-      step: "discover_phone_number",
-      endpoint: `/${wabaId}/phone_numbers`,
-      tokenType: META_TOKEN_TYPES.SYSTEM_USER,
-      message: "Meta phone discovery failed.",
-      workspaceId: workspace?.id,
-      extraDetails: { wabaId },
-    });
-  });
-
-  if (!matchedPhone) {
-    return {
-      success: false,
-      needsPhoneSelection: true,
-      lifecycleState: ONBOARDING_STAGES.PHONE_DISCOVERED,
-      message: "Meta did not return a phone number. Please select a phone number and reconnect WhatsApp.",
-      phones: phones.map((item) => ({
-        id: String(item?.id || "").trim(),
-        display_phone_number: String(item?.display_phone_number || "").trim() || null,
-      })),
-    };
-  }
-
   const client = createMetaClient({ graphApiVersion, timeout: 20000 });
   const systemUserToken = await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER });
   const provisioning = await ensureSystemUserProvisionedOnWaba({
@@ -533,6 +504,36 @@ async function executeEmbeddedSignupExchange({
       extraDetails: { wabaId },
     });
   });
+
+  const { matchedPhone, phones } = await discoverPhoneNumber({
+    wabaId,
+    phoneNumberId,
+    graphApiVersion,
+    accessToken: systemUserToken,
+  }).catch((err) => {
+    throw buildMetaStepError(err, {
+      step: "discover_phone_number",
+      endpoint: `/${wabaId}/phone_numbers`,
+      tokenType: META_TOKEN_TYPES.SYSTEM_USER,
+      message: "Meta phone discovery failed.",
+      workspaceId: workspace?.id,
+      extraDetails: { wabaId },
+    });
+  });
+
+  if (!matchedPhone) {
+    return {
+      success: false,
+      needsPhoneSelection: true,
+      lifecycleState: ONBOARDING_STAGES.PHONE_DISCOVERED,
+      message: "Meta did not return a phone number. Please select a phone number and reconnect WhatsApp.",
+      phones: phones.map((item) => ({
+        id: String(item?.id || "").trim(),
+        display_phone_number: String(item?.display_phone_number || "").trim() || null,
+      })),
+    };
+  }
+
   await ensureWebhookSubscription({
     client,
     accessToken: systemUserToken,
