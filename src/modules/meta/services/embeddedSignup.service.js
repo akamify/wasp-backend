@@ -21,6 +21,7 @@ const { syncConnectionMetadata } = require("@modules/meta/services/metadataSync.
 const { syncTemplatesForWorkspace } = require("@modules/meta/services/templateSync.service");
 const { decryptPin, encryptPin } = require("@modules/meta/services/pinLifecycle.service");
 const { getToken, META_TOKEN_TYPES } = require("@modules/meta/services/tokenProvider.service");
+const { ensureSystemUserProvisionedOnWaba } = require("@modules/meta/services/wabaProvisioning.service");
 const { findLatestConnectionDocument } = require("@shared/services/whatsappConnectionService");
 
 const REGISTRATION_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
@@ -132,6 +133,8 @@ async function persistOnboardingConnection({
   onboardingStage,
   registrationStatus,
   pin,
+  businessManagerId,
+  wabaName,
 }) {
   const now = new Date();
   const { embeddedSignupCompletedAt, registrationDeadlineAt } = buildRegistrationWindow(now);
@@ -152,6 +155,8 @@ async function persistOnboardingConnection({
     tokenType: "embedded_signup_customer_token",
     tokenDebugSummary: buildTokenDebugSummary(debugTokenData),
     displayPhoneNumber: String(phoneNumber?.display_phone_number || "").trim() || null,
+    wabaName: wabaName || null,
+    businessManagerId: businessManagerId || null,
     isValid: false,
     isActive: false,
     status: "pending",
@@ -253,7 +258,11 @@ async function activateReadyConnection({ doc, workspaceId }) {
 async function finalizeReadyState({ doc, workspace, actorUserId }) {
   const now = new Date();
   const warnings = [];
-  const connection = buildConnectionContext(doc);
+  const systemUserToken = await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER });
+  const connection = {
+    ...buildConnectionContext(doc),
+    accessToken: systemUserToken,
+  };
 
   await doc.updateOne({
     $set: {
@@ -440,6 +449,10 @@ async function executeEmbeddedSignupExchange({
 
   const client = createMetaClient({ graphApiVersion, timeout: 20000 });
   const systemUserToken = await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER });
+  const provisioning = await ensureSystemUserProvisionedOnWaba({
+    wabaId,
+    graphApiVersion,
+  });
   await ensureWebhookSubscription({
     client,
     accessToken: systemUserToken,
@@ -460,6 +473,8 @@ async function executeEmbeddedSignupExchange({
     onboardingStage,
     registrationStatus,
     pin,
+    businessManagerId: provisioning.businessManagerId,
+    wabaName: provisioning.wabaName,
   });
 
   if (!pin) {

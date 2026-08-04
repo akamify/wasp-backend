@@ -8,6 +8,7 @@ const {
   isReadyConnection,
 } = require("@modules/meta/services/connectionStatus.service");
 const { getMetaGraphVersion } = require("@modules/meta/services/metaGraph.service");
+const { getToken, META_TOKEN_TYPES } = require("@modules/meta/services/tokenProvider.service");
 
 const WABA_FIELDS = "id,name,currency,timezone_id,message_template_namespace";
 const PHONE_FIELDS =
@@ -187,11 +188,15 @@ async function refreshWhatsAppConnectionMetadata(workspaceId, options = {}) {
     : await resolveActiveConnection(workspaceId, { requireValid: false });
   if (!connection) return null;
 
+  const accessToken = isEmbeddedSignupConnection(connection.doc)
+    ? await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER }).catch(() => connection.accessToken)
+    : connection.accessToken;
+
   const client = axios.create({
     baseURL: graphBaseUrl(connection.graphApiVersion),
     timeout: 15000,
   });
-  const headers = authHeaders(connection.accessToken);
+  const headers = authHeaders(accessToken);
   const warnings = [];
   const patch = { lastMetadataSyncAt: new Date() };
   let phoneFromList = null;
