@@ -292,11 +292,7 @@ async function activateReadyConnection({ doc, workspaceId }) {
 async function finalizeReadyState({ doc, workspace, actorUserId }) {
   const now = new Date();
   const warnings = [];
-  const systemUserToken = await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER });
-  const connection = {
-    ...buildConnectionContext(doc),
-    accessToken: systemUserToken,
-  };
+  const connection = buildConnectionContext(doc);
 
   await doc.updateOne({
     $set: {
@@ -398,11 +394,13 @@ async function performPhoneRegistration({ doc, pin }) {
     },
   });
 
-  const systemUserToken = await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER });
-
   try {
+    const embeddedAccessToken = doc.accessTokenEnc ? decryptString(doc.accessTokenEnc) : "";
+    if (!embeddedAccessToken) {
+      throw new HttpError(500, "Missing embedded signup access token for phone registration.");
+    }
     const registration = await registerPhoneNumber({
-      accessToken: systemUserToken,
+      accessToken: embeddedAccessToken,
       phoneNumberId: String(doc.phoneNumberId),
       pin,
       graphApiVersion: doc.graphApiVersion,
@@ -479,42 +477,36 @@ async function executeEmbeddedSignupExchange({
   validateTokenScopes(debugTokenData, wabaId, appId);
 
   const client = createMetaClient({ graphApiVersion, timeout: 20000 });
-  const systemUserToken = await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER });
   const provisioning = await ensureSystemUserProvisionedOnWaba({
     wabaId,
     graphApiVersion,
+    customerAccessToken: token,
   }).catch((err) => {
-    if (err?.statusCode) {
-      console.error("[meta-embedded-signup] step failed", {
-        step: "provision_waba_system_user",
-        endpoint: `/${wabaId}/assigned_users`,
-        tokenType: META_TOKEN_TYPES.SYSTEM_USER,
-        workspaceId: workspace?.id ? String(workspace.id) : null,
-        message: err.message,
-        details: err.details || null,
-      });
-      throw err;
-    }
-    throw buildMetaStepError(err, {
+    console.warn("[meta-embedded-signup] optional system-user provisioning skipped", {
       step: "provision_waba_system_user",
       endpoint: `/${wabaId}/assigned_users`,
-      tokenType: META_TOKEN_TYPES.SYSTEM_USER,
-      message: "Meta WABA provisioning failed.",
-      workspaceId: workspace?.id,
-      extraDetails: { wabaId },
+      workspaceId: workspace?.id ? String(workspace.id) : null,
+      message: err?.message || "Unknown error",
+      details: err?.details || null,
     });
+    return {
+      businessManagerId: null,
+      wabaName: null,
+      systemUserId: null,
+      provisioningSkipped: true,
+    };
   });
 
   const { matchedPhone, phones } = await discoverPhoneNumber({
     wabaId,
     phoneNumberId,
     graphApiVersion,
-    accessToken: systemUserToken,
+    accessToken: token,
   }).catch((err) => {
     throw buildMetaStepError(err, {
       step: "discover_phone_number",
       endpoint: `/${wabaId}/phone_numbers`,
-      tokenType: META_TOKEN_TYPES.SYSTEM_USER,
+      tokenType: META_TOKEN_TYPES.EMBEDDED_SIGNUP_CUSTOMER,
       message: "Meta phone discovery failed.",
       workspaceId: workspace?.id,
       extraDetails: { wabaId },
@@ -536,14 +528,14 @@ async function executeEmbeddedSignupExchange({
 
   await ensureWebhookSubscription({
     client,
-    accessToken: systemUserToken,
+    accessToken: token,
     wabaId,
   }).catch((err) => {
     if (err?.statusCode) {
       console.error("[meta-embedded-signup] step failed", {
         step: "subscribe_waba_webhook",
         endpoint: `/${wabaId}/subscribed_apps`,
-        tokenType: META_TOKEN_TYPES.SYSTEM_USER,
+        tokenType: META_TOKEN_TYPES.EMBEDDED_SIGNUP_CUSTOMER,
         workspaceId: workspace?.id ? String(workspace.id) : null,
         message: err.message,
         details: err.details || null,
@@ -553,7 +545,7 @@ async function executeEmbeddedSignupExchange({
     throw buildMetaStepError(err, {
       step: "subscribe_waba_webhook",
       endpoint: `/${wabaId}/subscribed_apps`,
-      tokenType: META_TOKEN_TYPES.SYSTEM_USER,
+      tokenType: META_TOKEN_TYPES.EMBEDDED_SIGNUP_CUSTOMER,
       message: "Meta webhook subscription failed.",
       workspaceId: workspace?.id,
       extraDetails: { wabaId },

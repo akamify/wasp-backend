@@ -45,7 +45,7 @@ async function fetchAssignedUsers({ client, accessToken, wabaId, businessManager
   return Array.isArray(response?.data?.data) ? response.data.data : [];
 }
 
-async function ensureSystemUserProvisionedOnWaba({ wabaId, graphApiVersion }) {
+async function ensureSystemUserProvisionedOnWaba({ wabaId, graphApiVersion, customerAccessToken = "" }) {
   const accessToken = await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER });
   const systemUserId = await getConfiguredSystemUserId();
   if (!systemUserId) {
@@ -55,7 +55,7 @@ async function ensureSystemUserProvisionedOnWaba({ wabaId, graphApiVersion }) {
   const client = createMetaClient({ graphApiVersion, timeout: 20000 });
   const waba = await fetchWabaOwnerBusinessInfo({
     client,
-    accessToken,
+    accessToken: customerAccessToken || accessToken,
     wabaId,
   }).catch((err) => {
     const statusCode = Number(err?.response?.status || err?.statusCode || 400);

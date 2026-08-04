@@ -15,7 +15,6 @@ const { checkLimit, getUsageState } = require("@modules/billing/services/usageLi
 const { assertTemplateBelongsToWaba } = require("@shared/services/templateOwnershipService");
 const { logWorkspaceActivity } = require("@modules/workspaces/services/workspaceActivity.service");
 const { isEmbeddedSignupConnection } = require("@shared/services/whatsappConnectionService");
-const { getToken, META_TOKEN_TYPES } = require("@modules/meta/services/tokenProvider.service");
 
 function normalizeRemoteStatus(status) {
   const s = String(status || "").toLowerCase();
@@ -1095,9 +1094,7 @@ async function syncStatus(req) {
 
 async function syncMetaTemplates(req) {
   const connection = req.metaConnectionOverride || (await requireActiveConnection(req.workspace.id));
-  const readAccessToken = isEmbeddedSignupConnection(connection.doc || connection)
-    ? await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER }).catch(() => connection.accessToken)
-    : connection.accessToken;
+  const readAccessToken = connection.accessToken;
   const exactName = req.body?.name ? String(req.body.name).trim() : undefined;
   let remoteTemplates;
   try {
