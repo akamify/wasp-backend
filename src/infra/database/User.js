@@ -7,6 +7,8 @@ const UserSchema = new mongoose.Schema(
     name: { type: String, trim: true },
     phone: { type: String, trim: true },
     role: { type: String, enum: ["user", "admin", "super_admin"], default: "user" },
+    emailVerified: { type: Boolean, default: false, index: true },
+    emailVerifiedAt: { type: Date, default: null },
     status: { type: String, enum: ["active", "banned", "fired", "retired"], default: "active", index: true },
     terminationState: { type: String, enum: ["", "retired", "fired"], default: "" },
     apiKeyHash: { type: String, default: null, select: false, index: true },

@@ -34,6 +34,11 @@ const BillingSettingsSchema = new mongoose.Schema(
       name: { type: String, default: "Free" },
       description: { type: String, default: "Starter access with limited usage." },
       buttonText: { type: String, default: "Current Plan" },
+      features: { type: mongoose.Schema.Types.Mixed, default: {} },
+      featureRows: { type: [mongoose.Schema.Types.Mixed], default: [] },
+      displayFeatures: { type: [String], default: [] },
+      unavailableFeatures: { type: [String], default: [] },
+      addonServices: { type: [String], default: [] },
       limits: {
         maxContacts: { type: Number, default: 10, min: 0 },
         maxTemplates: { type: Number, default: 5, min: 0 },

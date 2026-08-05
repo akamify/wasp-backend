@@ -15,6 +15,9 @@ async function loginUser({ email, password }) {
   if (!user) throw new HttpError(401, "Invalid credentials");
   if (!canLoginStatus(user.status)) throw new HttpError(403, getBlockedLoginMessage(user.status));
   if (user.accountBlocked) throw new HttpError(403, "This user is inactive");
+  if (String(user.role || "") === "user" && user.emailVerified === false) {
+    throw new HttpError(403, "Please verify your email before signing in.");
+  }
 
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) throw new HttpError(401, "Invalid credentials");

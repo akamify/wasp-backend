@@ -140,6 +140,8 @@ async function verifyRegisterOtp({ challengeToken, otp }) {
 
   user.registerOtpCodeHash = undefined;
   user.registerOtpCodeExpiresAt = undefined;
+  user.emailVerified = true;
+  user.emailVerifiedAt = new Date();
   await user.save();
 
   const workspace = await ensureDefaultWorkspace(user);
@@ -172,6 +174,7 @@ async function resendRegisterOtp({ challengeToken }) {
 
   const user = await repo.findUserForResendRegisterOtp(payload.sub);
   if (!user) throw new HttpError(404, "User not found");
+  if (user.emailVerified) throw new HttpError(400, "Email is already verified");
 
   const otp = generateOtpCode();
   user.registerOtpCodeHash = sha256Hex(otp);

@@ -10,7 +10,7 @@ async function findUserIdByEmail(emailLower) {
 }
 
 async function createUser({ email, passwordHash, name, phone }) {
-  return User.create({ email, passwordHash, name, phone, status: "active" });
+  return User.create({ email, passwordHash, name, phone, status: "active", emailVerified: false, emailVerifiedAt: null });
 }
 
 async function createWorkspaceForOwner({ ownerId, name }) {
@@ -58,7 +58,7 @@ async function hasValidMetaCredentials(workspaceId) {
 
 async function findUserForLoginByEmail(emailLower) {
   return User.findOne({ email: emailLower }).select(
-    "+passwordHash role email name phone twoFactorEnabled accountBlocked tokenVersion adminPermissions +loginOtpCodeHash +loginOtpCodeExpiresAt +loginOtpAttempts +loginOtpLastSentAt"
+    "+passwordHash role email name phone emailVerified twoFactorEnabled accountBlocked tokenVersion adminPermissions +loginOtpCodeHash +loginOtpCodeExpiresAt +loginOtpAttempts +loginOtpLastSentAt"
   );
 }
 
@@ -70,7 +70,7 @@ async function findUserForVerifyLoginOtp(userId) {
 
 async function findUserForVerifyRegisterOtp(userId) {
   return User.findById(userId).select(
-    "+passwordHash role email name phone accountBlocked tokenVersion twoFactorEnabled +registerOtpCodeHash +registerOtpCodeExpiresAt"
+    "+passwordHash role email name phone emailVerified emailVerifiedAt accountBlocked tokenVersion twoFactorEnabled +registerOtpCodeHash +registerOtpCodeExpiresAt"
   );
 }
 
@@ -81,11 +81,11 @@ async function findUserForResendLoginOtp(userId) {
 }
 
 async function findUserForResendRegisterOtp(userId) {
-  return User.findById(userId).select("email name +registerOtpCodeHash +registerOtpCodeExpiresAt");
+  return User.findById(userId).select("email name emailVerified +registerOtpCodeHash +registerOtpCodeExpiresAt");
 }
 
 async function findUserForMe(userId) {
-  return User.findById(userId).select("email name phone role createdAt twoFactorEnabled adminPermissions");
+  return User.findById(userId).select("email name phone role createdAt emailVerified emailVerifiedAt twoFactorEnabled adminPermissions");
 }
 
 function includeSchemaHiddenFields(query) {
@@ -148,7 +148,7 @@ async function findUserByValidPasswordResetToken(tokenHash) {
   return User.findOne({
     passwordResetTokenHash: tokenHash,
     passwordResetTokenExpiresAt: { $gt: new Date() },
-  }).select("+passwordHash");
+  }).select("+passwordHash tokenVersion");
 }
 
 async function findAdminAccountForEnsure(username) {

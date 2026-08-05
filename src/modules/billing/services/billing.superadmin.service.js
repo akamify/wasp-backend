@@ -280,13 +280,17 @@ function mapFreePlan(freeConfig) {
     publicVisible: true,
     purchasable: false,
     recommended: false,
-    sortOrder: 0,
-    featureRows: [],
+    sortOrder: 1,
+    featureRows: Array.isArray(freeConfig?.featureRows) ? freeConfig.featureRows : [],
     features: { ...(freeConfig?.features || {}) },
     limits: { ...(freeConfig?.limits || {}) },
-    displayFeatures: [...FREE_PLAN_DISPLAY_FEATURES],
-    unavailableFeatures: [...FREE_PLAN_UNAVAILABLE_FEATURES],
-    addonServices: [],
+    displayFeatures: Array.isArray(freeConfig?.displayFeatures) && freeConfig.displayFeatures.length
+      ? [...freeConfig.displayFeatures]
+      : [...FREE_PLAN_DISPLAY_FEATURES],
+    unavailableFeatures: Array.isArray(freeConfig?.unavailableFeatures) && freeConfig.unavailableFeatures.length
+      ? [...freeConfig.unavailableFeatures]
+      : [...FREE_PLAN_UNAVAILABLE_FEATURES],
+    addonServices: Array.isArray(freeConfig?.addonServices) ? [...freeConfig.addonServices] : [],
     review: {},
     version: 1,
     createdAt: null,
@@ -360,8 +364,11 @@ async function listPlans({ query = {}, includeArchived = false } = {}) {
     filter.$or = [{ name: rx }, { slug: rx }, { description: rx }];
   }
   if (!includeArchived && !filter.status) filter.status = { $in: [PLAN_STATUSES.IN_REVIEW, PLAN_STATUSES.PUBLISHED, PLAN_STATUSES.DISABLED] };
-  const plans = await Plan.find(filter).sort({ sortOrder: 1, createdAt: -1 });
-  const items = plans.map(mapPlan);
+  const plans = (await Plan.find(filter).sort({ sortOrder: 1, createdAt: -1 })).filter(
+    (plan) => String(plan?.slug || "").toLowerCase() !== "free"
+  );
+  const freeConfig = await getFreePlanConfig();
+  const items = [mapFreePlan(freeConfig), ...plans.map(mapPlan)];
   items.sort((a, b) => {
     const aOrder = Number(a?.sortOrder ?? 999);
     const bOrder = Number(b?.sortOrder ?? 999);
@@ -383,6 +390,7 @@ async function getPlan(planId) {
 
 async function updateFreePlan({ actorId, payload }) {
   const current = await getFreePlanConfig();
+  const entitlements = buildStructuredEntitlements(payload, current);
   const limits = {
     maxContacts:
       payload?.limits?.maxContacts === undefined
@@ -455,6 +463,11 @@ async function updateFreePlan({ actorId, payload }) {
       name: String(payload?.name || current.name || "Free").trim() || "Free",
       description: String(payload?.description ?? current.description ?? "").trim(),
       buttonText: String(payload?.buttonText || current.buttonText || "Current Plan").trim() || "Current Plan",
+      features: entitlements.features,
+      featureRows: entitlements.featureRows,
+      displayFeatures: entitlements.displayFeatures,
+      unavailableFeatures: entitlements.unavailableFeatures,
+      addonServices: normalizeStringArray(payload?.addonServices ?? current.addonServices ?? []),
       limits,
     },
     updatedBy: actorId || null,
@@ -524,6 +537,9 @@ async function createPlan({ actorId, payload }) {
 }
 
 async function updatePlan({ actorId, planId, payload }) {
+  if (String(planId) === FREE_PLAN_ID) {
+    return updateFreePlan({ actorId, payload });
+  }
   const plan = await planRepository.findById(planId);
   if (!plan) throw new HttpError(404, "Plan not found");
   const slot = resolvePlanSlot({ slug: plan.slug, name: plan.name });

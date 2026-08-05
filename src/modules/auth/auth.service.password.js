@@ -13,13 +13,6 @@ async function forgotPassword({ email }) {
 
   const headers = {};
   if (user) {
-    if (String(user.role || "") === "admin") {
-      return {
-        headers,
-        body: { success: true, message: "If your email is registered, a reset link has been sent." },
-      };
-    }
-
     const isSuperAdmin = String(user.role || "") === "super_admin";
     if (isSuperAdmin && (!superAdminEmail || normalized !== String(superAdminEmail))) {
       return {
@@ -70,6 +63,7 @@ async function resetPassword({ token, password }) {
   user.passwordHash = await bcrypt.hash(String(password), 12);
   user.passwordResetTokenHash = undefined;
   user.passwordResetTokenExpiresAt = undefined;
+  user.tokenVersion = Number(user.tokenVersion || 0) + 1;
   await user.save();
 
   return { success: true };

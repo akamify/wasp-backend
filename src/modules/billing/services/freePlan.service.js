@@ -110,6 +110,28 @@ const FREE_PLAN_UNAVAILABLE_FEATURES = Object.freeze([
   "Number Masking",
 ]);
 
+function normalizeBooleanMap(raw = {}) {
+  const out = {};
+  for (const [key, value] of Object.entries(raw || {})) {
+    out[String(key)] = Boolean(value);
+  }
+  return out;
+}
+
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of value) {
+    const label = String(item || "").trim();
+    const dedupeKey = label.toLowerCase();
+    if (!label || seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    out.push(label);
+  }
+  return out.slice(0, 80);
+}
+
 function normalizeLimit(v, fallback) {
   if (v === null) return null;
   const n = Number(v);
@@ -124,7 +146,15 @@ async function getFreePlanConfig() {
     name: String(configured.name || FREE_PLAN_DEFAULTS.name),
     description: String(configured.description || FREE_PLAN_DEFAULTS.description),
     buttonText: String(configured.buttonText || FREE_PLAN_DEFAULTS.buttonText),
-    features: { ...FREE_PLAN_FEATURES },
+    features: { ...FREE_PLAN_FEATURES, ...normalizeBooleanMap(configured.features || {}) },
+    featureRows: Array.isArray(configured.featureRows) ? configured.featureRows : [],
+    displayFeatures: normalizeStringArray(configured.displayFeatures).length
+      ? normalizeStringArray(configured.displayFeatures)
+      : [...FREE_PLAN_DISPLAY_FEATURES],
+    unavailableFeatures: normalizeStringArray(configured.unavailableFeatures).length
+      ? normalizeStringArray(configured.unavailableFeatures)
+      : [...FREE_PLAN_UNAVAILABLE_FEATURES],
+    addonServices: normalizeStringArray(configured.addonServices),
     limits: {
       maxContacts: normalizeLimit(configured?.limits?.maxContacts, FREE_PLAN_DEFAULTS.limits.maxContacts),
       maxTemplates: normalizeLimit(configured?.limits?.maxTemplates, FREE_PLAN_DEFAULTS.limits.maxTemplates),

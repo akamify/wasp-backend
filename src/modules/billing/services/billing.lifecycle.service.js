@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const { AuditLog } = require("@infra/database/AuditLog");
 const { Event } = require("@infra/database/Event");
+const { Plan } = require("@infra/database/Plan");
 const { Workspace } = require("@infra/database/Workspace");
 const { HttpError } = require("@shared/utils/httpError");
 const {
@@ -13,6 +14,7 @@ const {
 const { calculatePrice } = require("@modules/billing/utils/priceCalculator");
 const { hashIdempotencyParts } = require("@modules/billing/utils/idempotency");
 const { getRazorpayClient, razorpayKeyId } = require("@modules/wallet/services/wallet.api.service");
+const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
 
 const PLAN_ORDER = ["free", "basic", "pro", "premium", "unlimited"];
 const DEFAULT_GRACE_DAYS = Math.max(1, Number(process.env.SUBSCRIPTION_GRACE_DAYS || 7));
@@ -48,6 +50,64 @@ function mapPlanPrice(plan) {
 
 function isFreePlan(plan, price = mapPlanPrice(plan)) {
   return String(plan?.slug || "").toLowerCase() === "free" || Number(price?.payableAmountPaise || 0) <= 0;
+}
+
+async function buildRuntimeFreePlan() {
+  const free = await getFreePlanConfig();
+  const payload = {
+    name: String(free?.name || "Free"),
+    description: String(free?.description || ""),
+    pricing: {
+      currency: "INR",
+      originalPricePaise: 0,
+      discountedPricePaise: 0,
+      gstPercent: 0,
+      taxMode: "exclusive",
+      billingCycle: "monthly",
+    },
+    computedPreviewSnapshot: {
+      discountAmountPaise: 0,
+      discountPercent: 0,
+      gstAmountPaise: 0,
+      payableAmountPaise: 0,
+    },
+    trial: { enabled: false, days: 0 },
+    buttonText: String(free?.buttonText || "Current Plan"),
+    badgeText: "Free",
+    badgeType: "none",
+    cardColor: "green",
+    icon: "A",
+    status: "published",
+    publicVisible: false,
+    purchasable: false,
+    recommended: false,
+    sortOrder: 1,
+    features: free?.features || {},
+    limits: free?.limits || {},
+    featureRows: Array.isArray(free?.featureRows) ? free.featureRows : [],
+    displayFeatures: Array.isArray(free?.displayFeatures) ? free.displayFeatures : [],
+    unavailableFeatures: Array.isArray(free?.unavailableFeatures) ? free.unavailableFeatures : [],
+    addonServices: Array.isArray(free?.addonServices) ? free.addonServices : [],
+  };
+
+  const plan = await Plan.findOneAndUpdate(
+    { slug: "free" },
+    {
+      $set: payload,
+      $setOnInsert: {
+        slug: "free",
+        planType: "custom",
+        createdBy: null,
+      },
+      $unset: {
+        deletedAt: 1,
+        deletedBy: 1,
+      },
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+
+  return plan;
 }
 
 function addDays(date, days) {
@@ -684,6 +744,9 @@ async function processExpiredSubscriptions({ now = new Date(), limit = 100 } = {
     }
     if (!nextPlan || nextPlan.deletedAt || nextPlan.status !== "published") {
       nextPlan = await planRepository.findBySlug("free");
+      if (!nextPlan || nextPlan.deletedAt || nextPlan.status !== "published") {
+        nextPlan = await buildRuntimeFreePlan();
+      }
       reason = "free_fallback";
     }
 
@@ -749,8 +812,11 @@ async function processExpiredSubscriptions({ now = new Date(), limit = 100 } = {
     sub.expiredAt = now;
     sub.cancelAtPeriodEnd = false;
     await sub.save();
-    const freePlan = await planRepository.findBySlug("free");
-    if (freePlan && freePlan.status === "published") {
+    let freePlan = await planRepository.findBySlug("free");
+    if (!freePlan || freePlan.status !== "published") {
+      freePlan = await buildRuntimeFreePlan();
+    }
+    if (freePlan) {
       const created = await activatePlanForWorkspace({
         workspaceId: sub.workspaceId,
         userId: sub.userId,

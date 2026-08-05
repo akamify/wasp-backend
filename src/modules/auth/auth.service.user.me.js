@@ -41,6 +41,7 @@ async function me({ authUser, selectedWorkspaceId }) {
       name: user.name,
       phone: user.phone,
       role: user.role,
+      emailVerified: user.emailVerified !== false,
       permissions: normalizeAdminPermissions(user.role, user.adminPermissions || { pages: [], components: [], actions: [] }),
       createdAt: user.createdAt,
       twoFactorEnabled: !!user.twoFactorEnabled,

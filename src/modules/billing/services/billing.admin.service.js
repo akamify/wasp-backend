@@ -649,7 +649,8 @@ async function disableActivePlanForWorkspace(req) {
   };
   await active.save();
 
-  applyWorkspacePlanState(workspace, "free", {});
+  const freePlan = await getFreePlanConfig();
+  applyWorkspacePlanState(workspace, "free", freePlan.features || {});
   await workspace.save();
 
   return {
@@ -827,7 +828,8 @@ async function deleteWorkspacePlanAssignment(req) {
     await active.save();
   }
 
-  applyWorkspacePlanState(workspace, "free", {});
+  const freePlan = await getFreePlanConfig();
+  applyWorkspacePlanState(workspace, "free", freePlan.features || {});
   await workspace.save();
 
   return {

@@ -1,5 +1,6 @@
 const { planRepository } = require("@modules/billing/repositories");
 const { calculatePrice } = require("@modules/billing/utils/priceCalculator");
+const { getFreePlanConfig } = require("@modules/billing/services/freePlan.service");
 
 function mapPlan(plan) {
   const pricing = plan?.pricing || {};
@@ -49,12 +50,44 @@ function mapPlan(plan) {
 }
 
 async function listPublicPlans() {
-  const plans = await planRepository.listPublicPlans();
+  const plans = (await planRepository.listPublicPlans()).filter(
+    (plan) => String(plan?.slug || "").toLowerCase() !== "free"
+  );
+  const free = await getFreePlanConfig();
+  const freePlan = {
+    _id: "free-plan",
+    slug: "free",
+    name: free?.name || "Free",
+    description: free?.description || "",
+    pricing: {
+      currency: "INR",
+      originalPricePaise: null,
+      discountedPricePaise: null,
+      gstPercent: 0,
+      taxMode: "exclusive",
+      billingCycle: "monthly",
+    },
+    trial: { enabled: false, days: 0 },
+    buttonText: free?.buttonText || "Current Plan",
+    badgeText: "Free",
+    badgeType: "none",
+    cardColor: "green",
+    icon: "A",
+    recommended: false,
+    sortOrder: 1,
+    publicVisible: true,
+    purchasable: false,
+    displayFeatures: Array.isArray(free?.displayFeatures) ? free.displayFeatures : [],
+    unavailableFeatures: Array.isArray(free?.unavailableFeatures) ? free.unavailableFeatures : [],
+    addonServices: Array.isArray(free?.addonServices) ? free.addonServices : [],
+    features: free?.features || {},
+    limits: free?.limits || {},
+  };
   return {
     success: true,
     message: "Plans fetched successfully.",
     data: {
-      plans: plans.map(mapPlan),
+      plans: [mapPlan(freePlan), ...plans.map(mapPlan)],
       note: "WhatsApp/message charges are billed separately from wallet balance where applicable.",
     },
   };
