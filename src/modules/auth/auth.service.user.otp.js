@@ -3,13 +3,13 @@ const { sha256Hex } = require("@shared/utils/hash");
 const { sendEmail } = require("@shared/services/emailService");
 const repo = require("@modules/auth/auth.repository");
 const { generateOtpCode, buildOtpEmailHtml, isProdEnv, shouldReturnAuthDebugTokens } = require("@modules/auth/auth.utils");
-const { signToken } = require("@modules/auth/auth.tokens");
 const { ensureDefaultWorkspace } = require("@modules/auth/auth.service.user.workspace");
 const { verifyLoginChallengeToken, verifyRegisterChallengeToken } = require("@modules/auth/auth.tokens");
 const { superAdminEmail } = require("@core/config/env");
 const { canLoginStatus, getBlockedLoginMessage } = require("@shared/utils/userStatus");
+const { createBrowserSession } = require("@modules/auth/auth.session.service");
 
-async function verifyLoginOtp({ challengeToken, otp }) {
+async function verifyLoginOtp({ challengeToken, otp, trustedDeviceId, req, res }) {
   let payload = null;
   try {
     payload = verifyLoginChallengeToken(challengeToken);
@@ -46,12 +46,19 @@ async function verifyLoginOtp({ challengeToken, otp }) {
   await user.save();
 
   const workspace = await ensureDefaultWorkspace(user);
-  const token = signToken({ user, workspaceId: workspace._id });
+  const session = await createBrowserSession({
+    user,
+    workspaceId: workspace._id,
+    trustedDeviceId,
+    req,
+    res,
+  });
 
   return {
     body: {
       success: true,
-      token,
+      state: "verified",
+      token: session.token,
       workspace: { id: workspace._id, name: workspace.name, plan: workspace.plan },
       user: {
         id: user._id,
@@ -77,7 +84,6 @@ async function resendLoginOtp({ challengeToken }) {
   if (!user) throw new HttpError(404, "User not found");
 
   const isSuperAdmin = String(user.role || "") === "super_admin";
-  if (!isSuperAdmin && !user.twoFactorEnabled) throw new HttpError(400, "2FA is not enabled for this account");
 
   const cooldownSec = isSuperAdmin ? 60 : 0;
   if (cooldownSec > 0 && user.loginOtpLastSentAt) {
@@ -121,7 +127,7 @@ async function resendLoginOtp({ challengeToken }) {
   };
 }
 
-async function verifyRegisterOtp({ challengeToken, otp }) {
+async function verifyRegisterOtp({ challengeToken, otp, trustedDeviceId, req, res }) {
   let payload = null;
   try {
     payload = verifyRegisterChallengeToken(challengeToken);
@@ -145,12 +151,19 @@ async function verifyRegisterOtp({ challengeToken, otp }) {
   await user.save();
 
   const workspace = await ensureDefaultWorkspace(user);
-  const token = signToken({ user, workspaceId: workspace._id });
+  const session = await createBrowserSession({
+    user,
+    workspaceId: workspace._id,
+    trustedDeviceId,
+    req,
+    res,
+  });
 
   return {
     body: {
       success: true,
-      token,
+      state: "verified",
+      token: session.token,
       workspace: { id: workspace._id, name: workspace.name, plan: workspace.plan },
       user: {
         id: user._id,

@@ -620,6 +620,9 @@ async function updatePlan({ actorId, planId, payload }) {
 }
 
 async function submitReview({ actorId, planId, payload }) {
+  if (String(planId) === FREE_PLAN_ID) {
+    throw new HttpError(400, "Free plan does not use the review workflow. Save changes directly.");
+  }
   const plan = await planRepository.findById(planId);
   if (!plan) throw new HttpError(404, "Plan not found");
   plan.status = PLAN_STATUSES.IN_REVIEW;
@@ -630,6 +633,9 @@ async function submitReview({ actorId, planId, payload }) {
 }
 
 async function publishPlan({ actorId, planId, payload }) {
+  if (String(planId) === FREE_PLAN_ID) {
+    throw new HttpError(400, "Free plan is a system plan and is already active.");
+  }
   const plan = await planRepository.findById(planId);
   if (!plan) throw new HttpError(404, "Plan not found");
   plan.publicVisible = true;
@@ -645,6 +651,9 @@ async function publishPlan({ actorId, planId, payload }) {
 }
 
 async function disablePlan({ actorId, planId }) {
+  if (String(planId) === FREE_PLAN_ID) {
+    throw new HttpError(400, "Free plan is a system plan and cannot be disabled.");
+  }
   const plan = await planRepository.findById(planId);
   if (!plan) throw new HttpError(404, "Plan not found");
   plan.status = PLAN_STATUSES.DISABLED;
@@ -656,6 +665,9 @@ async function disablePlan({ actorId, planId }) {
 }
 
 async function deletePlan({ actorId, planId }) {
+  if (String(planId) === FREE_PLAN_ID) {
+    throw new HttpError(400, "Free plan is a system plan and cannot be deleted.");
+  }
   const plan = await planRepository.findById(planId);
   if (!plan) return { success: true, message: "Plan already deleted.", data: { item: { id: String(planId || ""), deleted: true } } };
   const originalSlug = plan.slug;

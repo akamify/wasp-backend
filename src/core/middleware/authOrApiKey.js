@@ -3,14 +3,17 @@ const { jwtSecret } = require("@core/config/env");
 const { HttpError } = require("@shared/utils/httpError");
 const { sha256Hex } = require("@shared/utils/hash");
 const { User } = require("@infra/database/User");
+const { AuthSession } = require("@infra/database/AuthSession");
+const { readAuthCookies } = require("@modules/auth/auth.cookie");
 const { canLoginStatus, getBlockedLoginMessage } = require("@shared/utils/userStatus");
 
 async function authOrApiKey(req, res, next) {
   const header = req.headers.authorization || "";
+  const tokenFromCookie = readAuthCookies(req).accessToken;
   const apiKey = req.headers["x-api-key"];
 
-  if (header.startsWith("Bearer ")) {
-    const token = header.slice("Bearer ".length).trim();
+  if (header.startsWith("Bearer ") || tokenFromCookie) {
+    const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : String(tokenFromCookie || "").trim();
     try {
       const payload = jwt.verify(token, jwtSecret);
       const user = await User.findById(payload.sub).select(
@@ -22,11 +25,22 @@ async function authOrApiKey(req, res, next) {
       if (Number(payload.tokenVersion || 0) !== Number(user.tokenVersion || 0)) {
         return next(new HttpError(401, "Session expired. Please login again."));
       }
+      if (payload?.sid) {
+        const session = await AuthSession.findOne({
+          sessionId: String(payload.sid),
+          userId: user._id,
+          revokedAt: null,
+          expiresAt: { $gt: new Date() },
+        }).select("sessionId");
+        if (!session) return next(new HttpError(401, "Session expired. Please login again.", { code: "SESSION_REVOKED" }));
+      }
       req.user = { id: String(user._id), role: user.role, workspaceId: payload.workspaceId, tokenVersion: Number(user.tokenVersion || 0) };
       const userAllowedPermissions = user.allowedApiPermissions || { campaignSend: true, chatAccess: false };
       req.auth = {
         userId: String(user._id),
         apiKeyId: null,
+        sessionId: payload?.sid ? String(payload.sid) : null,
+        accessToken: token,
         permissions: {
           campaignSend: Boolean(userAllowedPermissions?.campaignSend),
           chatAccess: Boolean(userAllowedPermissions?.chatAccess),

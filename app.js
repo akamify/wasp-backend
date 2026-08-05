@@ -155,6 +155,7 @@ app.use(
       return cb(null, allowed);
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    credentials: true,
     allowedHeaders: ["Content-Type", "Authorization", "x-workspace-id", "x-api-key", "x-webhook-signature", "x-webhook-timestamp"],
     maxAge: 86400,
   }),

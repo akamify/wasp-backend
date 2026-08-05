@@ -37,7 +37,17 @@ module.exports = {
   mongoUri: process.env.MONGODB_URI,
   jwtSecret: requiredInProd("JWT_SECRET", "dev_jwt_secret_change_me"),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
+  accessTokenExpiresIn: process.env.ACCESS_TOKEN_EXPIRES_IN || "15m",
   adminSessionExpiresIn: process.env.ADMIN_SESSION_EXPIRES_IN || "1d",
+  authCookieDomain:
+    process.env.AUTH_COOKIE_DOMAIN ||
+    (String(process.env.NODE_ENV || "").toLowerCase() === "production" ? ".aiwizchat.com" : ""),
+  authCookieSameSite: process.env.AUTH_COOKIE_SAMESITE || "lax",
+  authSecureCookies:
+    String(
+      process.env.AUTH_SECURE_COOKIES ||
+      (String(process.env.NODE_ENV || "").toLowerCase() === "production" ? "true" : "false")
+    ).toLowerCase() === "true",
   adminEmail: process.env.ADMIN_EMAIL || "",
   adminPassword: process.env.ADMIN_PASSWORD || "",
   adminName: process.env.ADMIN_NAME || "Whasp Admin",

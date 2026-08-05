@@ -6,6 +6,7 @@ const { sha256Hex } = require("@shared/utils/hash");
 const { sendEmail } = require("@shared/services/emailService");
 const repo = require("@modules/auth/auth.repository");
 const { base64Url, shouldReturnAuthDebugTokens } = require("@modules/auth/auth.utils");
+const { revokeAllSessionsForUser, revokeAllTrustedDevicesForUser } = require("@modules/auth/auth.session.service");
 
 async function forgotPassword({ email }) {
   const normalized = String(email || "").trim().toLowerCase();
@@ -65,6 +66,8 @@ async function resetPassword({ token, password }) {
   user.passwordResetTokenExpiresAt = undefined;
   user.tokenVersion = Number(user.tokenVersion || 0) + 1;
   await user.save();
+  await revokeAllSessionsForUser(user._id, "password_reset");
+  await revokeAllTrustedDevicesForUser(user._id, "password_reset");
 
   return { success: true };
 }

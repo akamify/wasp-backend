@@ -10,6 +10,7 @@ async function me({ authUser, selectedWorkspaceId }) {
     if (!admin) throw new HttpError(401, "Invalid or expired token");
     return {
       success: true,
+      token: String(authUser?.accessToken || ""),
       user: {
         id: String(admin._id),
         email: admin.username,
@@ -35,6 +36,7 @@ async function me({ authUser, selectedWorkspaceId }) {
 
   return {
     success: true,
+    token: String(authUser?.accessToken || ""),
     user: {
       id: String(user._id),
       email: user.email,

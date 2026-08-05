@@ -1,18 +1,19 @@
 const jwt = require("jsonwebtoken");
-const { jwtSecret, jwtExpiresIn, adminSessionExpiresIn } = require("@core/config/env");
+const { jwtSecret, accessTokenExpiresIn, adminSessionExpiresIn } = require("@core/config/env");
 
-function signToken({ user, workspaceId }) {
+function signToken({ user, workspaceId, sessionId }) {
   return jwt.sign(
     {
       role: user.role,
       accountType: "user",
       workspaceId: String(workspaceId),
       tokenVersion: Number(user.tokenVersion || 0),
+      sid: String(sessionId || ""),
     },
     jwtSecret,
     {
       subject: String(user._id),
-      expiresIn: jwtExpiresIn,
+      expiresIn: accessTokenExpiresIn,
     }
   );
 }

@@ -19,6 +19,7 @@ router.post("/login/verify-otp", rateLimiters.otp, validate(v.verifyOtpSchema), 
 router.post("/login/resend-otp", rateLimiters.otp, validate(v.resendOtpSchema), asyncHandler(controller.resendLoginOtp));
 router.post("/register/verify-otp", rateLimiters.otp, validate(v.verifyOtpSchema), asyncHandler(controller.verifyRegisterOtp));
 router.post("/register/resend-otp", rateLimiters.otp, validate(v.resendOtpSchema), asyncHandler(controller.resendRegisterOtp));
+router.post("/refresh", asyncHandler(controller.refresh));
 router.post("/forgot-password", rateLimiters.otp, validate(v.forgotPasswordSchema), asyncHandler(controller.forgotPassword));
 router.post("/reset-password", rateLimiters.otp, validate(v.resetPasswordSchema), asyncHandler(controller.resetPassword));
 
@@ -76,6 +77,7 @@ router.post("/2fa/request-enable", auth, asyncHandler(controller.requestEnable2f
 router.post("/2fa/verify-enable", auth, validate(v.verifyEnable2faSchema), asyncHandler(controller.verifyEnable2fa));
 router.post("/2fa/disable", auth, asyncHandler(controller.disable2fa));
 router.post("/logout", auth, asyncHandler(controller.logout));
+router.post("/logout-all", auth, asyncHandler(controller.logoutAll));
 
 module.exports = router;
 

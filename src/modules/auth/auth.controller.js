@@ -7,6 +7,14 @@ const userLoginService = require("@modules/auth/auth.service.user.login");
 const userOtpService = require("@modules/auth/auth.service.user.otp");
 const userMeService = require("@modules/auth/auth.service.user.me");
 const { writeAuditLog } = require("@shared/services/auditLog.service");
+const { ensureTrustedDeviceCookie } = require("@modules/auth/auth.cookie");
+const {
+  refreshBrowserSession,
+  clearBrowserSession,
+  revokeSessionById,
+  revokeAllSessionsForUser,
+  revokeAllTrustedDevicesForUser,
+} = require("@modules/auth/auth.session.service");
 
 function applyHeaders(res, headers) {
   if (!headers) return;
@@ -19,8 +27,15 @@ async function register(req, res) {
 }
 
 async function login(req, res) {
+  const trustedDeviceId = ensureTrustedDeviceCookie(req, res);
   try {
-    const out = (await userLoginService.loginUser({ email: req.body?.email, password: req.body?.password })).body;
+    const out = (await userLoginService.loginUser({
+      email: req.body?.email,
+      password: req.body?.password,
+      trustedDeviceId,
+      req,
+      res,
+    })).body;
     if (!out?.requires2fa && out?.user?.id) {
       await writeAuditLog(req, {
         action: "auth.login.success",
@@ -47,7 +62,8 @@ async function login(req, res) {
 }
 
 async function verifyLoginOtp(req, res) {
-  const out = (await userOtpService.verifyLoginOtp(req.body)).body;
+  const trustedDeviceId = ensureTrustedDeviceCookie(req, res);
+  const out = (await userOtpService.verifyLoginOtp({ ...req.body, trustedDeviceId, req, res })).body;
   if (out?.user?.id) {
     await writeAuditLog(req, {
       action: "auth.login.success",
@@ -66,7 +82,8 @@ async function resendLoginOtp(req, res) {
 }
 
 async function verifyRegisterOtp(req, res) {
-  res.json((await userOtpService.verifyRegisterOtp(req.body)).body);
+  const trustedDeviceId = ensureTrustedDeviceCookie(req, res);
+  res.json((await userOtpService.verifyRegisterOtp({ ...req.body, trustedDeviceId, req, res })).body);
 }
 
 async function resendRegisterOtp(req, res) {
@@ -136,6 +153,8 @@ async function changePassword(req, res) {
 }
 
 async function logout(req, res) {
+  await revokeSessionById(req.auth?.sessionId, "logout");
+  clearBrowserSession(res);
   await writeAuditLog(req, {
     action: "auth.logout",
     actorId: req.user?.id,
@@ -145,6 +164,25 @@ async function logout(req, res) {
     metadata: { status: "success", reason: "user_logout" },
   });
   res.json({ success: true });
+}
+
+async function logoutAll(req, res) {
+  await revokeAllSessionsForUser(req.user.id, "logout_all");
+  await revokeAllTrustedDevicesForUser(req.user.id, "logout_all");
+  clearBrowserSession(res);
+  await writeAuditLog(req, {
+    action: "auth.logout",
+    actorId: req.user?.id,
+    targetId: req.user?.id,
+    resourceType: "auth",
+    resourceId: String(req.user?.id || ""),
+    metadata: { status: "success", reason: "user_logout_all" },
+  });
+  res.json({ success: true, message: "Logged out from all devices." });
+}
+
+async function refresh(req, res) {
+  res.json(await refreshBrowserSession({ req, res, selectedWorkspaceId: req.headers["x-workspace-id"] || null }));
 }
 
 async function requestEnable2fa(req, res) {
@@ -211,6 +249,8 @@ module.exports = {
   requestProfileOtp,
   verifyProfileOtp,
   logout,
+  logoutAll,
+  refresh,
   forgotPassword,
   resetPassword,
   adminForgotPassword,
