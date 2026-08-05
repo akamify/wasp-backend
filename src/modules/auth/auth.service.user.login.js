@@ -4,7 +4,7 @@ const { sha256Hex } = require("@shared/utils/hash");
 const { sendEmail } = require("@shared/services/emailService");
 const repo = require("@modules/auth/auth.repository");
 const { generateOtpCode, buildOtpEmailHtml, isProdEnv, shouldReturnAuthDebugTokens } = require("@modules/auth/auth.utils");
-const { signToken, signLoginChallengeToken } = require("@modules/auth/auth.tokens");
+const { signToken, signLoginChallengeToken, signRegisterChallengeToken } = require("@modules/auth/auth.tokens");
 const { ensureDefaultWorkspace } = require("@modules/auth/auth.service.user.workspace");
 const { superAdminEmail } = require("@core/config/env");
 const { canLoginStatus, getBlockedLoginMessage } = require("@shared/utils/userStatus");
@@ -15,12 +15,40 @@ async function loginUser({ email, password }) {
   if (!user) throw new HttpError(401, "Invalid credentials");
   if (!canLoginStatus(user.status)) throw new HttpError(403, getBlockedLoginMessage(user.status));
   if (user.accountBlocked) throw new HttpError(403, "This user is inactive");
-  if (String(user.role || "") === "user" && user.emailVerified === false) {
-    throw new HttpError(403, "Please verify your email before signing in.");
-  }
 
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) throw new HttpError(401, "Invalid credentials");
+
+  if (String(user.role || "") === "user" && user.emailVerified === false) {
+    const otp = generateOtpCode();
+    user.registerOtpCodeHash = sha256Hex(otp);
+    user.registerOtpCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await user.save();
+
+    const delivery = await sendEmail({
+      toEmail: user.email,
+      toName: user.name || "",
+      subject: "Verify your account",
+      htmlContent: buildOtpEmailHtml({
+        code: otp,
+        title: "Verify your email",
+        subtitle: "Enter this OTP to finish verifying your account.",
+      }),
+      textContent: `Your verification OTP is ${otp}. It expires in 10 minutes.`,
+    });
+
+    if (isProdEnv() && (delivery?.skipped || delivery?.failed)) {
+      throw new HttpError(500, "Email service is not configured");
+    }
+
+    throw new HttpError(403, "Please verify your email before signing in.", {
+      code: "EMAIL_NOT_VERIFIED",
+      challengeToken: signRegisterChallengeToken(user._id),
+      email: user.email,
+      otpSent: true,
+      ...(shouldReturnAuthDebugTokens() ? { debugOtp: otp, emailDelivery: delivery } : {}),
+    });
+  }
 
   if (String(user.role || "") === "super_admin") {
     if (!superAdminEmail || String(user.email || "").toLowerCase() !== superAdminEmail) {
