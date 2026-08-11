@@ -154,7 +154,7 @@ async function enqueueAiInboundRuntime({
   ).catch(() => {});
 
   const aiQueue = getAiRuntimeQueue();
-  const aiJobId = `ai-live:${executionKey}`;
+  const aiJobId = `ai-live-${executionKey}`;
   await aiQueue.add(
     "ai-runtime.process-inbound",
     {
