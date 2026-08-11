@@ -247,12 +247,14 @@ async function verify(req, res) {
       // eslint-disable-next-line no-console
       console.log("Webhook verify OK.");
     }
+
     return res.status(200).send(challenge);
   }
   if (String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true") {
     // eslint-disable-next-line no-console
     console.warn("Webhook verify FAILED.", { mode, tokenPresent: !!token });
   }
+  
   return res.sendStatus(403);
 }
 
