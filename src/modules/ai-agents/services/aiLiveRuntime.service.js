@@ -313,8 +313,6 @@ async function findOrCreateWhatsappConversation({ workspaceId, agentId, contactI
       },
       $set: {
         lastMessageAt: now,
-        "metadata.phone": conversation.phone || "",
-        "metadata.conversationId": String(conversation._id),
       },
     },
     { upsert: true, returnDocument: "after", runValidators: true }

@@ -2,6 +2,21 @@ const { AiConversation } = require("@infra/database/AiConversation");
 const { AiUsageLog } = require("@infra/database/AiUsageLog");
 const { Contact } = require("@infra/database/Contact");
 
+function flattenObjectToDotted(prefix, value, target) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    target[prefix] = value;
+    return;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    const nextPrefix = `${prefix}.${key}`;
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      flattenObjectToDotted(nextPrefix, nested, target);
+      continue;
+    }
+    target[nextPrefix] = nested;
+  }
+}
+
 function findContactById({ workspaceId, contactId }) {
   if (!contactId) return null;
   return Contact.findOne({ _id: contactId, workspaceId }).lean();
@@ -92,11 +107,22 @@ function createUsageLog(payload, options = {}) {
   const mergeFields = options?.mergeOnExisting && options?.mergeFields && typeof options.mergeFields === "object"
     ? options.mergeFields
     : null;
+  const setOnInsert = { ...payload };
+  let setFields = mergeFields ? { ...mergeFields } : null;
+
+  if (setFields) {
+    const hasMetadataDotMerge = Object.keys(setFields).some((key) => key.startsWith("metadata."));
+    if (hasMetadataDotMerge && setOnInsert.metadata && typeof setOnInsert.metadata === "object" && !Array.isArray(setOnInsert.metadata)) {
+      delete setOnInsert.metadata;
+      flattenObjectToDotted("metadata", payload.metadata, setOnInsert);
+    }
+  }
+
   return AiUsageLog.findOneAndUpdate(
     { workspaceId: payload.workspaceId, executionKey },
     {
-      $setOnInsert: payload,
-      ...(mergeFields ? { $set: mergeFields } : {}),
+      $setOnInsert: setOnInsert,
+      ...(setFields ? { $set: setFields } : {}),
     },
     {
       upsert: true,
