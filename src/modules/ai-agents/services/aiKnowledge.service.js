@@ -120,11 +120,12 @@ async function hasIndexedKnowledge({ workspaceId, agentId, agent }) {
 function formatKnowledgeChunks(chunks) {
   if (!Array.isArray(chunks) || !chunks.length) return "No relevant knowledge found for this message.";
   return chunks
+    .slice(0, 4)
     .map((chunk, index) => {
       const lines = [
         `Source ${index + 1}: ${chunk.title}`,
         chunk.url ? `URL: ${chunk.url}` : "",
-        `Content: ${chunk.text}`,
+        `Content: ${String(chunk.text || "").replace(/\s+/g, " ").slice(0, 700)}`,
       ].filter(Boolean);
       return lines.join("\n");
     })

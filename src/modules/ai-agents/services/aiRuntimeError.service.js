@@ -42,11 +42,23 @@ function isRetryableCode(code) {
   return ["ECONNRESET", "ETIMEDOUT", "ECONNABORTED", "ENOTFOUND", "EAI_AGAIN"].includes(String(code || ""));
 }
 
+function isRetryableMessage(message) {
+  const normalized = String(message || "").toLowerCase();
+  return (
+    normalized.includes("connection is closed") ||
+    normalized.includes("socket hang up") ||
+    normalized.includes("econnreset") ||
+    normalized.includes("upstream connect error") ||
+    normalized.includes("tls") ||
+    normalized.includes("network")
+  );
+}
+
 function isRetryableRuntimeError(error) {
   if (!error) return false;
   if (typeof error.retryable === "boolean") return error.retryable;
   if (isRetryableStatus(error?.statusCode || error?.status || error?.response?.status)) return true;
-  return isRetryableCode(error?.code);
+  return isRetryableCode(error?.code) || isRetryableMessage(error?.message);
 }
 
 function isNonRetryableRuntimeError(error) {
@@ -85,6 +97,16 @@ function normalizeProviderError(error, { provider = "gemini", model = null } = {
       statusCode: status || 504,
       category: "provider",
       reason: "provider_timeout",
+      details: { provider, model },
+      cause: error,
+    });
+  }
+  if (isRetryableMessage(error?.message)) {
+    return new AiRuntimeRetryableError(error?.message || "AI provider connection closed", {
+      code: "AI_PROVIDER_CONNECTION_CLOSED",
+      statusCode: status || 502,
+      category: "provider",
+      reason: "provider_connection_closed",
       details: { provider, model },
       cause: error,
     });

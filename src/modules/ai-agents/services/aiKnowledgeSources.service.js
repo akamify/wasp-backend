@@ -290,10 +290,16 @@ async function updateSource({ workspaceId, agentId, sourceId, actorId, payload }
     agentId,
     sourceId,
     updates: {
-      ...normalized,
+      type: normalized.type,
+      title: normalized.title,
+      content: normalized.content,
+      sourceUrl: normalized.sourceUrl,
+      metadata: normalized.metadata,
       status: "draft",
       contentHash: hash,
       "metadata.totalChunks": 0,
+      "metadata.lastIndexedAt": null,
+      "metadata.error": "",
       updatedBy: actorId || null,
     },
   });

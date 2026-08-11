@@ -345,7 +345,7 @@ async function testMessage({ workspaceId, agentId, payload }) {
       inputTokens: aiProviderService.estimateTokens(promptPayload.prompt),
       outputTokens: 0,
       totalTokens: aiProviderService.estimateTokens(promptPayload.prompt),
-      creditsUsed: 1,
+      creditsUsed: 0,
       latencyMs: Date.now() - startedAt,
       status: "failed",
       action: "blocked",

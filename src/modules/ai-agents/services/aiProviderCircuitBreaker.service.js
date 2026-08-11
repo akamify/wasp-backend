@@ -49,8 +49,12 @@ function pruneMemoryEntry(store, key) {
 
 async function readState(redis, key) {
   if (redis) {
-    const raw = await redis.get(key);
-    return raw ? JSON.parse(raw) : null;
+    try {
+      const raw = await redis.get(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) {
+      // Redis is optional for circuit-breaker coordination; fall back to in-memory state.
+    }
   }
   const entry = pruneMemoryEntry(memoryStateStore, key);
   return entry ? entry.value : null;
@@ -58,8 +62,12 @@ async function readState(redis, key) {
 
 async function writeState(redis, key, value, ttlMs = stateTtlMs()) {
   if (redis) {
-    await redis.psetex(key, ttlMs, JSON.stringify(value));
-    return;
+    try {
+      await redis.psetex(key, ttlMs, JSON.stringify(value));
+      return;
+    } catch (_) {
+      // Fall back to in-memory state when Redis is unavailable/closed.
+    }
   }
   memoryStateStore.set(key, {
     value,
@@ -69,16 +77,24 @@ async function writeState(redis, key, value, ttlMs = stateTtlMs()) {
 
 async function clearState(redis, key) {
   if (redis) {
-    await redis.del(key);
-    return;
+    try {
+      await redis.del(key);
+      return;
+    } catch (_) {
+      // Fall back to local state cleanup when Redis is unavailable/closed.
+    }
   }
   memoryStateStore.delete(key);
 }
 
 async function acquireProbe(redis, key, ttlMs = COOLDOWN_MS) {
   if (redis) {
-    const result = await redis.set(key, "1", "PX", ttlMs, "NX");
-    return result === "OK";
+    try {
+      const result = await redis.set(key, "1", "PX", ttlMs, "NX");
+      return result === "OK";
+    } catch (_) {
+      // Fall through to in-memory probe lock.
+    }
   }
   const active = pruneMemoryEntry(memoryProbeStore, key);
   if (active) return false;
@@ -91,8 +107,12 @@ async function acquireProbe(redis, key, ttlMs = COOLDOWN_MS) {
 
 async function releaseProbe(redis, key) {
   if (redis) {
-    await redis.del(key);
-    return;
+    try {
+      await redis.del(key);
+      return;
+    } catch (_) {
+      // Fall through to in-memory probe cleanup.
+    }
   }
   memoryProbeStore.delete(key);
 }

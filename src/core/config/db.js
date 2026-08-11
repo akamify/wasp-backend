@@ -152,6 +152,42 @@ async function backfillScopedFields(db) {
   );
 }
 
+function isExpiredSessionError(error) {
+  const message = String(error?.message || "");
+  return error?.name === "MongoExpiredSessionError" || /session that has ended/i.test(message);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runStartupMaintenanceStep(label, fn, { retries = 1, required = false } = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= Math.max(1, retries + 1); attempt += 1) {
+    try {
+      await fn();
+      if (attempt > 1) {
+        // eslint-disable-next-line no-console
+        console.info(`[db] startup maintenance recovered`, { label, attempt });
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      const retryable = isExpiredSessionError(error);
+      if (!retryable || attempt > retries) break;
+      await sleep(250 * attempt);
+    }
+  }
+
+  if (required) throw lastError;
+
+  // eslint-disable-next-line no-console
+  console.warn(`[db] startup maintenance skipped`, {
+    label,
+    message: lastError?.message || String(lastError || "unknown"),
+  });
+}
+
 async function connectDB(mongoUri) {
   const uri = String(mongoUri || "").trim();
   if (!uri || !/^mongodb(\+srv)?:\/\//i.test(uri)) {
@@ -161,9 +197,21 @@ async function connectDB(mongoUri) {
   }
   mongoose.set("strictQuery", true);
   await mongoose.connect(uri);
-  await backfillScopedFields(mongoose.connection.db);
-  await cleanupLegacyIndexes(mongoose.connection.db);
-  await ensureWorkspaceIndexes(mongoose.connection.db);
+  await runStartupMaintenanceStep(
+    "backfillScopedFields",
+    () => backfillScopedFields(mongoose.connection.db),
+    { retries: 1, required: false },
+  );
+  await runStartupMaintenanceStep(
+    "cleanupLegacyIndexes",
+    () => cleanupLegacyIndexes(mongoose.connection.db),
+    { retries: 1, required: false },
+  );
+  await runStartupMaintenanceStep(
+    "ensureWorkspaceIndexes",
+    () => ensureWorkspaceIndexes(mongoose.connection.db),
+    { retries: 1, required: false },
+  );
 }
 
 module.exports = { connectDB };

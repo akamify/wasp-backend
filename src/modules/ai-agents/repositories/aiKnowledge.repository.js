@@ -1,6 +1,26 @@
 const { KnowledgeSource } = require("@infra/database/KnowledgeSource");
 const { KnowledgeChunk } = require("@infra/database/KnowledgeChunk");
 
+function isPlainObject(value) {
+  return Boolean(value) && Object.prototype.toString.call(value) === "[object Object]";
+}
+
+function normalizeSourceUpdates(updates = {}) {
+  if (!isPlainObject(updates)) return updates;
+  const normalized = { ...updates };
+  const metadata = normalized.metadata;
+  if (!isPlainObject(metadata)) return normalized;
+
+  for (const [key, value] of Object.entries(metadata)) {
+    const dottedKey = `metadata.${key}`;
+    if (!Object.prototype.hasOwnProperty.call(normalized, dottedKey)) {
+      normalized[dottedKey] = value;
+    }
+  }
+  delete normalized.metadata;
+  return normalized;
+}
+
 function listSources({ workspaceId, agentId }) {
   return KnowledgeSource.find({ workspaceId, agentId, deletedAt: null })
     .sort({ updatedAt: -1, _id: -1 })
@@ -31,9 +51,10 @@ function findSourceByHash({ workspaceId, agentId, contentHash, excludeSourceId =
 }
 
 function updateSource({ workspaceId, agentId, sourceId, updates }) {
+  const normalizedUpdates = normalizeSourceUpdates(updates);
   return KnowledgeSource.findOneAndUpdate(
     { _id: sourceId, workspaceId, agentId, deletedAt: null },
-    { $set: updates },
+    { $set: normalizedUpdates },
     { returnDocument: "after", runValidators: true },
   );
 }

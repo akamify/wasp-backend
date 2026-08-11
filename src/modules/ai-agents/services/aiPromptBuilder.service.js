@@ -11,13 +11,14 @@ const aiKnowledgeService = require("@modules/ai-agents/services/aiKnowledge.serv
 function contactText(contact) {
   if (!contact) return "No contact selected. This is a test conversation.";
   const attributes = asPlainAttributes(contact.attributes);
+  const safeAttributes = JSON.stringify(attributes).replace(/\s+/g, " ").slice(0, 600);
   return [
     `Name: ${contact.name || "Unknown"}`,
     `Phone: ${contact.phone || "Unknown"}`,
     `Email: ${contact.email || "Unknown"}`,
     `Company: ${contact.company || "Unknown"}`,
     `Tags: ${(contact.tags || []).join(", ") || "none"}`,
-    `Attributes: ${JSON.stringify(attributes).slice(0, 2000)}`,
+    `Attributes: ${safeAttributes}`,
   ].join("\n");
 }
 
@@ -28,7 +29,8 @@ function toolsText(agent) {
 function historyText(messages) {
   if (!messages.length) return "No previous messages.";
   return messages
-    .map((message) => `${message.role.toUpperCase()}: ${message.text}`)
+    .slice(-8)
+    .map((message) => `${message.role.toUpperCase()}: ${String(message.text || "").replace(/\s+/g, " ").slice(0, 500)}`)
     .join("\n");
 }
 
@@ -63,7 +65,7 @@ function buildRuntimePrompt({ agent, contact, conversationMessages, conversation
     toolsText(agent),
     "",
     "SUMMARY MEMORY:",
-    conversationSummary || "No summarized earlier memory.",
+    String(conversationSummary || "No summarized earlier memory.").replace(/\s+/g, " ").slice(0, 1800),
     "",
     "RECENT CONVERSATION:",
     historyText(conversationMessages),
