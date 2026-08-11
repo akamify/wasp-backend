@@ -140,7 +140,7 @@ function normalizePayload(payload, { partial = false } = {}) {
   assign("modelProvider", "gemini");
   assign(
     "modelName",
-    payload.modelName !== undefined ? (String(payload.modelName || "").trim() || "gemini-1.5-flash") : (partial ? undefined : "gemini-1.5-flash"),
+    payload.modelName !== undefined ? (String(payload.modelName || "").trim() || "gemini-3.5-flash") : (partial ? undefined : "gemini-3.5-flash"),
   );
   assign("systemPrompt", payload.systemPrompt !== undefined ? String(payload.systemPrompt || "").trim() : undefined);
   assign("language", payload.language !== undefined ? String(payload.language || "auto").trim() || "auto" : undefined);

@@ -77,7 +77,7 @@ async function generateGeminiResponse({ workspaceId = null, agent, prompt }) {
       model: agent.modelName || DEFAULT_GEMINI_MODEL,
     });
   }
-  const { model } = await aiProviderConfigService.resolveGeminiModel(agent.modelName || DEFAULT_GEMINI_MODEL);
+  const { model } = await aiProviderConfigService.resolveGeminiModel(agent.modelName || DEFAULT_GEMINI_MODEL, { allowFallback: true });
   await aiProviderCircuitBreakerService.beforeProviderRequest({
     workspaceId: workspaceId ? String(workspaceId) : "global",
     provider: "gemini",
@@ -90,7 +90,6 @@ async function generateGeminiResponse({ workspaceId = null, agent, prompt }) {
     {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
-        temperature: Number(agent.temperature ?? 0.3),
         maxOutputTokens: Math.max(1, Number(agent?.runtimeLimits?.maxTokensPerReply || 600)),
       },
     },

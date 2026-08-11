@@ -1,11 +1,15 @@
 const { AiProviderConfig } = require("@infra/database/AiProviderConfig");
 const { HttpError } = require("@shared/utils/httpError");
 
-const DEFAULT_GEMINI_MODEL = process.env.GEMINI_AI_AGENT_MODEL || "gemini-1.5-flash";
+const DEFAULT_GEMINI_MODEL = process.env.GEMINI_AI_AGENT_MODEL || "gemini-3.5-flash";
 const DEFAULT_GEMINI_MODELS = Object.freeze([
-  { key: "gemini-1.5-flash", label: "Gemini 1.5 Flash", deprecated: false, sortOrder: 10 },
-  { key: "gemini-1.5-pro", label: "Gemini 1.5 Pro", deprecated: false, sortOrder: 20 },
+  { key: "gemini-3.5-flash", label: "Gemini 3.5 Flash", deprecated: false, sortOrder: 10 },
+  { key: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite", deprecated: false, sortOrder: 20 },
+  { key: "gemini-3.6-flash", label: "Gemini 3.6 Flash", deprecated: false, sortOrder: 30 },
+  { key: "gemini-2.5-flash", label: "Gemini 2.5 Flash", deprecated: false, sortOrder: 40 },
+  { key: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite", deprecated: false, sortOrder: 50 },
 ]);
+const SUPPORTED_GEMINI_MODEL_KEYS = new Set(DEFAULT_GEMINI_MODELS.map((item) => item.key));
 
 function normalizeModelKey(value) {
   return String(value || "").trim();
@@ -16,7 +20,7 @@ function normalizeModels(values) {
   const rows = [];
   for (const item of Array.isArray(values) ? values : []) {
     const key = normalizeModelKey(item?.key);
-    if (!key || seen.has(key)) continue;
+    if (!key || seen.has(key) || !SUPPORTED_GEMINI_MODEL_KEYS.has(key)) continue;
     seen.add(key);
     rows.push({
       key,
@@ -60,12 +64,13 @@ async function getGeminiProviderConfig() {
   return serializeProviderConfig(row);
 }
 
-async function resolveGeminiModel(requestedModel) {
+async function resolveGeminiModel(requestedModel, { allowFallback = false } = {}) {
   const config = await getGeminiProviderConfig();
   const requested = normalizeModelKey(requestedModel);
   if (!requested) return { model: config.defaultModel, config };
   const match = config.models.find((item) => item.key === requested);
   if (!match) {
+    if (allowFallback) return { model: config.defaultModel, config };
     throw new HttpError(400, "Invalid Gemini model selected.");
   }
   return { model: match.key, config };

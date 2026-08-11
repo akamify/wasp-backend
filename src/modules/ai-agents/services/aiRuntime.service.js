@@ -341,7 +341,7 @@ async function testMessage({ workspaceId, agentId, payload }) {
       agentId,
       conversationId: conversation?._id || null,
       provider: "gemini",
-      model: agent.modelName || "gemini-1.5-flash",
+      model: agent.modelName || "gemini-3.5-flash",
       inputTokens: aiProviderService.estimateTokens(promptPayload.prompt),
       outputTokens: 0,
       totalTokens: aiProviderService.estimateTokens(promptPayload.prompt),
