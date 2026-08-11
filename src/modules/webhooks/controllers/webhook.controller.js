@@ -128,6 +128,47 @@ function parseTierLimitToNumber(tier) {
   return n;
 }
 
+async function enqueueAiInboundRuntime({
+  workspaceId,
+  conversationId,
+  messageId,
+  waId,
+  phone,
+}) {
+  if (!workspaceId || !messageId || !String(phone || "").trim()) return false;
+
+  const executionKey = buildExecutionKey({
+    workspaceId: String(workspaceId),
+    inboundMessageId: String(messageId),
+    inboundWhatsappMessageId: waId,
+    phone,
+  });
+
+  await Message.updateOne(
+    { _id: messageId, workspaceId },
+    {
+      $set: {
+        aiExecutionKey: executionKey,
+      },
+    },
+  ).catch(() => {});
+
+  const aiQueue = getAiRuntimeQueue();
+  const aiJobId = `ai-live:${executionKey}`;
+  await aiQueue.add(
+    "ai-runtime.process-inbound",
+    {
+      workspaceId: String(workspaceId),
+      conversationId: conversationId ? String(conversationId) : null,
+      messageId: String(messageId),
+      executionKey,
+    },
+    { jobId: aiJobId },
+  );
+
+  return true;
+}
+
 async function refreshCampaignFromMessage(workspaceId, messageDoc) {
   const campaignId = messageDoc?.campaignId;
   if (!campaignId || !workspaceId) return;
@@ -817,6 +858,37 @@ async function receive(req, res) {
             .select("_id")
             .lean();
           if (duplicateCheck) {
+            const existingConversation = await Conversation.findOne({
+              workspaceId: workspaceIdRaw,
+              ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
+              phone: from,
+            })
+              .select("_id")
+              .lean()
+              .catch(() => null);
+            try {
+              await enqueueAiInboundRuntime({
+                workspaceId: workspaceIdRaw,
+                conversationId: existingConversation?._id || null,
+                messageId: duplicateCheck._id,
+                waId,
+                phone: from,
+              });
+              console.info("[webhook] duplicate inbound re-enqueued", {
+                workspaceId: workspaceIdRaw,
+                conversationId: existingConversation?._id
+                  ? String(existingConversation._id)
+                  : null,
+                messageId: String(duplicateCheck._id),
+                wamidMasked: maskWamid(waId),
+              });
+            } catch (enqueueErr) {
+              console.error("[webhook] duplicate inbound enqueue failed", {
+                workspaceId: workspaceIdRaw,
+                messageId: String(duplicateCheck._id),
+                error: enqueueErr?.message || String(enqueueErr),
+              });
+            }
             console.info("[service-window] duplicate reconciled", {
               workspaceId: workspaceIdRaw,
               customerPhoneMasked: maskId(from),
@@ -937,34 +1009,13 @@ async function receive(req, res) {
           // CRM lead detection/assignment is strictly async and must not affect webhook latency.
           try {
             if (text.trim()) {
-              const executionKey = buildExecutionKey({
-                workspaceId: String(workspaceIdRaw),
-                inboundMessageId: msgDoc?._id ? String(msgDoc._id) : "",
-                inboundWhatsappMessageId: waId,
+              await enqueueAiInboundRuntime({
+                workspaceId: workspaceIdRaw,
+                conversationId: convo?._id ? String(convo._id) : null,
+                messageId: msgDoc?._id ? String(msgDoc._id) : null,
+                waId,
                 phone: from,
               });
-              if (msgDoc?._id) {
-                await Message.updateOne(
-                  { _id: msgDoc._id, workspaceId: workspaceIdRaw },
-                  {
-                    $set: {
-                      aiExecutionKey: executionKey,
-                    },
-                  },
-                ).catch(() => {});
-              }
-              const aiQueue = getAiRuntimeQueue();
-              const aiJobId = `ai-live:${executionKey}`;
-              await aiQueue.add(
-                "ai-runtime.process-inbound",
-                {
-                  workspaceId: String(workspaceIdRaw),
-                  conversationId: convo?._id ? String(convo._id) : null,
-                  messageId: msgDoc?._id ? String(msgDoc._id) : null,
-                  executionKey,
-                },
-                { jobId: aiJobId },
-              );
             }
           } catch (enqueueErr) {
             console.error("[webhook] AI enqueue failed", {
@@ -1000,6 +1051,47 @@ async function receive(req, res) {
             Number(messageErr?.code) === 11000 ||
             /duplicate key/i.test(String(messageErr?.message || ""))
           ) {
+            const existingMessage = await Message.findOne({
+              workspaceId: workspaceIdRaw,
+              ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
+              whatsappMessageId: waId,
+            })
+              .select("_id")
+              .lean()
+              .catch(() => null);
+            const existingConversation = await Conversation.findOne({
+              workspaceId: workspaceIdRaw,
+              ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
+              phone: from,
+            })
+              .select("_id")
+              .lean()
+              .catch(() => null);
+            if (existingMessage?._id) {
+              try {
+                await enqueueAiInboundRuntime({
+                  workspaceId: workspaceIdRaw,
+                  conversationId: existingConversation?._id || null,
+                  messageId: existingMessage._id,
+                  waId,
+                  phone: from,
+                });
+                console.info("[webhook] duplicate inbound recovered", {
+                  workspaceId: workspaceIdRaw,
+                  conversationId: existingConversation?._id
+                    ? String(existingConversation._id)
+                    : null,
+                  messageId: String(existingMessage._id),
+                  wamidMasked: maskWamid(waId),
+                });
+              } catch (enqueueErr) {
+                console.error("[webhook] duplicate recovery enqueue failed", {
+                  workspaceId: workspaceIdRaw,
+                  messageId: String(existingMessage._id),
+                  error: enqueueErr?.message || String(enqueueErr),
+                });
+              }
+            }
             console.info("[service-window] duplicate reconciled", {
               workspaceId: workspaceIdRaw,
               customerPhoneMasked: maskId(from),
