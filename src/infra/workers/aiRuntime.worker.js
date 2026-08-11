@@ -18,8 +18,30 @@ function startAiRuntimeWorker() {
       const name = String(job?.name || "");
       if (name !== "ai-runtime.process-inbound") return null;
       try {
-        return await aiLiveRuntimeService.processInboundJob(job.data || {});
+        const result = await aiLiveRuntimeService.processInboundJob(job.data || {});
+        if (result?.skipped || result?.requeued || result?.action) {
+          console.info("[ai-runtime-worker] job settled", {
+            jobId: String(job?.id || ""),
+            workspaceId: job?.data?.workspaceId || null,
+            conversationId: job?.data?.conversationId || null,
+            messageId: job?.data?.messageId || null,
+            executionKey: job?.data?.executionKey || null,
+            skipped: result?.skipped || null,
+            action: result?.action || null,
+            requeued: Boolean(result?.requeued),
+          });
+        }
+        return result;
       } catch (error) {
+        console.error("[ai-runtime-worker] job failed", {
+          jobId: String(job?.id || ""),
+          workspaceId: job?.data?.workspaceId || null,
+          conversationId: job?.data?.conversationId || null,
+          messageId: job?.data?.messageId || null,
+          executionKey: job?.data?.executionKey || null,
+          code: error?.code || null,
+          message: error?.message || String(error),
+        });
         const maxAttempts = Math.max(Number(job?.opts?.attempts || 1), 1);
         const currentAttempt = Math.max(Number(job?.attemptsMade || 0) + 1, 1);
         const finalAttempt = currentAttempt >= maxAttempts;

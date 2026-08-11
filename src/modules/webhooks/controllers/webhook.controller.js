@@ -1,18 +1,31 @@
 const { metaWebhookVerifyToken } = require("@core/config/env");
-const { findTenantByPhoneNumberId, findTenantByWabaId } = require("@shared/services/credentialsService");
+const {
+  findTenantByPhoneNumberId,
+  findTenantByWabaId,
+} = require("@shared/services/credentialsService");
 const { Message } = require("@infra/database/Message");
 const { Conversation } = require("@infra/database/Conversation");
 const mongoose = require("mongoose");
 const { touchConversation } = require("@shared/services/conversationService");
-const { normalizePhone, touchContactFromMessage } = require("@shared/services/contactService");
+const {
+  normalizePhone,
+  touchContactFromMessage,
+} = require("@shared/services/contactService");
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { Campaign } = require("@infra/database/Campaign");
 const { HttpError } = require("@shared/utils/httpError");
-const { publishWorkspaceEvent, publishToWorkspace } = require("@shared/services/realtimeService");
-const { getCrmLeadAssignmentQueue } = require("@infra/queues/crmLeadAssignment.queue");
+const {
+  publishWorkspaceEvent,
+  publishToWorkspace,
+} = require("@shared/services/realtimeService");
+const {
+  getCrmLeadAssignmentQueue,
+} = require("@infra/queues/crmLeadAssignment.queue");
 const { getAiRuntimeQueue } = require("@infra/queues/aiRuntime.queue");
 const { Workspace } = require("@infra/database/Workspace");
-const { refreshWhatsAppConnectionMetadata } = require("@shared/services/whatsappConnectionMetadataService");
+const {
+  refreshWhatsAppConnectionMetadata,
+} = require("@shared/services/whatsappConnectionMetadataService");
 const {
   normalizeWhatsAppWebhookMessages,
 } = require("@shared/services/whatsappWebhookNormalizer");
@@ -22,8 +35,12 @@ const {
 const {
   reconcileCustomerServiceWindow,
 } = require("@modules/conversations/services/customerServiceWindow.service");
-const { resolveInboundReplyContext } = require("@modules/webhooks/services/inboundReplyContext.service");
-const { buildExecutionKey } = require("@modules/ai-agents/services/aiRuntimeIdempotency.service");
+const {
+  resolveInboundReplyContext,
+} = require("@modules/webhooks/services/inboundReplyContext.service");
+const {
+  buildExecutionKey,
+} = require("@modules/ai-agents/services/aiRuntimeIdempotency.service");
 
 const WEBHOOK_DEBUG_LIMIT = 40;
 const webhookDebugEventsByWorkspace = new Map();
@@ -86,10 +103,18 @@ function normalizeStatus(status) {
   return "sent";
 }
 
-const MESSAGE_STATUS_RANK = { accepted: 0, sent: 1, delivered: 2, read: 3, failed: 4 };
+const MESSAGE_STATUS_RANK = {
+  accepted: 0,
+  sent: 1,
+  delivered: 2,
+  read: 3,
+  failed: 4,
+};
 
 function parseTierLimitToNumber(tier) {
-  const s = String(tier || "").trim().toUpperCase();
+  const s = String(tier || "")
+    .trim()
+    .toUpperCase();
   if (!s) return null;
   if (s.includes("UNLIMITED")) return -1;
 
@@ -108,7 +133,9 @@ async function refreshCampaignFromMessage(workspaceId, messageDoc) {
   if (!campaignId || !workspaceId) return;
 
   const [campaign, grouped] = await Promise.all([
-    Campaign.findOne({ _id: campaignId, workspaceId }).select("_id totals status type"),
+    Campaign.findOne({ _id: campaignId, workspaceId }).select(
+      "_id totals status type",
+    ),
     Message.aggregate([
       {
         $match: {
@@ -123,20 +150,25 @@ async function refreshCampaignFromMessage(workspaceId, messageDoc) {
 
   if (!campaign) return;
 
-  const byStatus = Object.fromEntries(grouped.map((row) => [String(row._id), Number(row.count || 0)]));
+  const byStatus = Object.fromEntries(
+    grouped.map((row) => [String(row._id), Number(row.count || 0)]),
+  );
   const sentLike =
     Number(byStatus.accepted || 0) +
     Number(byStatus.sent || 0) +
     Number(byStatus.delivered || 0) +
     Number(byStatus.read || 0);
-  const failedLike = Number(byStatus.failed || 0) + Number(byStatus.timeout_unknown || 0);
+  const failedLike =
+    Number(byStatus.failed || 0) + Number(byStatus.timeout_unknown || 0);
   const total = Number(campaign.totals?.total || 0);
   const queued = Math.max(total - sentLike - failedLike, 0);
 
   const currentStatus = String(campaign.status || "queued");
   let nextStatus = currentStatus;
   const isApiCampaign = String(campaign.type || "") === "api";
-  const isTerminal = ["canceled", "cancelled", "completed"].includes(currentStatus);
+  const isTerminal = ["canceled", "cancelled", "completed"].includes(
+    currentStatus,
+  );
   if (!isTerminal && currentStatus !== "paused") {
     if (!isApiCampaign) {
       if (queued === 0) {
@@ -160,7 +192,7 @@ async function refreshCampaignFromMessage(workspaceId, messageDoc) {
         "totals.sent": sentLike,
         "totals.failed": failedLike,
       },
-    }
+    },
   );
 }
 
@@ -185,7 +217,11 @@ async function verify(req, res) {
 
 async function receive(req, res) {
   let body = req.body;
-  const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.isBuffer(req.rawBody) ? req.rawBody : null;
+  const rawBody = Buffer.isBuffer(req.body)
+    ? req.body
+    : Buffer.isBuffer(req.rawBody)
+      ? req.rawBody
+      : null;
   if ((!body || Buffer.isBuffer(body)) && rawBody) {
     try {
       body = JSON.parse(rawBody.toString("utf8"));
@@ -195,7 +231,8 @@ async function receive(req, res) {
   }
   if (!body) return res.sendStatus(400);
 
-  const debug = String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true";
+  const debug =
+    String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true";
   if (debug) {
     // eslint-disable-next-line no-console
     console.log("Webhook received.", {
@@ -220,7 +257,10 @@ async function receive(req, res) {
         if (!tenant) {
           if (debug) {
             // eslint-disable-next-line no-console
-            console.warn("Webhook quality_update: tenant not found for wabaId.", wabaId);
+            console.warn(
+              "Webhook quality_update: tenant not found for wabaId.",
+              wabaId,
+            );
           }
           continue;
         }
@@ -229,19 +269,22 @@ async function receive(req, res) {
         const currentLimitRaw = value?.current_limit ?? null;
         const nextLimitRaw = value?.next_limit ?? null;
 
-        const currentLimitStr = currentLimitRaw != null ? String(currentLimitRaw) : "";
+        const currentLimitStr =
+          currentLimitRaw != null ? String(currentLimitRaw) : "";
         const currentLimitNum = Number(currentLimitRaw);
         const nextLimitNum = Number(nextLimitRaw);
         const ts = entry?.time ? asDateFromSeconds(entry.time) : new Date();
 
         const update = { lastLimitsUpdateAt: ts };
         if (currentLimitStr) update.messagingLimitTierCached = currentLimitStr;
-        if (Number.isFinite(currentLimitNum) && currentLimitNum > 0) update.messagingLimitCurrentCached = currentLimitNum;
-        if (Number.isFinite(nextLimitNum) && nextLimitNum > 0) update.messagingLimitNextCached = nextLimitNum;
+        if (Number.isFinite(currentLimitNum) && currentLimitNum > 0)
+          update.messagingLimitCurrentCached = currentLimitNum;
+        if (Number.isFinite(nextLimitNum) && nextLimitNum > 0)
+          update.messagingLimitNextCached = nextLimitNum;
 
         await WhatsAppCredentials.updateOne(
           { workspaceId: tenant.workspaceId },
-          { $set: update }
+          { $set: update },
         );
 
         continue;
@@ -254,8 +297,12 @@ async function receive(req, res) {
         const tenant = await findTenantByWabaId(wabaId);
         if (!tenant) continue;
 
-        const perBusinessTier = value?.max_daily_conversations_per_business ?? null;
-        const perPhone = value?.max_daily_conversations_per_phone ?? value?.max_daily_conversation_per_phone ?? null;
+        const perBusinessTier =
+          value?.max_daily_conversations_per_business ?? null;
+        const perPhone =
+          value?.max_daily_conversations_per_phone ??
+          value?.max_daily_conversation_per_phone ??
+          null;
         const ts = entry?.time ? asDateFromSeconds(entry.time) : new Date();
 
         const tierStr = perBusinessTier != null ? String(perBusinessTier) : "";
@@ -266,23 +313,32 @@ async function receive(req, res) {
         if (tierStr) update.messagingLimitTierCached = tierStr;
         if (Number.isFinite(currentNumFromTier) || currentNumFromTier === -1) {
           update.messagingLimitCurrentCached = currentNumFromTier;
-        } else if (Number.isFinite(currentNumFromPhone) && currentNumFromPhone > 0) {
+        } else if (
+          Number.isFinite(currentNumFromPhone) &&
+          currentNumFromPhone > 0
+        ) {
           update.messagingLimitCurrentCached = currentNumFromPhone;
         }
 
         await WhatsAppCredentials.updateOne(
           { workspaceId: tenant.workspaceId },
-          { $set: update }
+          { $set: update },
         );
 
         continue;
       }
 
-      if (field === "phone_number_name_update" || field === "account_update" || field === "account_alerts") {
+      if (
+        field === "phone_number_name_update" ||
+        field === "account_update" ||
+        field === "account_alerts"
+      ) {
         const wabaId = entry?.id ? String(entry.id) : "";
         const tenant = wabaId ? await findTenantByWabaId(wabaId) : null;
         if (!tenant?.workspaceId) continue;
-        await refreshWhatsAppConnectionMetadata(String(tenant.workspaceId)).catch(() => null);
+        await refreshWhatsAppConnectionMetadata(
+          String(tenant.workspaceId),
+        ).catch(() => null);
         continue;
       }
 
@@ -295,7 +351,9 @@ async function receive(req, res) {
         continue;
       }
 
-      const phoneNumberId = value?.metadata?.phone_number_id ? String(value.metadata.phone_number_id) : "";
+      const phoneNumberId = value?.metadata?.phone_number_id
+        ? String(value.metadata.phone_number_id)
+        : "";
       if (!phoneNumberId && debug) {
         // eslint-disable-next-line no-console
         console.warn("messages webhook missing phone_number_id.");
@@ -312,13 +370,17 @@ async function receive(req, res) {
         }).select("workspaceId");
       }
       if (!tenant) {
-        tenant = phoneNumberId ? await findTenantByPhoneNumberId(phoneNumberId) : null;
+        tenant = phoneNumberId
+          ? await findTenantByPhoneNumberId(phoneNumberId)
+          : null;
       }
       if (!tenant) {
         if (wabaIdFromEntry) {
           tenant = await findTenantByWabaId(wabaIdFromEntry);
           if (tenant) {
-            const tenantWorkspaceId = tenant?.workspaceId ? String(tenant.workspaceId) : "";
+            const tenantWorkspaceId = tenant?.workspaceId
+              ? String(tenant.workspaceId)
+              : "";
             if (mongoose.Types.ObjectId.isValid(tenantWorkspaceId)) {
               pushWebhookDebugEvent(tenantWorkspaceId, {
                 type: "tenant_resolved_by_waba_fallback",
@@ -330,8 +392,14 @@ async function receive(req, res) {
         }
       }
 
-      const resolvedWorkspaceId = tenant?.workspaceId ? String(tenant.workspaceId) : "";
-      const workspaceIdRaw = mongoose.Types.ObjectId.isValid(resolvedWorkspaceId) ? resolvedWorkspaceId : "";
+      const resolvedWorkspaceId = tenant?.workspaceId
+        ? String(tenant.workspaceId)
+        : "";
+      const workspaceIdRaw = mongoose.Types.ObjectId.isValid(
+        resolvedWorkspaceId,
+      )
+        ? resolvedWorkspaceId
+        : "";
 
       if (!workspaceIdRaw) {
         console.warn("[webhook] workspace not resolved for phone_number_id", {
@@ -345,7 +413,8 @@ async function receive(req, res) {
         continue;
       }
 
-      const hasValidWorkspaceId = mongoose.Types.ObjectId.isValid(workspaceIdRaw);
+      const hasValidWorkspaceId =
+        mongoose.Types.ObjectId.isValid(workspaceIdRaw);
       console.info("[webhook] workspace resolved", {
         workspaceId: workspaceIdRaw,
         maskedPhoneNumberId: maskId(phoneNumberId),
@@ -367,15 +436,15 @@ async function receive(req, res) {
               lastWebhookField: field || null,
               lastWebhookObject: body?.object || null,
             },
-          }
+          },
         );
-      } catch { }
+      } catch {}
 
       const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
       if (statuses.length) {
         await WhatsAppCredentials.updateOne(
           { workspaceId: workspaceIdRaw, isActive: { $ne: false } },
-          { $set: { lastStatusWebhookAt: new Date() } }
+          { $set: { lastStatusWebhookAt: new Date() } },
         ).catch(() => {});
       }
       if (statuses.length) {
@@ -393,7 +462,10 @@ async function receive(req, res) {
       }
       if (debug && statuses.length) {
         // eslint-disable-next-line no-console
-        console.log("Webhook statuses:", statuses.map((s) => ({ id: s?.id, status: s?.status })));
+        console.log(
+          "Webhook statuses:",
+          statuses.map((s) => ({ id: s?.id, status: s?.status })),
+        );
       }
       for (const s of statuses) {
         const waId = s.id;
@@ -401,9 +473,15 @@ async function receive(req, res) {
 
         const newStatus = normalizeStatus(s.status);
         const ts = asDateFromSeconds(s.timestamp);
-        const phone = s.recipient_id ? normalizePhone(s.recipient_id) : undefined;
+        const phone = s.recipient_id
+          ? normalizePhone(s.recipient_id)
+          : undefined;
 
-        const resolvedWabaId = wabaIdFromEntry || tenant?.wabaId || tenant?.businessAccountIdPlain || "";
+        const resolvedWabaId =
+          wabaIdFromEntry ||
+          tenant?.wabaId ||
+          tenant?.businessAccountIdPlain ||
+          "";
         const set = {
           status: newStatus,
           ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
@@ -419,41 +497,59 @@ async function receive(req, res) {
 
         try {
           const filter = hasValidWorkspaceId
-            ? { workspaceId: workspaceIdRaw, ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}), whatsappMessageId: waId }
+            ? {
+                workspaceId: workspaceIdRaw,
+                ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
+                whatsappMessageId: waId,
+              }
             : { whatsappMessageId: waId };
-          const existing = await Message.findOne(filter).select("status").lean();
-          const oldStatus = String(existing?.status || "accepted").toLowerCase();
-          const effectiveStatus = (MESSAGE_STATUS_RANK[newStatus] ?? 0) >= (MESSAGE_STATUS_RANK[oldStatus] ?? 0)
-            ? newStatus
-            : oldStatus;
+          const existing = await Message.findOne(filter)
+            .select("status")
+            .lean();
+          const oldStatus = String(
+            existing?.status || "accepted",
+          ).toLowerCase();
+          const effectiveStatus =
+            (MESSAGE_STATUS_RANK[newStatus] ?? 0) >=
+            (MESSAGE_STATUS_RANK[oldStatus] ?? 0)
+              ? newStatus
+              : oldStatus;
           set.status = effectiveStatus;
           const update = hasValidWorkspaceId
             ? {
-              $set: set,
-              $push: { statusHistory: { status: newStatus, timestamp: ts, error: s.errors || null } },
-              $setOnInsert: {
-                workspaceId: workspaceIdRaw,
-                // Keep phone only in $set to avoid Mongo conflicting update operators.
-                // When recipient_id is missing in status webhook, fallback to placeholder.
-                ...(phone ? {} : { phone: "unknown" }),
-                direction: "outbound",
-                "statusTimestamps.acceptedAt": new Date(),
-              },
-            }
+                $set: set,
+                $push: {
+                  statusHistory: {
+                    status: newStatus,
+                    timestamp: ts,
+                    error: s.errors || null,
+                  },
+                },
+                $setOnInsert: {
+                  workspaceId: workspaceIdRaw,
+                  // Keep phone only in $set to avoid Mongo conflicting update operators.
+                  // When recipient_id is missing in status webhook, fallback to placeholder.
+                  ...(phone ? {} : { phone: "unknown" }),
+                  direction: "outbound",
+                  "statusTimestamps.acceptedAt": new Date(),
+                },
+              }
             : {
-              $set: set,
-              $push: { statusHistory: { status: newStatus, timestamp: ts, error: s.errors || null } },
-            };
+                $set: set,
+                $push: {
+                  statusHistory: {
+                    status: newStatus,
+                    timestamp: ts,
+                    error: s.errors || null,
+                  },
+                },
+              };
 
-          const updated = await Message.findOneAndUpdate(
-            filter,
-            update,
-            {
-              upsert: hasValidWorkspaceId,
-              returnDocument: "after",
-              setDefaultsOnInsert: hasValidWorkspaceId,
-            }
-          );
+          const updated = await Message.findOneAndUpdate(filter, update, {
+            upsert: hasValidWorkspaceId,
+            returnDocument: "after",
+            setDefaultsOnInsert: hasValidWorkspaceId,
+          });
           if (updated) {
             await refreshCampaignFromMessage(workspaceIdRaw, updated);
             console.info("[message-status] updated", {
@@ -470,7 +566,7 @@ async function receive(req, res) {
                 lastMessageDirection: "outbound",
               },
               { $set: { lastMessageStatus: effectiveStatus } },
-              { returnDocument: "after" }
+              { returnDocument: "after" },
             );
             if (conversation) {
               publishToWorkspace(workspaceIdRaw, "conversation:update", {
@@ -485,7 +581,9 @@ async function receive(req, res) {
               status: effectiveStatus,
               statusTimestamp: ts,
               error: s.errors || null,
-              conversationId: conversation?._id ? String(conversation._id) : null,
+              conversationId: conversation?._id
+                ? String(conversation._id)
+                : null,
               customerPhone: updated.phone || phone || null,
             });
             publishWorkspaceEvent(workspaceIdRaw, {
@@ -532,7 +630,7 @@ async function receive(req, res) {
         normalizedFlowMessages.map((message) => [
           message.whatsappMessageId,
           message,
-        ])
+        ]),
       );
       if (messages.length) {
         pushWebhookDebugEvent(workspaceIdRaw, {
@@ -549,7 +647,10 @@ async function receive(req, res) {
       }
       if (debug && messages.length) {
         // eslint-disable-next-line no-console
-        console.log("Webhook inbound messages:", messages.map((m) => ({ id: m?.id, from: m?.from, type: m?.type })));
+        console.log(
+          "Webhook inbound messages:",
+          messages.map((m) => ({ id: m?.id, from: m?.from, type: m?.type })),
+        );
       }
       for (const m of messages) {
         const waId = m.id;
@@ -557,8 +658,14 @@ async function receive(req, res) {
         if (!waId || !from) continue;
 
         const ts = asDateFromSeconds(m.timestamp);
-        const resolvedWabaId = wabaIdFromEntry || tenant?.wabaId || tenant?.businessAccountIdPlain || "";
-        const type = String(m.type || "").trim().toLowerCase();
+        const resolvedWabaId =
+          wabaIdFromEntry ||
+          tenant?.wabaId ||
+          tenant?.businessAccountIdPlain ||
+          "";
+        const type = String(m.type || "")
+          .trim()
+          .toLowerCase();
         const inboundReplyContext = await resolveInboundReplyContext({
           workspaceId: workspaceIdRaw,
           wabaId: resolvedWabaId,
@@ -568,7 +675,7 @@ async function receive(req, res) {
         }).catch(() => ({}));
 
         const normalizedFlowMessage = normalizedFlowMessageById.get(
-          String(waId)
+          String(waId),
         );
         if (normalizedFlowMessage) {
           try {
@@ -595,52 +702,89 @@ async function receive(req, res) {
           type === "unsupported" ||
           type === "deleted" ||
           (Array.isArray(m.errors) &&
-            m.errors.some((err) => /deleted|unsupported/i.test(`${err?.title || ""} ${err?.message || ""} ${err?.details || ""}`)));
+            m.errors.some((err) =>
+              /deleted|unsupported/i.test(
+                `${err?.title || ""} ${err?.message || ""} ${err?.details || ""}`,
+              ),
+            ));
         const payload = {
           type,
           ...(m.context
             ? {
-              context: {
-                id: m.context.id || null,
-                from: m.context.from || null,
-                forwarded: Boolean(m.context.forwarded),
-                frequently_forwarded: Boolean(m.context.frequently_forwarded),
-              },
-            }
+                context: {
+                  id: m.context.id || null,
+                  from: m.context.from || null,
+                  forwarded: Boolean(m.context.forwarded),
+                  frequently_forwarded: Boolean(m.context.frequently_forwarded),
+                },
+              }
             : {}),
-          ...(isDeletedOrUnsupported ? { deleted: true, errors: Array.isArray(m.errors) ? m.errors : [] } : {}),
+          ...(isDeletedOrUnsupported
+            ? { deleted: true, errors: Array.isArray(m.errors) ? m.errors : [] }
+            : {}),
           ...(m.text?.body ? { text: { body: String(m.text.body) } } : {}),
-          ...(m.image?.id ? { image: { id: String(m.image.id), mime_type: m.image.mime_type || null, sha256: m.image.sha256 || null } } : {}),
-          ...(m.video?.id ? { video: { id: String(m.video.id), mime_type: m.video.mime_type || null, sha256: m.video.sha256 || null } } : {}),
-          ...(m.audio?.id ? { audio: { id: String(m.audio.id), mime_type: m.audio.mime_type || null, sha256: m.audio.sha256 || null } } : {}),
+          ...(m.image?.id
+            ? {
+                image: {
+                  id: String(m.image.id),
+                  mime_type: m.image.mime_type || null,
+                  sha256: m.image.sha256 || null,
+                },
+              }
+            : {}),
+          ...(m.video?.id
+            ? {
+                video: {
+                  id: String(m.video.id),
+                  mime_type: m.video.mime_type || null,
+                  sha256: m.video.sha256 || null,
+                },
+              }
+            : {}),
+          ...(m.audio?.id
+            ? {
+                audio: {
+                  id: String(m.audio.id),
+                  mime_type: m.audio.mime_type || null,
+                  sha256: m.audio.sha256 || null,
+                },
+              }
+            : {}),
           ...(m.document?.id
             ? {
-              document: {
-                id: String(m.document.id),
-                mime_type: m.document.mime_type || null,
-                sha256: m.document.sha256 || null,
-                filename: m.document.filename || null,
-              },
-            }
+                document: {
+                  id: String(m.document.id),
+                  mime_type: m.document.mime_type || null,
+                  sha256: m.document.sha256 || null,
+                  filename: m.document.filename || null,
+                },
+              }
             : {}),
           ...(Array.isArray(m.contacts) ? { contacts: m.contacts } : {}),
           ...(m.interactive
             ? {
-              interactive: {
-                type: m.interactive.type || null,
-                ...(m.interactive.button_reply
-                  ? { button_reply: m.interactive.button_reply }
-                  : {}),
-                ...(m.interactive.list_reply
-                  ? { list_reply: m.interactive.list_reply }
-                  : {}),
-              },
-            }
+                interactive: {
+                  type: m.interactive.type || null,
+                  ...(m.interactive.button_reply
+                    ? { button_reply: m.interactive.button_reply }
+                    : {}),
+                  ...(m.interactive.list_reply
+                    ? { list_reply: m.interactive.list_reply }
+                    : {}),
+                },
+              }
             : {}),
         };
 
         // Avoid bracket placeholders like "[audio]" in UI; prefer empty text for media types.
-        const mediaTypes = new Set(["image", "video", "audio", "document", "contacts", "location"]);
+        const mediaTypes = new Set([
+          "image",
+          "video",
+          "audio",
+          "document",
+          "contacts",
+          "location",
+        ]);
         const buttonReply = m.interactive?.button_reply;
         const listReply = m.interactive?.list_reply;
         const normalizedType = buttonReply
@@ -687,7 +831,11 @@ async function receive(req, res) {
           }
 
           const msgDoc = await Message.findOneAndUpdate(
-            { workspaceId: workspaceIdRaw, ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}), whatsappMessageId: waId },
+            {
+              workspaceId: workspaceIdRaw,
+              ...(resolvedWabaId ? { wabaId: resolvedWabaId } : {}),
+              whatsappMessageId: waId,
+            },
             {
               $set: {
                 workspaceId: workspaceIdRaw,
@@ -706,8 +854,10 @@ async function receive(req, res) {
                 contextWamid: inboundReplyContext.contextWamid || null,
                 replyToPreview: inboundReplyContext.replyToPreview || null,
                 replyToType: inboundReplyContext.replyToType || null,
-                interactiveReplyId: inboundReplyContext.interactiveReplyId || null,
-                interactiveReplyTitle: inboundReplyContext.interactiveReplyTitle || null,
+                interactiveReplyId:
+                  inboundReplyContext.interactiveReplyId || null,
+                interactiveReplyTitle:
+                  inboundReplyContext.interactiveReplyTitle || null,
                 ...(buttonReply ? { buttonReply } : {}),
                 ...(listReply ? { listReply } : {}),
                 sentBy: { kind: "system" },
@@ -716,7 +866,11 @@ async function receive(req, res) {
               },
               $setOnInsert: { createdAt: ts },
             },
-            { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
+            {
+              upsert: true,
+              returnDocument: "after",
+              setDefaultsOnInsert: true,
+            },
           );
 
           const convo = await touchConversation({
@@ -726,7 +880,10 @@ async function receive(req, res) {
             phone: from,
             lastMessageAt: ts,
             lastInboundAt: ts,
-            lastMessagePreview: (text || "Unsupported message type").slice(0, 160),
+            lastMessagePreview: (text || "Unsupported message type").slice(
+              0,
+              160,
+            ),
             incrementUnread: true,
           });
 
@@ -740,7 +897,7 @@ async function receive(req, res) {
                   lastAssignedAt: convo.assignedAt || null,
                   leadStatusSnapshot: convo.leadStatus || null,
                 },
-              }
+              },
             ).catch(() => {});
           }
 
@@ -793,7 +950,7 @@ async function receive(req, res) {
                     $set: {
                       aiExecutionKey: executionKey,
                     },
-                  }
+                  },
                 ).catch(() => {});
               }
               const aiQueue = getAiRuntimeQueue();
@@ -806,10 +963,16 @@ async function receive(req, res) {
                   messageId: msgDoc?._id ? String(msgDoc._id) : null,
                   executionKey,
                 },
-                { jobId: aiJobId }
+                { jobId: aiJobId },
               );
             }
-          } catch {
+          } catch (enqueueErr) {
+            console.error("[webhook] AI enqueue failed", {
+              workspaceId: workspaceIdRaw,
+              conversationId: convo?._id ? String(convo._id) : null,
+              messageId: msgDoc?._id ? String(msgDoc._id) : null,
+              error: enqueueErr?.message || String(enqueueErr),
+            });
             // Never break webhook delivery for AI enqueue failures.
           }
 
@@ -820,15 +983,23 @@ async function receive(req, res) {
               const jobId = `lead:${String(workspaceIdRaw)}:${String(from)}:${bucket}`;
               await q.add(
                 "crm.lead.detect_and_assign",
-                { workspaceId: String(workspaceIdRaw), wabaId: String(resolvedWabaId), phone: String(from), inboundAt: ts.toISOString() },
-                { jobId }
+                {
+                  workspaceId: String(workspaceIdRaw),
+                  wabaId: String(resolvedWabaId),
+                  phone: String(from),
+                  inboundAt: ts.toISOString(),
+                },
+                { jobId },
               );
             }
           } catch {
             // Never break webhook delivery for CRM enqueue failures.
           }
         } catch (messageErr) {
-          if (Number(messageErr?.code) === 11000 || /duplicate key/i.test(String(messageErr?.message || ""))) {
+          if (
+            Number(messageErr?.code) === 11000 ||
+            /duplicate key/i.test(String(messageErr?.message || ""))
+          ) {
             console.info("[service-window] duplicate reconciled", {
               workspaceId: workspaceIdRaw,
               customerPhoneMasked: maskId(from),
@@ -864,22 +1035,34 @@ async function receive(req, res) {
 }
 
 async function listWebhookDebugEvents(req, res) {
-  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
-  const feedEnabled = String(process.env.META_WEBHOOK_DEBUG_FEED_ENABLED || "").toLowerCase() === "true";
+  const isProd =
+    String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  const feedEnabled =
+    String(process.env.META_WEBHOOK_DEBUG_FEED_ENABLED || "").toLowerCase() ===
+    "true";
   if (isProd && !feedEnabled) {
     throw new HttpError(404, "Not found");
   }
 
-  const workspaceId = req.workspace?.id ? String(req.workspace.id) : String(req.query.workspaceId || "");
+  const workspaceId = req.workspace?.id
+    ? String(req.workspace.id)
+    : String(req.query.workspaceId || "");
   if (!workspaceId) throw new HttpError(400, "Missing workspaceId");
-  if (!mongoose.Types.ObjectId.isValid(workspaceId)) throw new HttpError(400, "Invalid workspaceId");
+  if (!mongoose.Types.ObjectId.isValid(workspaceId))
+    throw new HttpError(400, "Invalid workspaceId");
 
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, proxy-revalidate",
+  );
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
   res.set("Surrogate-Control", "no-store");
 
-  const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), WEBHOOK_DEBUG_LIMIT);
+  const limit = Math.min(
+    Math.max(Number(req.query.limit || 20), 1),
+    WEBHOOK_DEBUG_LIMIT,
+  );
   const events = webhookDebugEventsByWorkspace.get(workspaceId) || [];
   return res.json({
     success: true,
@@ -889,4 +1072,3 @@ async function listWebhookDebugEvents(req, res) {
 }
 
 module.exports = { verify, receive, listWebhookDebugEvents };
-

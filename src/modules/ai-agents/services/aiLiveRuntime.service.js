@@ -195,6 +195,64 @@ function buildUsageMetadata({ executionKey, metadata = {} }) {
   };
 }
 
+function skipReasonMessage(reason) {
+  switch (String(reason || "").trim()) {
+    case "human_or_paused":
+      return "Conversation is under human control or automation is paused.";
+    case "message_missing":
+      return "Inbound message record was not found for AI processing.";
+    case "already_processed":
+      return "Inbound message was already handled by AI runtime.";
+    case "execution_claim_mismatch":
+      return "Inbound message was claimed by another AI runtime attempt.";
+    case "empty_message":
+      return "Inbound message has no supported text content for AI reply.";
+    case "active_flow_session":
+      return "An active flow session is currently controlling this conversation.";
+    case "no_active_agent":
+      return "No active WhatsApp AI agent matched this conversation.";
+    case "conversation_missing":
+      return "Conversation record was not found for AI runtime.";
+    case "ai_disabled":
+      return "Workspace AI live runtime is disabled.";
+    default:
+      return "AI runtime skipped this inbound message.";
+  }
+}
+
+function logRuntimeSkip({ workspaceId, conversationId, messageId, executionKey, reason }) {
+  console.info("[ai-runtime] inbound skipped", {
+    workspaceId: workspaceId ? String(workspaceId) : null,
+    conversationId: conversationId ? String(conversationId) : null,
+    messageId: messageId ? String(messageId) : null,
+    executionKey: executionKey ? String(executionKey) : null,
+    reason,
+    detail: skipReasonMessage(reason),
+  });
+}
+
+async function markInboundMessageSkipped({
+  workspaceId,
+  messageId,
+  executionKey,
+  reason,
+}) {
+  if (!workspaceId || !messageId) return;
+  await Message.updateOne(
+    { _id: messageId, workspaceId, direction: "inbound" },
+    {
+      $set: {
+        aiProcessedAt: new Date(),
+        aiStatus: "skipped",
+        aiAction: "blocked",
+        aiReason: String(reason || "skipped").slice(0, 200),
+        aiError: null,
+        aiExecutionKey: executionKey || null,
+      },
+    }
+  ).catch(() => {});
+}
+
 function fallbackReasonForError(error) {
   const code = String(error?.code || "").trim();
   if (code === "AI_PROVIDER_TIMEOUT") return "provider_timeout";
@@ -654,7 +712,16 @@ async function processInboundJob({
   })
     .select("_id aiAgentEnabled aiRemainingCredits aiRemainingTokens timezone")
     .lean();
-  if (!workspace?.aiAgentEnabled) return { success: true, skipped: "ai_disabled" };
+  if (!workspace?.aiAgentEnabled) {
+    logRuntimeSkip({
+      workspaceId: workspaceObjectId,
+      conversationId: conversationObjectId,
+      messageId: messageObjectId,
+      executionKey: runtimeExecutionKey,
+      reason: "ai_disabled",
+    });
+    return { success: true, skipped: "ai_disabled" };
+  }
 
   const conversationLock = await acquireConversationLock({
     workspaceId: workspaceObjectId,
@@ -691,6 +758,13 @@ async function processInboundJob({
       workspaceId: workspaceObjectId,
     });
     if (!lockedConversation) {
+      logRuntimeSkip({
+        workspaceId: workspaceObjectId,
+        conversationId: conversationObjectId,
+        messageId: messageObjectId,
+        executionKey: runtimeExecutionKey,
+        reason: "conversation_missing",
+      });
       return { success: true, skipped: "conversation_missing" };
     }
     if (
@@ -698,6 +772,13 @@ async function processInboundJob({
       isHumanControlledAiState(lockedConversation.aiState) ||
       lockedConversation.automationPausedAt
     ) {
+      logRuntimeSkip({
+        workspaceId: workspaceObjectId,
+        conversationId: lockedConversation._id,
+        messageId: messageObjectId,
+        executionKey: runtimeExecutionKey,
+        reason: "human_or_paused",
+      });
       return { success: true, skipped: "human_or_paused" };
     }
 
@@ -706,7 +787,16 @@ async function processInboundJob({
       workspaceId: workspaceObjectId,
       direction: "inbound",
     });
-    if (!inboundMessage) return { success: true, skipped: "message_missing" };
+    if (!inboundMessage) {
+      logRuntimeSkip({
+        workspaceId: workspaceObjectId,
+        conversationId: lockedConversation._id,
+        messageId: messageObjectId,
+        executionKey: runtimeExecutionKey,
+        reason: "message_missing",
+      });
+      return { success: true, skipped: "message_missing" };
+    }
     const normalizedExecutionKey = String(
       runtimeExecutionKey ||
         inboundMessage.aiExecutionKey ||
@@ -719,6 +809,13 @@ async function processInboundJob({
     ).trim();
     runtimeExecutionKey = normalizedExecutionKey;
     if (["replied", "handover", "skipped"].includes(String(inboundMessage.aiStatus || ""))) {
+      logRuntimeSkip({
+        workspaceId: workspaceObjectId,
+        conversationId: lockedConversation._id,
+        messageId: inboundMessage._id,
+        executionKey: runtimeExecutionKey,
+        reason: "already_processed",
+      });
       return { success: true, skipped: "already_processed" };
     }
     inboundMessage = await Message.findOneAndUpdate(
@@ -744,6 +841,13 @@ async function processInboundJob({
       { returnDocument: "after" }
     );
     if (!inboundMessage) {
+      logRuntimeSkip({
+        workspaceId: workspaceObjectId,
+        conversationId: lockedConversation._id,
+        messageId: messageObjectId,
+        executionKey: runtimeExecutionKey,
+        reason: "execution_claim_mismatch",
+      });
       return { success: true, skipped: "execution_claim_mismatch" };
     }
     const outboundReplyIdempotencyKey = buildOutboundReplyIdempotencyKey(normalizedExecutionKey);
@@ -754,7 +858,22 @@ async function processInboundJob({
       inboundMessage.listReply?.title ||
       ""
     ).trim();
-    if (!inboundText) return { success: true, skipped: "empty_message" };
+    if (!inboundText) {
+      await markInboundMessageSkipped({
+        workspaceId: workspaceObjectId,
+        messageId: inboundMessage._id,
+        executionKey: normalizedExecutionKey,
+        reason: "empty_message",
+      });
+      logRuntimeSkip({
+        workspaceId: workspaceObjectId,
+        conversationId: lockedConversation._id,
+        messageId: inboundMessage._id,
+        executionKey: normalizedExecutionKey,
+        reason: "empty_message",
+      });
+      return { success: true, skipped: "empty_message" };
+    }
 
     const contact = await Contact.findOne({
       workspaceId: workspaceObjectId,
@@ -763,6 +882,19 @@ async function processInboundJob({
     }).lean();
 
     if (await hasActiveFlowSession({ workspaceId: workspaceObjectId, contactId: contact?._id || null })) {
+      await markInboundMessageSkipped({
+        workspaceId: workspaceObjectId,
+        messageId: inboundMessage._id,
+        executionKey: normalizedExecutionKey,
+        reason: "active_flow_session",
+      });
+      logRuntimeSkip({
+        workspaceId: workspaceObjectId,
+        conversationId: lockedConversation._id,
+        messageId: inboundMessage._id,
+        executionKey: normalizedExecutionKey,
+        reason: "active_flow_session",
+      });
       return { success: true, skipped: "active_flow_session" };
     }
 
@@ -772,7 +904,22 @@ async function processInboundJob({
       message: inboundText,
       channel: "whatsapp",
     });
-    if (!agent) return { success: true, skipped: "no_active_agent" };
+    if (!agent) {
+      await markInboundMessageSkipped({
+        workspaceId: workspaceObjectId,
+        messageId: inboundMessage._id,
+        executionKey: normalizedExecutionKey,
+        reason: "no_active_agent",
+      });
+      logRuntimeSkip({
+        workspaceId: workspaceObjectId,
+        conversationId: lockedConversation._id,
+        messageId: inboundMessage._id,
+        executionKey: normalizedExecutionKey,
+        reason: "no_active_agent",
+      });
+      return { success: true, skipped: "no_active_agent" };
+    }
 
     const now = new Date();
     let aiConversation = await findOrCreateWhatsappConversation({

@@ -5,6 +5,7 @@ const { AiUsageLog } = require("@infra/database/AiUsageLog");
 const { KnowledgeSource } = require("@infra/database/KnowledgeSource");
 const { Contact } = require("@infra/database/Contact");
 const { Conversation } = require("@infra/database/Conversation");
+const { Message } = require("@infra/database/Message");
 const { FlowSession } = require("@infra/database/FlowSession");
 const { Workspace } = require("@infra/database/Workspace");
 const aiAddonService = require("@modules/ai-agents/services/aiAddon.service");
@@ -321,6 +322,22 @@ async function getDashboard({ workspaceId, query = {} }) {
     }).select("_id contactId flowId status expiresAt waitingFor updatedAt").lean()
     : [];
   const activeFlowByContactId = new Map(activeFlowSessions.map((item) => [String(item.contactId || ""), item]));
+  const recentInboundRuntimeMessages = inboxPhones.length
+    ? await Message.find({
+      workspaceId,
+      direction: "inbound",
+      phone: { $in: inboxPhones },
+    })
+      .select("phone aiStatus aiReason aiError aiProcessedAt receivedAt createdAt")
+      .sort({ receivedAt: -1, createdAt: -1 })
+      .lean()
+    : [];
+  const latestInboundByPhone = new Map();
+  for (const item of recentInboundRuntimeMessages) {
+    const phone = String(item.phone || "").trim();
+    if (!phone || latestInboundByPhone.has(phone)) continue;
+    latestInboundByPhone.set(phone, item);
+  }
 
   const agentCounts = agents.reduce(
     (acc, agent) => {
@@ -486,12 +503,15 @@ async function getDashboard({ workspaceId, query = {} }) {
     const phone = String(item.phone || "").trim();
     const contact = contactByPhone.get(phone);
     const flowSession = contact?._id ? activeFlowByContactId.get(String(contact._id)) : null;
+    const latestInbound = latestInboundByPhone.get(phone);
     const aiState = String(item.aiState || "").trim() || null;
     const blockedReasons = [];
     if (item.assignedEmployeeId) blockedReasons.push("human_takeover");
     if (item.automationPausedAt) blockedReasons.push("automation_paused");
     if (flowSession?._id) blockedReasons.push("active_flow_session");
     if (item.aiLastErrorMessage) blockedReasons.push("last_runtime_error");
+    if (latestInbound?.aiStatus === "failed") blockedReasons.push("last_inbound_failed");
+    if (latestInbound?.aiStatus === "skipped") blockedReasons.push("last_inbound_skipped");
     if (!item.aiAgentId) blockedReasons.push("no_agent_bound_yet");
     return {
       id: String(item._id),
@@ -512,6 +532,10 @@ async function getDashboard({ workspaceId, query = {} }) {
       aiLastReplyAt: item.aiLastReplyAt || null,
       aiLastErrorAt: item.aiLastErrorAt || null,
       aiLastErrorMessage: item.aiLastErrorMessage || null,
+      lastAiStatus: latestInbound?.aiStatus || null,
+      lastAiReason: latestInbound?.aiReason || null,
+      lastAiError: latestInbound?.aiError || null,
+      lastAiProcessedAt: latestInbound?.aiProcessedAt || null,
       lastInboundAt: item.lastInboundAt || null,
       lastMessageAt: item.lastMessageAt || null,
       preview: String(item.lastMessagePreview || "").slice(0, 180),
