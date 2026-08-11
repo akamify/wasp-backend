@@ -13,6 +13,7 @@ const {
   clearConversation,
   takeOverAiConversation,
   returnAiConversation,
+  releaseAiFlowBlock,
 } = require("@modules/conversations/controllers/conversation.controller");
 
 const router = express.Router();
@@ -24,6 +25,7 @@ router.get("/", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requ
 router.post("/:phone/read", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.reply"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(readConversation));
 router.post("/:phone/take-over", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.reply"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(takeOverAiConversation));
 router.post("/:phone/return-to-ai", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.reply"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(returnAiConversation));
+router.post("/:phone/release-flow-block", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.reply"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(releaseAiFlowBlock));
 router.get("/:phone", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.view"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(getConversation));
 router.delete("/:phone", authOrApiKey, blockInternalChatForApiKey, requireWorkspace, requireWorkspacePermission("inbox.reply"), requireInboxAccess, requireApiPermission("chatAccess"), asyncHandler(clearConversation));
 module.exports = router;

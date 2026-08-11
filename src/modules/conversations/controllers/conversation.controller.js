@@ -14,6 +14,7 @@ const {
   actorFromRequest,
   takeOverConversation,
   returnConversationToAi,
+  releaseConversationFlowBlock,
 } = require("@modules/conversations/services/conversationAiHandover.service");
 const {
   AI_STATE_VALUES,
@@ -505,6 +506,20 @@ async function returnAiConversation(req, res) {
   res.json({ success: true, conversation: withServiceWindow(conversation), phone });
 }
 
+async function releaseAiFlowBlock(req, res) {
+  const scope = await requireActiveWabaScope(req.workspace.id);
+  const phone = normalizePhone(req.params.phone);
+  if (!phone) throw new HttpError(400, "Invalid phone number");
+  const conversation = await releaseConversationFlowBlock({
+    workspaceId: req.workspace.id,
+    wabaId: scope.wabaId,
+    phone,
+    actor: actorFromRequest(req),
+    reason: req.body?.reason,
+  });
+  res.json({ success: true, conversation: withServiceWindow(conversation), phone });
+}
+
 module.exports = {
   listConversations,
   getConversation,
@@ -512,5 +527,6 @@ module.exports = {
   clearConversation,
   takeOverAiConversation,
   returnAiConversation,
+  releaseAiFlowBlock,
 };
 

@@ -1,4 +1,5 @@
 const { Conversation } = require("@infra/database/Conversation");
+const { FlowSession } = require("@infra/database/FlowSession");
 const { writeConversationEvent } = require("@modules/crm/services/conversationEvent.service");
 const { publishWorkspaceEvent, publishToWorkspace } = require("@shared/services/realtimeService");
 const { HttpError } = require("@shared/utils/httpError");
@@ -124,8 +125,91 @@ async function returnConversationToAi({
   return updated;
 }
 
+async function releaseConversationFlowBlock({
+  workspaceId,
+  wabaId,
+  phone,
+  actor,
+  reason,
+}) {
+  const conversation = await Conversation.findOne({ workspaceId, wabaId, phone });
+  if (!conversation) throw new HttpError(404, "Conversation not found");
+  if (!conversation.automationPausedAt && !conversation.automationPausedByFlowSessionId) {
+    throw new HttpError(409, "Conversation is not blocked by an active flow session.");
+  }
+
+  const now = new Date();
+  const previousState = normalizeAiState(conversation.aiState, { fallback: null });
+  const nextReason = String(reason || conversation.automationPauseReason || "manual_flow_release").trim().slice(0, 300);
+
+  if (conversation.automationPausedByFlowSessionId) {
+    await FlowSession.findOneAndUpdate(
+      {
+        _id: conversation.automationPausedByFlowSessionId,
+        workspaceId,
+        status: "active",
+      },
+      {
+        $set: {
+          status: "expired",
+          completedAt: now,
+          expiredAt: now,
+          expiryReason: "manual",
+          expiresAt: now,
+          waitingFor: { type: null, attributeKey: null, nodeId: null },
+          lockedUntil: null,
+          lockedBy: null,
+        },
+      },
+      { returnDocument: "after" }
+    ).catch(() => null);
+  }
+
+  const updated = await Conversation.findOneAndUpdate(
+    { _id: conversation._id, workspaceId },
+    {
+      $set: {
+        aiState:
+          conversation.assignedEmployeeId || previousState === AI_STATES.HUMAN_ACTIVE
+            ? AI_STATES.HUMAN_ACTIVE
+            : AI_STATES.AI_ACTIVE,
+        aiLastReplyAt: conversation.aiLastReplyAt || now,
+        aiLastErrorAt: null,
+        aiLastErrorMessage: null,
+      },
+      $unset: {
+        automationPausedAt: 1,
+        automationPauseReason: 1,
+        automationPausedByFlowSessionId: 1,
+      },
+    },
+    { returnDocument: "after" }
+  );
+
+  await writeConversationEvent({
+    workspaceId,
+    conversationId: conversation._id,
+    phone,
+    type: "ai_returned",
+    actor,
+    payload: {
+      previousState: previousState || null,
+      nextState: updated?.aiState || AI_STATES.AI_ACTIVE,
+      reason: nextReason || "manual_flow_release",
+      source: "flow_block_release",
+      aiAgentId: conversation.aiAgentId ? String(conversation.aiAgentId) : null,
+      aiConversationId: conversation.aiConversationId ? String(conversation.aiConversationId) : null,
+      flowSessionId: conversation.automationPausedByFlowSessionId ? String(conversation.automationPausedByFlowSessionId) : null,
+    },
+  }).catch(() => {});
+
+  await notifyConversationUpdate(workspaceId, updated);
+  return updated;
+}
+
 module.exports = {
   actorFromRequest,
   takeOverConversation,
   returnConversationToAi,
+  releaseConversationFlowBlock,
 };

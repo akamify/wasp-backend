@@ -4,8 +4,12 @@ const { AiConversation } = require("@infra/database/AiConversation");
 const { AiUsageLog } = require("@infra/database/AiUsageLog");
 const { KnowledgeSource } = require("@infra/database/KnowledgeSource");
 const { Contact } = require("@infra/database/Contact");
+const { Conversation } = require("@infra/database/Conversation");
+const { FlowSession } = require("@infra/database/FlowSession");
+const { Workspace } = require("@infra/database/Workspace");
 const aiAddonService = require("@modules/ai-agents/services/aiAddon.service");
 const aiProviderConfigService = require("@modules/ai-agents/services/aiProviderConfig.service");
+const { resolveActiveConnection } = require("@shared/services/whatsappConnectionService");
 
 function startOfDay(date) {
   const d = new Date(date);
@@ -95,16 +99,23 @@ async function getDashboard({ workspaceId, query = {} }) {
   const conversationMatch = buildConversationMatch({ workspaceId, agentObjectId, channel });
   const since7d = new Date(startOfDay(rangeEnd).getTime() - 6 * 24 * 60 * 60 * 1000);
 
-  const [addonStatus, agents, conversations, usageSummaryRows, knowledgeCounts, usageSeriesRaw, topAgentUsage, channelBreakdownRaw] = await Promise.all([
+  const [addonStatus, workspace, activeConnection, agents, conversations, inboxConversations, usageSummaryRows, knowledgeCounts, usageSeriesRaw, topAgentUsage, channelBreakdownRaw] = await Promise.all([
     aiAddonService.getAddonStatus({ workspaceId }),
+    Workspace.findById(workspaceId).select("_id isActive status aiAgentEnabled timezone").lean(),
+    resolveActiveConnection(workspaceId).catch(() => null),
     AiAgent.find({ workspaceId, deletedAt: null })
-      .select("_id name status persona modelName stats createdAt updatedAt")
+      .select("_id name status persona modelName runtimeControls stats createdAt updatedAt")
       .sort({ updatedAt: -1 })
       .lean(),
     AiConversation.find(conversationMatch)
       .select("_id agentId contactId channel status lastMessageAt messages metadata")
       .sort({ lastMessageAt: -1, updatedAt: -1 })
       .limit(20)
+      .lean(),
+    Conversation.find({ workspaceId, deletedAt: null })
+      .select("phone aiState aiHandoverAt aiHandoverReason aiLastReplyAt aiLastErrorAt aiLastErrorMessage aiAgentId assignedEmployeeId automationPausedAt automationPauseReason automationPausedByFlowSessionId lastMessageAt lastMessagePreview lastInboundAt")
+      .sort({ lastMessageAt: -1, updatedAt: -1 })
+      .limit(8)
       .lean(),
     AiUsageLog.aggregate([
       { $match: usageMatch },
@@ -281,11 +292,35 @@ async function getDashboard({ workspaceId, query = {} }) {
   ]);
 
   const contactIds = Array.from(new Set(conversations.map((item) => String(item.contactId || "")).filter(Boolean)));
-  const contacts = contactIds.length
-    ? await Contact.find({ _id: { $in: contactIds }, workspaceId }).select("_id name phone").lean()
+  const inboxPhones = Array.from(new Set(inboxConversations.map((item) => String(item.phone || "")).filter(Boolean)));
+  const contacts = contactIds.length || inboxPhones.length
+    ? await Contact.find({
+      workspaceId,
+      $or: [
+        ...(contactIds.length ? [{ _id: { $in: contactIds } }] : []),
+        ...(inboxPhones.length ? [{ phone: { $in: inboxPhones } }] : []),
+      ],
+    }).select("_id name phone").lean()
     : [];
   const contactMap = new Map(contacts.map((item) => [String(item._id), item]));
+  const contactByPhone = new Map(contacts.map((item) => [String(item.phone || ""), item]));
   const agentMap = new Map(agents.map((item) => [String(item._id), item]));
+  const inboxContactIds = Array.from(
+    new Set(
+      inboxConversations
+        .map((item) => contactByPhone.get(String(item.phone || ""))?._id)
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )
+  );
+  const activeFlowSessions = inboxContactIds.length
+    ? await FlowSession.find({
+      workspaceId,
+      contactId: { $in: inboxContactIds },
+      status: "active",
+    }).select("_id contactId flowId status expiresAt waitingFor updatedAt").lean()
+    : [];
+  const activeFlowByContactId = new Map(activeFlowSessions.map((item) => [String(item.contactId || ""), item]));
 
   const agentCounts = agents.reduce(
     (acc, agent) => {
@@ -395,6 +430,102 @@ async function getDashboard({ workspaceId, query = {} }) {
     };
   });
 
+  const activeAgents = agents.filter((agent) => String(agent.status || "").toLowerCase() === "active");
+  const whatsappCapableAgents = activeAgents.filter((agent) => {
+    const channels = Array.isArray(agent?.runtimeControls?.routing?.channels) ? agent.runtimeControls.routing.channels : [];
+    return !channels.length || channels.includes("whatsapp");
+  });
+  const liveBlockers = [];
+  if (!workspace?.isActive || String(workspace?.status || "").toLowerCase() !== "active") {
+    liveBlockers.push({
+      code: "workspace_inactive",
+      severity: "error",
+      title: "Workspace inactive",
+      message: "This workspace must be active before live WhatsApp AI can reply.",
+      action: "Fix workspace status first.",
+    });
+  }
+  if (!workspace?.aiAgentEnabled) {
+    liveBlockers.push({
+      code: "ai_disabled",
+      severity: "error",
+      title: "AI add-on disabled",
+      message: "Live AI runtime is turned off for this workspace.",
+      action: "Enable the AI add-on for this workspace.",
+    });
+  }
+  if (!activeConnection?.wabaId || !activeConnection?.phoneNumberId) {
+    liveBlockers.push({
+      code: "whatsapp_not_connected",
+      severity: "error",
+      title: "WhatsApp not connected",
+      message: "An active WhatsApp connection is required for live replies.",
+      action: "Reconnect WhatsApp for this workspace.",
+    });
+  }
+  if (!activeAgents.length) {
+    liveBlockers.push({
+      code: "no_active_agent",
+      severity: "warn",
+      title: "No active AI agent",
+      message: "Test chat can work for drafts, but live WhatsApp runtime needs an active agent.",
+      action: "Change at least one agent status to active.",
+    });
+  }
+  if (activeAgents.length && !whatsappCapableAgents.length) {
+    liveBlockers.push({
+      code: "no_whatsapp_agent",
+      severity: "warn",
+      title: "No agent routed to WhatsApp",
+      message: "Active agents exist, but none are configured to handle the WhatsApp channel.",
+      action: "Add `whatsapp` to the routing channels of an active agent.",
+    });
+  }
+
+  const liveConversations = inboxConversations.map((item) => {
+    const phone = String(item.phone || "").trim();
+    const contact = contactByPhone.get(phone);
+    const flowSession = contact?._id ? activeFlowByContactId.get(String(contact._id)) : null;
+    const aiState = String(item.aiState || "").trim() || null;
+    const blockedReasons = [];
+    if (item.assignedEmployeeId) blockedReasons.push("human_takeover");
+    if (item.automationPausedAt) blockedReasons.push("automation_paused");
+    if (flowSession?._id) blockedReasons.push("active_flow_session");
+    if (item.aiLastErrorMessage) blockedReasons.push("last_runtime_error");
+    if (!item.aiAgentId) blockedReasons.push("no_agent_bound_yet");
+    return {
+      id: String(item._id),
+      phone,
+      contactName: contact?.name || "",
+      aiState,
+      aiAgentId: item.aiAgentId ? String(item.aiAgentId) : null,
+      aiAgentName: item.aiAgentId ? agentMap.get(String(item.aiAgentId))?.name || null : null,
+      assignedEmployeeId: item.assignedEmployeeId ? String(item.assignedEmployeeId) : null,
+      hasHumanTakeover: Boolean(item.assignedEmployeeId) || aiState === "HUMAN_ACTIVE",
+      automationPausedAt: item.automationPausedAt || null,
+      automationPauseReason: item.automationPauseReason || null,
+      hasActiveFlowSession: Boolean(flowSession?._id),
+      activeFlowSessionId: flowSession?._id ? String(flowSession._id) : null,
+      activeFlowStatus: flowSession?.status || null,
+      aiHandoverAt: item.aiHandoverAt || null,
+      aiHandoverReason: item.aiHandoverReason || null,
+      aiLastReplyAt: item.aiLastReplyAt || null,
+      aiLastErrorAt: item.aiLastErrorAt || null,
+      aiLastErrorMessage: item.aiLastErrorMessage || null,
+      lastInboundAt: item.lastInboundAt || null,
+      lastMessageAt: item.lastMessageAt || null,
+      preview: String(item.lastMessagePreview || "").slice(0, 180),
+      blockedReasons,
+      recommendedAction: flowSession?._id
+        ? "release_flow_block"
+        : (Boolean(item.assignedEmployeeId) || aiState === "HUMAN_ACTIVE")
+          ? "return_to_ai"
+          : blockedReasons.length
+            ? "inspect"
+            : "none",
+    };
+  });
+
   const resolutionRate = safePercent(repliesCount, repliesCount + handoverCount);
   const deliveryToKnowledgeRate = safePercent(knowledgeHitCount, totalRequests);
   const blockedRate = safePercent(blockedCount, totalRequests);
@@ -445,6 +576,23 @@ async function getDashboard({ workspaceId, query = {} }) {
     },
     topAgents,
     recentConversations,
+    liveRuntime: {
+      workspaceReady: Boolean(workspace?.isActive) && String(workspace?.status || "").toLowerCase() === "active",
+      aiEnabled: Boolean(workspace?.aiAgentEnabled),
+      whatsappConnected: Boolean(activeConnection?.wabaId && activeConnection?.phoneNumberId),
+      liveReady: liveBlockers.length === 0,
+      activeAgentCount: activeAgents.length,
+      whatsappCapableAgentCount: whatsappCapableAgents.length,
+      activeConnection: activeConnection
+        ? {
+          displayPhoneNumber: activeConnection.displayPhoneNumber || null,
+          wabaName: activeConnection.wabaName || null,
+          connectedAt: activeConnection.connectedAt || null,
+        }
+        : null,
+      blockers: liveBlockers,
+      conversations: liveConversations,
+    },
     usageSeries,
     usageBreakdown: {
       creditsUsedToday: Number(todayUsage.creditsUsed || 0),
