@@ -254,7 +254,7 @@ async function verify(req, res) {
     // eslint-disable-next-line no-console
     console.warn("Webhook verify FAILED.", { mode, tokenPresent: !!token });
   }
-  
+
   return res.sendStatus(403);
 }
 

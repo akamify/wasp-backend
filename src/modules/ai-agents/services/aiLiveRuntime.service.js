@@ -766,7 +766,6 @@ async function processInboundJob({
       return { success: true, skipped: "conversation_missing" };
     }
     if (
-      lockedConversation.assignedEmployeeId ||
       isHumanControlledAiState(lockedConversation.aiState) ||
       lockedConversation.automationPausedAt
     ) {
@@ -775,7 +774,7 @@ async function processInboundJob({
         conversationId: lockedConversation._id,
         messageId: messageObjectId,
         executionKey: runtimeExecutionKey,
-        reason: "human_or_paused",
+        reason: lockedConversation.automationPausedAt ? "automation_paused" : "human_or_paused",
       });
       return { success: true, skipped: "human_or_paused" };
     }

@@ -506,7 +506,7 @@ async function getDashboard({ workspaceId, query = {} }) {
     const latestInbound = latestInboundByPhone.get(phone);
     const aiState = String(item.aiState || "").trim() || null;
     const blockedReasons = [];
-    if (item.assignedEmployeeId) blockedReasons.push("human_takeover");
+    if (aiState === "HUMAN_ACTIVE") blockedReasons.push("human_takeover");
     if (item.automationPausedAt) blockedReasons.push("automation_paused");
     if (flowSession?._id) blockedReasons.push("active_flow_session");
     if (item.aiLastErrorMessage) blockedReasons.push("last_runtime_error");
@@ -521,7 +521,8 @@ async function getDashboard({ workspaceId, query = {} }) {
       aiAgentId: item.aiAgentId ? String(item.aiAgentId) : null,
       aiAgentName: item.aiAgentId ? agentMap.get(String(item.aiAgentId))?.name || null : null,
       assignedEmployeeId: item.assignedEmployeeId ? String(item.assignedEmployeeId) : null,
-      hasHumanTakeover: Boolean(item.assignedEmployeeId) || aiState === "HUMAN_ACTIVE",
+      hasHumanTakeover: aiState === "HUMAN_ACTIVE",
+      hasAssignedOwner: Boolean(item.assignedEmployeeId),
       automationPausedAt: item.automationPausedAt || null,
       automationPauseReason: item.automationPauseReason || null,
       hasActiveFlowSession: Boolean(flowSession?._id),
@@ -542,7 +543,7 @@ async function getDashboard({ workspaceId, query = {} }) {
       blockedReasons,
       recommendedAction: flowSession?._id
         ? "release_flow_block"
-        : (Boolean(item.assignedEmployeeId) || aiState === "HUMAN_ACTIVE")
+        : aiState === "HUMAN_ACTIVE"
           ? "return_to_ai"
           : blockedReasons.length
             ? "inspect"
