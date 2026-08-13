@@ -21,7 +21,7 @@ const {
 } = require("@modules/ai-agents/services/aiAddon.service");
 const {
   AI_STATES,
-  isHumanControlledAiState,
+  normalizeAiState,
 } = require("@modules/ai-agents/constants/aiRuntime.constants");
 const {
   buildExecutionKey,
@@ -765,8 +765,11 @@ async function processInboundJob({
       });
       return { success: true, skipped: "conversation_missing" };
     }
+    const normalizedAiState = normalizeAiState(lockedConversation.aiState, { fallback: null });
     if (
-      isHumanControlledAiState(lockedConversation.aiState) ||
+      normalizedAiState === AI_STATES.HUMAN_ACTIVE ||
+      normalizedAiState === AI_STATES.PAUSED ||
+      normalizedAiState === AI_STATES.CLOSED ||
       lockedConversation.automationPausedAt
     ) {
       logRuntimeSkip({
