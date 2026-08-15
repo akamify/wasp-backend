@@ -228,8 +228,8 @@ async function generateGeminiInteractionResponse({
           ? [
               {
                 type: "file_search",
-                fileSearchStoreNames: [managedFileSearch.storeName],
-                topK: Number(managedFileSearch.topK || aiManagedFileSearchService.MANAGED_FILE_SEARCH_TOP_K || 4),
+                file_search_store_names: [managedFileSearch.storeName],
+                top_k: Number(managedFileSearch.topK || aiManagedFileSearchService.MANAGED_FILE_SEARCH_TOP_K || 4),
               },
             ]
           : undefined,
