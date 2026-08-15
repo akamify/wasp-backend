@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 const { hashForLookup } = require("@shared/utils/hash");
 const { decryptString, encryptString } = require("@shared/utils/crypto");
@@ -30,12 +31,75 @@ const { findLatestConnectionDocument } = require("@shared/services/whatsappConne
 const { serializeWhatsAppConnection } = require("@shared/services/whatsappConnectionMetadataService");
 
 const REGISTRATION_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const EXCHANGE_RESULT_TTL_MS = 10 * 60 * 1000;
+const embeddedSignupExchangeCache = new Map();
 
 function maskId(value) {
   const s = String(value || "").trim();
   if (!s) return "";
   if (s.length <= 10) return `${s.slice(0, 2)}***${s.slice(-2)}`;
   return `${s.slice(0, 6)}***${s.slice(-4)}`;
+}
+
+function fingerprint(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+}
+
+function buildExchangeCacheKey({ workspaceId, code, wabaId, phoneNumberId }) {
+  return [
+    String(workspaceId || "").trim(),
+    fingerprint(code),
+    String(wabaId || "").trim(),
+    String(phoneNumberId || "").trim(),
+  ].join(":");
+}
+
+function pruneExpiredExchangeCache(now = Date.now()) {
+  for (const [key, entry] of embeddedSignupExchangeCache.entries()) {
+    if (!entry || Number(entry.expiresAt || 0) <= now) {
+      embeddedSignupExchangeCache.delete(key);
+    }
+  }
+}
+
+async function runDedupedExchange({ cacheKey, logContext }, executor) {
+  const now = Date.now();
+  pruneExpiredExchangeCache(now);
+  const existing = embeddedSignupExchangeCache.get(cacheKey);
+
+  if (existing?.status === "pending" && existing.promise) {
+    console.info("[meta-embedded-signup] duplicate exchange request joined in-flight attempt", logContext);
+    return existing.promise;
+  }
+
+  if (existing?.status === "resolved" && existing.result) {
+    console.info("[meta-embedded-signup] duplicate exchange request served from recent result cache", logContext);
+    return existing.result;
+  }
+
+  const promise = (async () => {
+    try {
+      const result = await executor();
+      embeddedSignupExchangeCache.set(cacheKey, {
+        status: "resolved",
+        result,
+        expiresAt: Date.now() + EXCHANGE_RESULT_TTL_MS,
+      });
+      return result;
+    } catch (error) {
+      embeddedSignupExchangeCache.delete(cacheKey);
+      throw error;
+    }
+  })();
+
+  embeddedSignupExchangeCache.set(cacheKey, {
+    status: "pending",
+    promise,
+    expiresAt: now + EXCHANGE_RESULT_TTL_MS,
+  });
+  return promise;
 }
 
 function buildTokenDebugSummary(tokenDebugData) {
@@ -154,6 +218,26 @@ async function recoverExistingEmbeddedSignupSession({ workspaceId, wabaId, phone
     registrationDeadlineAt: connection?.registrationDeadlineAt || null,
     message: "Previous Meta signup session already started. Resuming existing onboarding state.",
     connection,
+  };
+}
+
+async function inspectExistingEmbeddedSignupState({ workspaceId }) {
+  const doc = await findLatestConnectionDocument(
+    workspaceId,
+    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain wabaName verifiedName nameStatus qualityRating codeVerificationStatus platformType accountMode throughput messagingLimitTier messagingLimitTierCached businessProfile lastMetadataSyncAt lastMetaSyncAt metadataFetchStatus metadataWarnings isValid isActive connectionMode tokenType tokenDebugSummary onboardingStage registrationStatus registrationVersion phoneRegistrationState registrationLastAttemptAt registrationCompletedAt embeddedSignupCompletedAt registrationDeadlineAt registrationExpired registrationRetryCount registrationLastError registrationLastErrorCode registrationRetryAllowed registrationRetryAfterAt registrationRecommendedAction businessManagerId templateSyncStatus templateSyncCompletedAt templateSyncLastError",
+    { onlyEmbeddedSignup: true }
+  );
+  if (!doc) return null;
+
+  const connection = serializeWhatsAppConnection(doc);
+  return {
+    connectionId: String(doc._id),
+    status: connection?.status || null,
+    connected: Boolean(connection?.connected),
+    lifecycleState: connection?.lifecycleState || connection?.onboardingStage || null,
+    registrationStatus: connection?.registrationStatus || null,
+    wabaId: String(connection?.wabaId || "").trim() || null,
+    phoneNumberId: String(connection?.phoneNumberId || "").trim() || null,
   };
 }
 
@@ -519,164 +603,233 @@ async function executeEmbeddedSignupExchange({
   wabaId,
   phoneNumberId,
   pin,
+  flowId = null,
 }) {
-  let token;
-  let appId;
-  try {
-    const exchanged = await exchangeCodeForToken(code);
-    token = exchanged.token;
-    appId = exchanged.appId;
-  } catch (err) {
-    if (isUsedAuthorizationCodeError(err)) {
-      const recovered = await recoverExistingEmbeddedSignupSession({
+  const workspaceId = workspace?.id ? String(workspace.id) : "";
+  const codeFingerprint = fingerprint(code);
+  const logContext = {
+    workspaceId: workspaceId || null,
+    flowId: flowId ? String(flowId) : null,
+    codeFingerprint,
+    wabaId: maskId(wabaId),
+    phoneNumberId: maskId(phoneNumberId),
+  };
+  const cacheKey = buildExchangeCacheKey({ workspaceId, code, wabaId, phoneNumberId });
+
+  console.info("[meta-embedded-signup] exchange requested", logContext);
+
+  return runDedupedExchange({ cacheKey, logContext }, async () => {
+    let token;
+    let appId;
+    try {
+      const exchanged = await exchangeCodeForToken(code);
+      token = exchanged.token;
+      appId = exchanged.appId;
+    } catch (err) {
+      if (isUsedAuthorizationCodeError(err)) {
+        const recovered = await recoverExistingEmbeddedSignupSession({
+          workspaceId: workspace?.id,
+          wabaId,
+          phoneNumberId,
+        });
+        if (recovered) {
+          console.info("[meta-embedded-signup] used code recovered existing signup session", {
+            ...logContext,
+            recoveredConnectionId: recovered.connectionId,
+            recoveredLifecycleState: recovered.lifecycleState,
+            recoveredRegistrationStatus: recovered.registrationStatus,
+          });
+          return recovered;
+        }
+
+        const existingState = await inspectExistingEmbeddedSignupState({
+          workspaceId: workspace?.id,
+        });
+        console.warn("[meta-embedded-signup] used code could not be resumed", {
+          ...logContext,
+          existingState,
+        });
+        throw buildMetaStepError(err, {
+          step: "exchange_code_for_token",
+          endpoint: "/oauth/access_token",
+          tokenType: META_TOKEN_TYPES.APP_ACCESS,
+          message: "Meta authorization code was already used. Start a fresh WhatsApp connect attempt.",
+          workspaceId: workspace?.id,
+          extraDetails: {
+            restartRequired: true,
+            recoveryAttempted: true,
+            existingState,
+            flowId: flowId ? String(flowId) : null,
+            codeFingerprint,
+          },
+        });
+      }
+      throw buildMetaStepError(err, {
+        step: "exchange_code_for_token",
+        endpoint: "/oauth/access_token",
+        tokenType: META_TOKEN_TYPES.APP_ACCESS,
+        message: "Meta code exchange failed.",
         workspaceId: workspace?.id,
-        wabaId,
-        phoneNumberId,
+        extraDetails: {
+          flowId: flowId ? String(flowId) : null,
+          codeFingerprint,
+        },
       });
-      if (recovered) return recovered;
     }
-    throw buildMetaStepError(err, {
-      step: "exchange_code_for_token",
-      endpoint: "/oauth/access_token",
-      tokenType: META_TOKEN_TYPES.APP_ACCESS,
-      message: "Meta code exchange failed.",
-      workspaceId: workspace?.id,
+    const graphApiVersion = getMetaGraphVersion();
+    const debugTokenData = await debugBusinessToken({
+      token,
+      graphApiVersion,
+    }).catch((err) => {
+      throw buildMetaStepError(err, {
+        step: "debug_business_token",
+        endpoint: "/debug_token",
+        tokenType: META_TOKEN_TYPES.SYSTEM_USER,
+        message: "Meta token validation failed.",
+        workspaceId: workspace?.id,
+        extraDetails: {
+          flowId: flowId ? String(flowId) : null,
+          codeFingerprint,
+        },
+      });
     });
-  }
-  const graphApiVersion = getMetaGraphVersion();
-  const debugTokenData = await debugBusinessToken({
-    token,
-    graphApiVersion,
-  }).catch((err) => {
-    throw buildMetaStepError(err, {
-      step: "debug_business_token",
-      endpoint: "/debug_token",
-      tokenType: META_TOKEN_TYPES.SYSTEM_USER,
-      message: "Meta token validation failed.",
-      workspaceId: workspace?.id,
+    validateTokenScopes(debugTokenData, wabaId, appId);
+
+    const client = createMetaClient({ graphApiVersion, timeout: 20000 });
+    const provisioning = await ensureSystemUserProvisionedOnWaba({
+      wabaId,
+      graphApiVersion,
+      customerAccessToken: token,
+    }).catch((err) => {
+      console.warn("[meta-embedded-signup] optional system-user provisioning skipped", {
+        step: "provision_waba_system_user",
+        endpoint: `/${wabaId}/assigned_users`,
+        workspaceId: workspace?.id ? String(workspace.id) : null,
+        flowId: flowId ? String(flowId) : null,
+        codeFingerprint,
+        message: err?.message || "Unknown error",
+        details: err?.details || null,
+      });
+      return {
+        businessManagerId: null,
+        wabaName: null,
+        systemUserId: null,
+        provisioningSkipped: true,
+      };
     });
-  });
-  validateTokenScopes(debugTokenData, wabaId, appId);
 
-  const client = createMetaClient({ graphApiVersion, timeout: 20000 });
-  const provisioning = await ensureSystemUserProvisionedOnWaba({
-    wabaId,
-    graphApiVersion,
-    customerAccessToken: token,
-  }).catch((err) => {
-    console.warn("[meta-embedded-signup] optional system-user provisioning skipped", {
-      step: "provision_waba_system_user",
-      endpoint: `/${wabaId}/assigned_users`,
-      workspaceId: workspace?.id ? String(workspace.id) : null,
-      message: err?.message || "Unknown error",
-      details: err?.details || null,
+    const { matchedPhone, phones } = await discoverPhoneNumber({
+      wabaId,
+      phoneNumberId,
+      graphApiVersion,
+      accessToken: token,
+    }).catch((err) => {
+      throw buildMetaStepError(err, {
+        step: "discover_phone_number",
+        endpoint: `/${wabaId}/phone_numbers`,
+        tokenType: META_TOKEN_TYPES.EMBEDDED_SIGNUP_CUSTOMER,
+        message: "Meta phone discovery failed.",
+        workspaceId: workspace?.id,
+        extraDetails: { wabaId, flowId: flowId ? String(flowId) : null, codeFingerprint },
+      });
     });
-    return {
-      businessManagerId: null,
-      wabaName: null,
-      systemUserId: null,
-      provisioningSkipped: true,
-    };
-  });
 
-  const { matchedPhone, phones } = await discoverPhoneNumber({
-    wabaId,
-    phoneNumberId,
-    graphApiVersion,
-    accessToken: token,
-  }).catch((err) => {
-    throw buildMetaStepError(err, {
-      step: "discover_phone_number",
-      endpoint: `/${wabaId}/phone_numbers`,
-      tokenType: META_TOKEN_TYPES.EMBEDDED_SIGNUP_CUSTOMER,
-      message: "Meta phone discovery failed.",
-      workspaceId: workspace?.id,
-      extraDetails: { wabaId },
-    });
-  });
+    if (!matchedPhone) {
+      console.warn("[meta-embedded-signup] phone discovery returned no matched phone", {
+        ...logContext,
+        availablePhones: Array.isArray(phones) ? phones.length : 0,
+      });
+      return {
+        success: false,
+        needsPhoneSelection: true,
+        lifecycleState: ONBOARDING_STAGES.PHONE_DISCOVERED,
+        message: "Meta did not return a phone number. Please select a phone number and reconnect WhatsApp.",
+        phones: phones.map((item) => ({
+          id: String(item?.id || "").trim(),
+          display_phone_number: String(item?.display_phone_number || "").trim() || null,
+        })),
+      };
+    }
 
-  if (!matchedPhone) {
-    return {
-      success: false,
-      needsPhoneSelection: true,
-      lifecycleState: ONBOARDING_STAGES.PHONE_DISCOVERED,
-      message: "Meta did not return a phone number. Please select a phone number and reconnect WhatsApp.",
-      phones: phones.map((item) => ({
-        id: String(item?.id || "").trim(),
-        display_phone_number: String(item?.display_phone_number || "").trim() || null,
-      })),
-    };
-  }
-
-  await ensureWebhookSubscription({
-    client,
-    accessToken: token,
-    wabaId,
-  }).catch((err) => {
-    if (err?.statusCode) {
-      console.error("[meta-embedded-signup] step failed", {
+    await ensureWebhookSubscription({
+      client,
+      accessToken: token,
+      wabaId,
+    }).catch((err) => {
+      if (err?.statusCode) {
+        console.error("[meta-embedded-signup] step failed", {
+          step: "subscribe_waba_webhook",
+          endpoint: `/${wabaId}/subscribed_apps`,
+          tokenType: META_TOKEN_TYPES.EMBEDDED_SIGNUP_CUSTOMER,
+          workspaceId: workspace?.id ? String(workspace.id) : null,
+          flowId: flowId ? String(flowId) : null,
+          codeFingerprint,
+          message: err.message,
+          details: err.details || null,
+        });
+        throw err;
+      }
+      throw buildMetaStepError(err, {
         step: "subscribe_waba_webhook",
         endpoint: `/${wabaId}/subscribed_apps`,
         tokenType: META_TOKEN_TYPES.EMBEDDED_SIGNUP_CUSTOMER,
-        workspaceId: workspace?.id ? String(workspace.id) : null,
-        message: err.message,
-        details: err.details || null,
+        message: "Meta webhook subscription failed.",
+        workspaceId: workspace?.id,
+        extraDetails: { wabaId, flowId: flowId ? String(flowId) : null, codeFingerprint },
       });
-      throw err;
-    }
-    throw buildMetaStepError(err, {
-      step: "subscribe_waba_webhook",
-      endpoint: `/${wabaId}/subscribed_apps`,
-      tokenType: META_TOKEN_TYPES.EMBEDDED_SIGNUP_CUSTOMER,
-      message: "Meta webhook subscription failed.",
-      workspaceId: workspace?.id,
-      extraDetails: { wabaId },
     });
-  });
 
-  const registrationStatus = pin ? REGISTRATION_STATUSES.REGISTERING : REGISTRATION_STATUSES.PIN_REQUIRED;
-  const onboardingStage = pin ? ONBOARDING_STAGES.REGISTERING : ONBOARDING_STAGES.PIN_REQUIRED;
+    const registrationStatus = pin ? REGISTRATION_STATUSES.REGISTERING : REGISTRATION_STATUSES.PIN_REQUIRED;
+    const onboardingStage = pin ? ONBOARDING_STAGES.REGISTERING : ONBOARDING_STAGES.PIN_REQUIRED;
 
-  const connection = await persistOnboardingConnection({
-    workspaceId: String(workspace.id),
-    userId: user?.id || null,
-    accessToken: token,
-    wabaId,
-    phoneNumber: matchedPhone,
-    debugTokenData,
-    subscribed: true,
-    onboardingStage,
-    registrationStatus,
-    pin,
-    businessManagerId: provisioning.businessManagerId,
-    wabaName: provisioning.wabaName,
-  });
+    const connection = await persistOnboardingConnection({
+      workspaceId: String(workspace.id),
+      userId: user?.id || null,
+      accessToken: token,
+      wabaId,
+      phoneNumber: matchedPhone,
+      debugTokenData,
+      subscribed: true,
+      onboardingStage,
+      registrationStatus,
+      pin,
+      businessManagerId: provisioning.businessManagerId,
+      wabaName: provisioning.wabaName,
+    });
 
-  if (!pin) {
+    console.info("[meta-embedded-signup] onboarding connection persisted", {
+      ...logContext,
+      connectionId: String(connection._id),
+      lifecycleState: onboardingStage,
+      registrationStatus,
+    });
+
+    if (!pin) {
+      return {
+        success: true,
+        connected: false,
+        status: "pending",
+        requiresPinSetup: true,
+        connectionId: String(connection._id),
+        lifecycleState: ONBOARDING_STAGES.PIN_REQUIRED,
+        onboardingStage: ONBOARDING_STAGES.PIN_REQUIRED,
+        registrationStatus: REGISTRATION_STATUSES.PIN_REQUIRED,
+        embeddedSignupCompletedAt: connection.embeddedSignupCompletedAt,
+        registrationDeadlineAt: connection.registrationDeadlineAt,
+      };
+    }
+
+    await performPhoneRegistration({ doc: connection, pin });
+    const { finalStage } = await finalizeReadyState({ doc: connection, workspace, actorUserId: user?.id || null });
     return {
       success: true,
-      connected: false,
-      status: "pending",
-      requiresPinSetup: true,
-      connectionId: String(connection._id),
-      lifecycleState: ONBOARDING_STAGES.PIN_REQUIRED,
-      onboardingStage: ONBOARDING_STAGES.PIN_REQUIRED,
-      registrationStatus: REGISTRATION_STATUSES.PIN_REQUIRED,
-      embeddedSignupCompletedAt: connection.embeddedSignupCompletedAt,
-      registrationDeadlineAt: connection.registrationDeadlineAt,
+      connected: true,
+      status: "active",
+      lifecycleState: finalStage,
+      registrationStatus: REGISTRATION_STATUSES.COMPLETED,
+      onboardingStage: finalStage,
     };
-  }
-
-  await performPhoneRegistration({ doc: connection, pin });
-  const { finalStage } = await finalizeReadyState({ doc: connection, workspace, actorUserId: user?.id || null });
-  return {
-    success: true,
-    connected: true,
-    status: "active",
-    lifecycleState: finalStage,
-    registrationStatus: REGISTRATION_STATUSES.COMPLETED,
-    onboardingStage: finalStage,
-  };
+  });
 }
 
 async function retryPhoneRegistration({

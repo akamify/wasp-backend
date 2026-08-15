@@ -28,6 +28,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
   const wabaId = String(req.body?.waba_id || "").trim();
   const phoneNumberId = String(req.body?.phone_number_id || "").trim();
   const pin = String(req.body?.pin || "").trim();
+  const flowId = String(req.body?.flow_id || "").trim() || null;
   const missing = {
     code: !code,
     waba_id: !wabaId,
@@ -48,6 +49,7 @@ async function exchangeEmbeddedSignupCode(req, res) {
     wabaId,
     phoneNumberId,
     pin,
+    flowId,
   });
   return res.json(result);
 }
