@@ -23,6 +23,9 @@ const MANAGED_FILE_SEARCH_TOP_K = Math.max(
   1,
   Math.min(8, Number(process.env.AI_MANAGED_FILE_SEARCH_TOP_K || 4) || 4)
 );
+const FILE_SEARCH_MIN_TOKENS_PER_CHUNK = 120;
+const FILE_SEARCH_MAX_TOKENS_PER_CHUNK = 512;
+const FILE_SEARCH_DEFAULT_TOKENS_PER_CHUNK = 240;
 
 let geminiClient = null;
 
@@ -73,6 +76,17 @@ function normalizeManagedConfig(agent) {
     syncedAt: managed.syncedAt || null,
     documentCount: Number(managed.documentCount || 0),
   };
+}
+
+function resolveFileSearchTokensPerChunk(source) {
+  const configured = Number(source?.metadata?.chunkSize || FILE_SEARCH_DEFAULT_TOKENS_PER_CHUNK);
+  const value = Number.isFinite(configured) && configured > 0
+    ? configured
+    : FILE_SEARCH_DEFAULT_TOKENS_PER_CHUNK;
+  return Math.max(
+    FILE_SEARCH_MIN_TOKENS_PER_CHUNK,
+    Math.min(FILE_SEARCH_MAX_TOKENS_PER_CHUNK, value)
+  );
 }
 
 function buildDocumentDisplayName(source) {
@@ -229,10 +243,7 @@ async function syncSource({ workspaceId, agent, source }) {
         customMetadata: buildCustomMetadata(source),
         chunkingConfig: {
           whiteSpaceConfig: {
-            maxTokensPerChunk: Math.max(
-              120,
-              Math.min(600, Number(source.metadata?.chunkSize || 240) || 240)
-            ),
+            maxTokensPerChunk: resolveFileSearchTokensPerChunk(source),
             maxOverlapTokens: 20,
           },
         },
@@ -364,6 +375,7 @@ function getAgentStoreConfig(agent) {
   if (!isEnabled()) return null;
   const managed = normalizeManagedConfig(agent);
   if (!managed.enabled || !managed.storeName) return null;
+  if (managed.status === "failed" && managed.documentCount <= 0) return null;
   return {
     storeName: managed.storeName,
     topK: MANAGED_FILE_SEARCH_TOP_K,
