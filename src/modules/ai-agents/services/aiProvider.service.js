@@ -233,10 +233,6 @@ async function generateGeminiInteractionResponse({
               },
             ]
           : undefined,
-        labels: {
-          channel: "ai-agent",
-          workspace_id: workspaceId ? String(workspaceId) : "global",
-        },
       }),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("AI provider timeout")), DEFAULT_TIMEOUT_MS)
