@@ -64,6 +64,7 @@ function cosineSimilarity(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || !a.length || !b.length || a.length !== b.length) {
     return 0;
   }
+  
   let dot = 0;
   let magA = 0;
   let magB = 0;
