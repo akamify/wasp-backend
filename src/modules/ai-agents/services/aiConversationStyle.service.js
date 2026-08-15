@@ -74,6 +74,17 @@ function isSimpleGreeting(text) {
   return SIMPLE_GREETING_PATTERNS.some((pattern) => pattern.test(value));
 }
 
+function isBusinessInfoQuestion(text) {
+  const value = String(text || "").trim().toLowerCase();
+  if (!value) return false;
+  return (
+    /\b(what is|who are you|about|business profile|company profile|profile)\b/.test(value) ||
+    /\b(services|service|what do you do|what do you offer)\b/.test(value) ||
+    /\b(kya hai|kaun ho|kon ho|profile|business profile)\b/.test(value) ||
+    /\b(kya karte ho|konsi service|kon si service|services dete|service dete)\b/.test(value)
+  );
+}
+
 function inferResponseLength(text) {
   const value = String(text || "").trim();
   if (!value) return "short";
@@ -83,8 +94,8 @@ function inferResponseLength(text) {
   const detailIntent =
     /\b(how|why|explain|detail|details|process|strategy|benefit|pricing|services|steps|compare)\b/i.test(lower) ||
     /\b(kaise|kyu|kyun|samjhao|detail|process|pricing|service|services)\b/i.test(lower);
+  if (detailIntent || isBusinessInfoQuestion(value)) return words.length <= 12 ? "medium" : "detailed";
   if (words.length <= 4 || value.length <= 24) return "very_short";
-  if (detailIntent) return words.length <= 12 ? "medium" : "detailed";
   if (words.length <= 12) return "short";
   return "medium";
 }
@@ -124,6 +135,20 @@ function shouldForceHandoverOnKnowledgeMiss(text) {
     /\b(payment|refund|billing)\b/i.test(value) ||
     /\b(shikayat|complaint|refund|payment|quote|quotation)\b/i.test(value)
   );
+}
+
+function shouldPreferClarificationOverHandover(text) {
+  const value = String(text || "").trim();
+  if (!value) return true;
+  if (shouldForceHandoverOnKnowledgeMiss(value)) return false;
+  const intent = detectConversationIntent(value);
+  return [
+    "general",
+    "service_discovery",
+    "industry",
+    "benefit",
+    "qualification",
+  ].includes(intent) || isBusinessInfoQuestion(value);
 }
 
 function maxOutputTokensForLength(length) {
@@ -303,6 +328,45 @@ function defaultFollowUpQuestion(style) {
   return "What would you like help with next?";
 }
 
+function buildKnowledgeMissClarifier({ userMessage, style }) {
+  const effectiveStyle =
+    style ||
+    buildReplyStyleGuide({
+      userMessage,
+      contactName: "",
+    });
+  const intent = effectiveStyle.intent || "general";
+  const languageStyle = effectiveStyle.languageStyle || "english";
+
+  if (languageStyle === "hindi") {
+    if (intent === "service_discovery") {
+      return "Main aapko sahi service suggest kar sakti hoon. Kya aap website, ads, software, ya automation ke baare mein pooch rahe hain?";
+    }
+    if (intent === "industry" || intent === "benefit" || intent === "qualification") {
+      return "Main sahi sujhav dene ke liye aapke business ke baare mein ek chhoti si detail chahungi. Aap kis type ka business chalate hain?";
+    }
+    return "Main aapko sahi aur relevant jawab dena chahti hoon. Kya aap business profile, services, ya pricing ke baare mein pooch rahe hain?";
+  }
+
+  if (languageStyle === "henglish") {
+    if (intent === "service_discovery") {
+      return "Main aapko sahi service suggest kar sakti hoon. Kya aap website, ads, software, ya automation ke baare mein pooch rahe hain?";
+    }
+    if (intent === "industry" || intent === "benefit" || intent === "qualification") {
+      return "Main better suggest karne ke liye aapke business ke baare mein ek short detail chahungi. Aap kis type ka business chalate hain?";
+    }
+    return "Main aapko sahi aur relevant jawab dena chahti hoon. Kya aap business profile, services, ya pricing ke baare mein pooch rahe hain?";
+  }
+
+  if (intent === "service_discovery") {
+    return "I can guide you better if you narrow it down a little. Are you asking about website, ads, software, or automation services?";
+  }
+  if (intent === "industry" || intent === "benefit" || intent === "qualification") {
+    return "I can suggest the right approach if I know your business type first. What kind of business do you run?";
+  }
+  return "I want to give you the most relevant answer. Are you asking about the business profile, services, or pricing?";
+}
+
 function limitLines(lines, responseLength) {
   const maxLines =
     responseLength === "greeting" || responseLength === "very_short" || responseLength === "short"
@@ -321,9 +385,12 @@ module.exports = {
   inferResponseLength,
   detectConversationIntent,
   shouldForceHandoverOnKnowledgeMiss,
+  shouldPreferClarificationOverHandover,
   maxOutputTokensForLength,
   isSimpleGreeting,
+  isBusinessInfoQuestion,
   buildGreetingReply,
   buildReplyStyleGuide,
+  buildKnowledgeMissClarifier,
   normalizeReplyForPolicy,
 };

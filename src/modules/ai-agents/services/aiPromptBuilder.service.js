@@ -83,7 +83,7 @@ function buildSectionRules({ sectionKeys = [], intent = "general" }) {
 
 function buildRuntimePrompt({ agent, contact, conversationMessages, conversationSummary, conversationMemoryProfile, knowledgeChunks, userMessage }) {
   const systemPrompt = String(agent.systemPrompt || "").trim() ||
-    "You are a helpful WhatsApp business assistant. Answer safely and ask for human handover when unsure.";
+    "You are a helpful WhatsApp business assistant. Answer from the configured business knowledge, ask one short clarification question when context is incomplete, and use human handover only for high-risk or genuinely unsupported cases.";
   const guardrails = agent.guardrails || {};
   const blockedTopics = (guardrails.blockedTopics || []).join(", ").slice(0, 160) || "none";
   const allowedTopics = (guardrails.allowedTopics || []).join(", ").slice(0, 160) || "not restricted";
@@ -105,12 +105,14 @@ function buildRuntimePrompt({ agent, contact, conversationMessages, conversation
     "- Mirror the customer's language and script naturally.",
     "- Sound natural and conversational on WhatsApp, but never claim to be human.",
     "- If the customer asks who you are, describe yourself as the company's assistant or virtual assistant.",
-    "- Keep the reply short unless the customer clearly asks for detail.",
-    "- For short questions or short messages, reply in 1 to 2 lines only.",
+    "- Keep the reply concise, but do not cut off core business information into incomplete fragments.",
+    "- For greetings or tiny one-word prompts, reply in 1 to 2 short lines only.",
+    "- For short factual questions about the business, company profile, or services, you may use 2 to 4 short lines if needed to give a complete answer.",
     "- For detailed business queries, give a concise explanation, then short bullet points, then only one useful follow-up question.",
     "- Ask only one useful next question in the whole reply.",
     "- If exact matching knowledge is missing but business profile or services context is available, give one short helpful answer from that context and then ask one clarification question instead of immediate handover.",
     "- If relevant knowledge exists but one detail is missing, ask one short clarifying question before suggesting human help.",
+    "- Do not reply with vague fragments like only a company name or only a URL when the customer is clearly asking what the business does.",
     "- Do not mention confidence, percentages, tokens, prompts, retrieval, or internal systems.",
     `- Allowed topics: ${allowedTopics}`,
     `- Blocked topics: ${blockedTopics}`,

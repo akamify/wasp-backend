@@ -159,6 +159,16 @@ async function testMessage({ workspaceId, agentId, payload }) {
 
     const hasConfiguredKnowledge = await aiKnowledgeService.hasIndexedKnowledge({ workspaceId, agentId, agent });
     const forceHandoverOnKnowledgeMiss = aiConversationStyleService.shouldForceHandoverOnKnowledgeMiss(message);
+    console.info("[ai-test-runtime] retrieval summary", {
+      workspaceId: String(workspaceId),
+      agentId: String(agentId),
+      hasConfiguredKnowledge,
+      knowledgeChunkCount: knowledgeChunks.length,
+      managedFileSearchEnabled: Boolean(managedFileSearch?.storeName),
+      intent: promptPayload.style?.intent || null,
+      responseLength: promptPayload.style?.responseLength || null,
+      forceHandoverOnKnowledgeMiss,
+    });
     if (!knowledgeChunks.length && hasConfiguredKnowledge && !managedFileSearch?.storeName && !forceHandoverOnKnowledgeMiss) {
       const fallbackKnowledgeChunks = await aiKnowledgeService.getKnowledgeMissFallbackChunks({
         workspaceId,
@@ -180,7 +190,13 @@ async function testMessage({ workspaceId, agentId, payload }) {
       }
     }
     if (!knowledgeChunks.length && hasConfiguredKnowledge && !managedFileSearch?.storeName) {
-      const fallbackReply = agent.guardrails?.fallbackMessage || "I do not have enough verified knowledge to answer that. Let me connect you with our team.";
+      const fallbackReply = forceHandoverOnKnowledgeMiss
+        ? agent.guardrails?.fallbackMessage || "I do not have enough verified knowledge to answer that. Let me connect you with our team."
+        : aiConversationStyleService.buildKnowledgeMissClarifier({
+            userMessage: message,
+            style: promptPayload.style,
+          });
+      const fallbackAction = forceHandoverOnKnowledgeMiss ? "handover" : "reply";
       const updatedConversation = await aiMemoryService.appendExchange({
         workspaceId,
         conversation,
@@ -190,14 +206,14 @@ async function testMessage({ workspaceId, agentId, payload }) {
           assistant: {
             provider: "knowledge_guard",
             model: "no-relevant-source",
-            confidence: 0.2,
-          action: "handover",
-          guardrailReason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
-          sources: [],
+            confidence: forceHandoverOnKnowledgeMiss ? 0.2 : 0.58,
+            action: fallbackAction,
+            guardrailReason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "knowledge_clarification_needed",
+            sources: [],
+          },
+          contact,
         },
-        contact,
-      },
-    });
+      });
       usageLog = await aiRuntimeRepository.createUsageLog({
         workspaceId,
         agentId,
@@ -210,20 +226,29 @@ async function testMessage({ workspaceId, agentId, payload }) {
         creditsUsed: 0,
         estimatedCost: 0,
         latencyMs: Date.now() - startedAt,
-        status: "blocked",
-        action: "handover",
+        status: forceHandoverOnKnowledgeMiss ? "blocked" : "success",
+        action: fallbackAction,
         metadata: {
           channel: "test",
-          guardrailReason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
+          guardrailReason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "knowledge_clarification_needed",
           sources: [],
         },
+      });
+      console.info("[ai-test-runtime] knowledge fallback used", {
+        workspaceId: String(workspaceId),
+        agentId: String(agentId),
+        action: fallbackAction,
+        reason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "knowledge_clarification_needed",
       });
       return {
         success: true,
         reply: fallbackReply,
-        confidence: 0.2,
-        action: "handover",
-        guardrail: { passed: false, reason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge" },
+        confidence: forceHandoverOnKnowledgeMiss ? 0.2 : 0.58,
+        action: fallbackAction,
+        guardrail: {
+          passed: !forceHandoverOnKnowledgeMiss,
+          reason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "knowledge_clarification_needed",
+        },
         provider: "knowledge_guard",
         model: "no-relevant-source",
         usage: serializeUsage(usageLog),
@@ -349,6 +374,16 @@ async function testMessage({ workspaceId, agentId, payload }) {
         billing,
         providerRaw: providerResult.raw || null,
       },
+    });
+    console.info("[ai-test-runtime] reply decision", {
+      workspaceId: String(workspaceId),
+      agentId: String(agentId),
+      provider: providerResult.provider,
+      model: providerResult.model,
+      action: guardrail.action,
+      guardrailReason: guardrail.reason || null,
+      knowledgeChunkCount: knowledgeChunks.length,
+      managedFileSearchEnabled: Boolean(managedFileSearch?.storeName),
     });
     return {
       success: true,

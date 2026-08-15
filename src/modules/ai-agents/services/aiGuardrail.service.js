@@ -109,6 +109,10 @@ function applyGuardrails({ agent, userMessage, reply, providerResult, conversati
   const maxMessagesExceeded = existingMessageCount >= maxMessages * 2;
   const threshold = Math.min(0.95, Math.max(0.1, Number(guardrails.confidenceThreshold || 0.55)));
   const lowConfidence = confidence < threshold;
+  const preferClarificationOverHandover = aiConversationStyleService.shouldPreferClarificationOverHandover(userMessage);
+  const hasKnowledgeSignals =
+    Number(providerResult?.raw?.knowledgeSourceCount || 0) > 0 ||
+    Boolean(providerResult?.raw?.managedFileSearch?.enabled);
 
   if (blockedByPattern || blockedByTopic) {
     return {
@@ -131,6 +135,15 @@ function applyGuardrails({ agent, userMessage, reply, providerResult, conversati
   }
 
   if (lowConfidence && guardrails.handoverOnLowConfidence !== false) {
+    if (preferClarificationOverHandover && hasKnowledgeSignals) {
+      return {
+        passed: true,
+        action: "reply",
+        confidence,
+        reply,
+        reason: "low_confidence_but_grounded",
+      };
+    }
     return {
       passed: false,
       action: "handover",

@@ -1437,6 +1437,19 @@ async function processInboundJob({
       agent,
     });
     const forceHandoverOnKnowledgeMiss = aiConversationStyleService.shouldForceHandoverOnKnowledgeMiss(inboundText);
+    console.info("[ai-runtime] retrieval summary", {
+      workspaceId: String(workspaceObjectId),
+      conversationId: String(lockedConversation._id),
+      messageId: String(inboundMessage._id),
+      executionKey: normalizedExecutionKey,
+      agentId: String(agent._id),
+      hasConfiguredKnowledge,
+      knowledgeChunkCount: knowledgeChunks.length,
+      managedFileSearchEnabled: Boolean(managedFileSearch?.storeName),
+      intent: promptPayload.style?.intent || null,
+      responseLength: promptPayload.style?.responseLength || null,
+      forceHandoverOnKnowledgeMiss,
+    });
 
     if (!knowledgeChunks.length && hasConfiguredKnowledge && !managedFileSearch?.storeName && !forceHandoverOnKnowledgeMiss) {
       const fallbackKnowledgeChunks = await aiKnowledgeService.getKnowledgeMissFallbackChunks({
@@ -1461,11 +1474,20 @@ async function processInboundJob({
 
     if (!knowledgeChunks.length && hasConfiguredKnowledge && !managedFileSearch?.storeName) {
       await typingIndicator?.start();
-      const reply = fallbackReplyFor(
-        agent,
-        "noAnswer",
-        agent.guardrails?.fallbackMessage || "I do not have enough verified knowledge to answer that. Let me connect you with our team."
-      );
+      const knowledgeFallbackAction = forceHandoverOnKnowledgeMiss ? "handover" : "reply";
+      const knowledgeFallbackReason = forceHandoverOnKnowledgeMiss
+        ? "knowledge_miss_high_risk"
+        : "knowledge_clarification_needed";
+      const reply = forceHandoverOnKnowledgeMiss
+        ? fallbackReplyFor(
+            agent,
+            "noAnswer",
+            agent.guardrails?.fallbackMessage || "I do not have enough verified knowledge to answer that. Let me connect you with our team."
+          )
+        : aiConversationStyleService.buildKnowledgeMissClarifier({
+            userMessage: inboundText,
+            style: promptPayload.style,
+          });
       const replyAt = new Date();
       await appendAssistantMessage({
         workspaceId: workspaceObjectId,
@@ -1474,13 +1496,13 @@ async function processInboundJob({
         metadata: {
           provider: "knowledge_guard",
           model: "no-relevant-source",
-          confidence: 0.2,
-          action: "handover",
-          reason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
+          confidence: forceHandoverOnKnowledgeMiss ? 0.2 : 0.58,
+          action: knowledgeFallbackAction,
+          reason: knowledgeFallbackReason,
           executionKey: normalizedExecutionKey,
         },
         now: replyAt,
-        status: "handover",
+        status: knowledgeFallbackAction === "handover" ? "handover" : "active",
       });
       const outbound = await sendTextMessageForUser({
         userId: workspaceObjectId,
@@ -1506,27 +1528,35 @@ async function processInboundJob({
         creditsUsed: 0,
         estimatedCost: 0,
         latencyMs: Date.now() - startedAt,
-        status: "blocked",
-        action: "handover",
+        status: forceHandoverOnKnowledgeMiss ? "blocked" : "success",
+        action: knowledgeFallbackAction,
         metadata: buildUsageMetadata({
           executionKey: normalizedExecutionKey,
           metadata: {
             channel: "whatsapp",
-            reason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
+            reason: knowledgeFallbackReason,
             inboundMessageId: String(inboundMessage._id),
           },
         }),
+      });
+      console.info("[ai-runtime] knowledge fallback used", {
+        workspaceId: String(workspaceObjectId),
+        conversationId: String(lockedConversation._id),
+        messageId: String(inboundMessage._id),
+        executionKey: normalizedExecutionKey,
+        action: knowledgeFallbackAction,
+        reason: knowledgeFallbackReason,
       });
       await Conversation.updateOne(
         { _id: lockedConversation._id, workspaceId: workspaceObjectId },
         {
           $set: {
             aiLastReplyAt: replyAt,
-            aiState: AI_STATES.HANDOVER_PENDING,
+            aiState: knowledgeFallbackAction === "handover" ? AI_STATES.HANDOVER_PENDING : AI_STATES.AI_ACTIVE,
             aiBusinessHoursStatus: "within_hours",
-            aiHandoverAt: replyAt,
-            aiHandoverReason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
-            aiSlaDueAt: agent.runtimeControls?.conversationSla?.enabled
+            aiHandoverAt: knowledgeFallbackAction === "handover" ? replyAt : null,
+            aiHandoverReason: knowledgeFallbackAction === "handover" ? knowledgeFallbackReason : null,
+            aiSlaDueAt: knowledgeFallbackAction === "handover" && agent.runtimeControls?.conversationSla?.enabled
               ? new Date(replyAt.getTime() + Number(agent.runtimeControls?.conversationSla?.firstResponseMinutes || 15) * 60 * 1000)
               : null,
             aiLastErrorAt: null,
@@ -1534,27 +1564,29 @@ async function processInboundJob({
           },
         }
       ).catch(() => {});
-      await writeConversationEvent({
-        workspaceId: workspaceObjectId,
-        conversationId: lockedConversation._id,
-        phone: lockedConversation.phone,
-        type: "ai_handover_requested",
-        actor: { kind: "system" },
-        payload: {
-          source: "knowledge_guard",
-          reason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
-          aiAgentId: String(agent._id),
-          aiConversationId: String(aiConversation._id),
-        },
-      }).catch(() => {});
+      if (knowledgeFallbackAction === "handover") {
+        await writeConversationEvent({
+          workspaceId: workspaceObjectId,
+          conversationId: lockedConversation._id,
+          phone: lockedConversation.phone,
+          type: "ai_handover_requested",
+          actor: { kind: "system" },
+          payload: {
+            source: "knowledge_guard",
+            reason: knowledgeFallbackReason,
+            aiAgentId: String(agent._id),
+            aiConversationId: String(aiConversation._id),
+          },
+        }).catch(() => {});
+      }
       await Message.updateOne(
         { _id: inboundMessage._id, workspaceId: workspaceObjectId },
         {
           $set: {
             aiProcessedAt: replyAt,
-            aiStatus: "handover",
-            aiAction: "handover",
-            aiReason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
+            aiStatus: knowledgeFallbackAction === "handover" ? "handover" : "replied",
+            aiAction: knowledgeFallbackAction,
+            aiReason: knowledgeFallbackReason,
             aiReplyMessageId: outbound?.message?._id || null,
             aiError: null,
             aiExecutionKey: normalizedExecutionKey,
@@ -1562,10 +1594,13 @@ async function processInboundJob({
         }
       ).catch(() => {});
       await updateAgentStats(agent._id, {
-        $inc: { "stats.messages": 1, "stats.handovers": 1 },
+        $inc: {
+          "stats.messages": 1,
+          ...(knowledgeFallbackAction === "handover" ? { "stats.handovers": 1 } : {}),
+        },
         $set: { "stats.lastUsedAt": replyAt },
       });
-      return { success: true, action: "handover" };
+      return { success: true, action: knowledgeFallbackAction };
     }
 
     assertLockActive();
@@ -1712,6 +1747,18 @@ async function processInboundJob({
         })),
         },
       }),
+    });
+    console.info("[ai-runtime] reply decision", {
+      workspaceId: String(workspaceObjectId),
+      conversationId: String(lockedConversation._id),
+      messageId: String(inboundMessage._id),
+      executionKey: normalizedExecutionKey,
+      provider: providerResult.provider,
+      model: providerResult.model,
+      action: guardrail.action,
+      guardrailReason: guardrail.reason || null,
+      knowledgeChunkCount: knowledgeChunks.length,
+      managedFileSearchEnabled: Boolean(managedFileSearch?.storeName),
     });
 
     const conversationUpdates = {

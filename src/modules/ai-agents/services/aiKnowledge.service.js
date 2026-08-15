@@ -4,6 +4,7 @@ const aiEmbeddingService = require("@modules/ai-agents/services/aiEmbedding.serv
 const MAX_CHUNK_CHARS = 900;
 const MAX_SOURCE_CHUNKS = 8;
 
+
 function tokenize(text) {
   return String(text || "")
     .toLowerCase()
@@ -196,6 +197,8 @@ function fallbackSectionScore(chunk) {
   if (/business profile|about|company|brand/.test(sectionLabel)) score += 8;
   if (/service|product|offering/.test(sectionLabel)) score += 5;
   if (/about|company|business|service/.test(title)) score += 4;
+  if (/pricing|price|faq|industry|playbook|objection|qualification/.test(sectionLabel)) score += 3;
+  if (/pricing|faq|industry|service|business|profile|about/.test(title)) score += 2;
   return score;
 }
 
@@ -208,6 +211,10 @@ async function getKnowledgeMissFallbackChunks({ workspaceId, agentId, agent, lim
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
     if (ranked.length) return ranked;
+    return chunks
+      .map((chunk) => normalizeDbChunk(chunk, Number(chunk.metadata?.searchBoost || 1)))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
   }
 
   const legacyRanked = buildKnowledgeChunks(agent)
@@ -216,7 +223,10 @@ async function getKnowledgeMissFallbackChunks({ workspaceId, agentId, agent, lim
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map(normalizeLegacyChunk);
-  return legacyRanked;
+  if (legacyRanked.length) return legacyRanked;
+  return buildKnowledgeChunks(agent)
+    .slice(0, limit)
+    .map((chunk) => normalizeLegacyChunk({ ...chunk, score: Number(chunk.searchBoost || 1) }));
 }
 
 function formatKnowledgeChunks(chunks) {
