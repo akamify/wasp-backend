@@ -11,8 +11,11 @@ const DEFAULT_TIMEOUT_MS = Math.max(
   5000,
   Number(process.env.AI_EMBEDDING_TIMEOUT_MS || 20000) || 20000
 );
+
 const DEFAULT_BATCH_SIZE = Math.max(
   1,
+
+
   Math.min(32, Number(process.env.AI_EMBEDDING_BATCH_SIZE || 12) || 12)
 );
 
