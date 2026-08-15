@@ -45,6 +45,17 @@ function startAiRuntimeWorker() {
         const maxAttempts = Math.max(Number(job?.opts?.attempts || 1), 1);
         const currentAttempt = Math.max(Number(job?.attemptsMade || 0) + 1, 1);
         const finalAttempt = currentAttempt >= maxAttempts;
+        const providerRateLimited =
+          error?.code === "AI_PROVIDER_RATE_LIMITED" ||
+          error?.reason === "provider_rate_limited";
+        if (providerRateLimited) {
+          return aiLiveRuntimeService.handleRetryExhaustedJob({
+            ...(job.data || {}),
+            error,
+            attemptsMade: currentAttempt,
+            maxAttempts,
+          });
+        }
         if (isNonRetryableRuntimeError(error)) {
           throw new UnrecoverableError(error?.message || "AI runtime non-retryable failure");
         }

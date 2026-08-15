@@ -313,6 +313,7 @@ function fallbackReasonForError(error) {
   const code = String(error?.code || "").trim();
   if (code === "AI_PROVIDER_TIMEOUT") return "provider_timeout";
   if (code === "AI_PROVIDER_CIRCUIT_OPEN") return "provider_unavailable";
+  if (code === "AI_PROVIDER_RATE_LIMITED") return "provider_rate_limited";
   if (code === "AI_TOOL_TIMEOUT") return "tool_timeout";
   if (code === "AI_PROVIDER_RETRYABLE") return "provider_unavailable";
   if (code === "AI_CONVERSATION_LOCK_BUSY" || code === "AI_CONVERSATION_LOCK_LOST") return "lock_contention";
