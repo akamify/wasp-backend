@@ -809,6 +809,7 @@ async function sendInteractiveButtonMessageForUser({
   to,
   text,
   buttons,
+  idempotencyKey,
   sentBy,
   source,
   senderType,
@@ -816,7 +817,25 @@ async function sendInteractiveButtonMessageForUser({
   flowSessionId,
   flowId,
   nodeId,
+  aiAgentId,
+  aiConversationId,
+  buttonActions,
 }) {
+  const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
+  if (normalizedIdempotencyKey) {
+    const existing = await Message.findOne({
+      workspaceId: userId,
+      idempotencyKey: normalizedIdempotencyKey,
+    });
+    if (existing) {
+      return {
+        message: existing,
+        apiResponse: null,
+        idempotent: true,
+        pendingDispatch: ["queued", "processing"].includes(String(existing.status || "").toLowerCase()),
+      };
+    }
+  }
   await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const normalizedButtons = (buttons || []).map((button) => ({
     id: String(button?.id || "").trim(),
@@ -838,7 +857,9 @@ async function sendInteractiveButtonMessageForUser({
   };
   const creds = await getCredentialsForUser(userId);
   const now = new Date();
-  const message = await Message.create({
+  let message;
+  try {
+    message = await Message.create({
     workspaceId: userId,
     wabaId: creds.wabaId,
     phoneNumberId: creds.phoneNumberId,
@@ -851,7 +872,11 @@ async function sendInteractiveButtonMessageForUser({
     ...(flowSessionId ? { flowSessionId } : {}),
     ...(flowId ? { flowId } : {}),
     ...(nodeId ? { nodeId } : {}),
+    ...(aiAgentId ? { aiAgentId } : {}),
+    ...(aiConversationId ? { aiConversationId } : {}),
+    idempotencyKey: normalizedIdempotencyKey,
     status: "processing",
+    providerDispatchStartedAt: now,
     sentBy: sentBy || { kind: "system" },
     type: "interactive_buttons",
     text,
@@ -862,9 +887,29 @@ async function sendInteractiveButtonMessageForUser({
       type: "button",
       buttons: normalizedButtons,
     },
-    payload,
+    payload: {
+      ...payload,
+      ...(buttonActions ? { aiButtonActions: buttonActions } : {}),
+    },
     ...buildAttributionDefaults(),
-  });
+    });
+  } catch (error) {
+    if (Number(error?.code) === 11000 && normalizedIdempotencyKey) {
+      const existing = await Message.findOne({
+        workspaceId: userId,
+        idempotencyKey: normalizedIdempotencyKey,
+      });
+      if (existing) {
+        return {
+          message: existing,
+          apiResponse: null,
+          idempotent: true,
+          pendingDispatch: ["queued", "processing"].includes(String(existing.status || "").toLowerCase()),
+        };
+      }
+    }
+    throw error;
+  }
 
   try {
     const apiResponse = await sendInteractiveButtonMessage({
@@ -893,6 +938,8 @@ async function sendInteractiveButtonMessageForUser({
           "statusTimestamps.sentAt": now,
           sentAt: now,
           sortAt: now,
+          providerDispatchCompletedAt: now,
+          error: null,
         },
         $unset: { error: 1 },
       },
@@ -938,6 +985,7 @@ async function sendInteractiveButtonMessageForUser({
         $set: {
           status: "failed",
           "statusTimestamps.failedAt": new Date(),
+          providerDispatchCompletedAt: new Date(),
           error: failure,
         },
       }
@@ -967,6 +1015,10 @@ async function sendInteractiveButtonsMessage({
   flowId,
   nodeId,
   triggeredByMessageId,
+  idempotencyKey,
+  aiAgentId,
+  aiConversationId,
+  buttonActions,
   businessInitiated = false,
 }) {
   void conversationId;
@@ -1001,6 +1053,7 @@ async function sendInteractiveButtonsMessage({
       to,
       text: bodyText,
       buttons: normalizedButtons,
+      idempotencyKey,
       sentBy: { kind: "system" },
       source,
       senderType: source === "automation" ? "automation" : "business",
@@ -1008,6 +1061,9 @@ async function sendInteractiveButtonsMessage({
       flowSessionId,
       flowId,
       nodeId,
+      aiAgentId,
+      aiConversationId,
+      buttonActions,
     });
     return {
       ok: true,

@@ -213,6 +213,29 @@ async function findFlowById({ workspaceId, flowId }) {
   return Flow.findOne({ _id: flowId, workspaceId }).select("_id name");
 }
 
+async function findOutboundMessageByWamid({ workspaceId, wamid }) {
+  return Message.findOne({
+    workspaceId,
+    whatsappMessageId: wamid,
+    direction: "outbound",
+  }).lean();
+}
+
+async function findActivePublishedFlowForAiButton({ workspaceId, flowId }) {
+  return Flow.findOne({
+    _id: flowId,
+    workspaceId,
+    status: "active",
+    deletedAt: null,
+    activeVersionId: { $ne: null },
+  })
+    .populate({
+      path: "activeVersionId",
+      match: { workspaceId, status: "active" },
+    })
+    .lean();
+}
+
 async function findWorkspaceById({ workspaceId }) {
   return Workspace.findOne({ _id: workspaceId }).select("_id name businessName");
 }
@@ -282,6 +305,8 @@ module.exports = {
   transitionSessionToExpired,
   findTimedOutActiveSessions,
   findFlowById,
+  findOutboundMessageByWamid,
+  findActivePublishedFlowForAiButton,
   findWorkspaceById,
   findConversationInboundState,
   createFailedExpiryMessage,

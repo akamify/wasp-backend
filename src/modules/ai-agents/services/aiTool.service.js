@@ -64,7 +64,29 @@ const TOOL_SCHEMAS = {
       reason: Joi.string().trim().max(300).allow("").default("ai_tool_handover"),
     }),
   },
+  send_buttons: {
+    description: "Send approved WhatsApp reply buttons that can start configured automation flows.",
+    arguments: { text: "string", buttonIds: "string[]" },
+    validator: Joi.object({
+      text: Joi.string().trim().max(1024).allow("").default(""),
+      buttonIds: Joi.array().items(Joi.string().trim().min(1).max(256)).min(1).max(3).unique().required(),
+    }),
+  },
 };
+
+function publicToolConfig(tool) {
+  if (tool?.type !== "send_buttons") return {};
+  const buttons = Array.isArray(tool?.config?.buttons) ? tool.config.buttons : [];
+  return {
+    availableButtons: buttons
+      .map((button) => ({
+        id: String(button?.id || "").trim(),
+        title: String(button?.title || "").trim(),
+        description: String(button?.description || "").trim(),
+      }))
+      .filter((button) => button.id && button.title),
+  };
+}
 
 function toolDefinitions(agent) {
   return (agent.tools || [])
@@ -72,6 +94,7 @@ function toolDefinitions(agent) {
     .map((tool) => ({
       name: tool.type,
       ...TOOL_SCHEMAS[tool.type],
+      ...publicToolConfig(tool),
     }));
 }
 
@@ -305,6 +328,91 @@ async function executeHandover({ args }) {
   };
 }
 
+function isObjectIdString(value) {
+  return /^[a-f0-9]{24}$/i.test(String(value || "").trim());
+}
+
+async function executeSendButtons({ agent, toolConfig, args }) {
+  const configuredButtons = Array.isArray(toolConfig?.config?.buttons)
+    ? toolConfig.config.buttons
+    : [];
+  const byId = new Map();
+  for (const rawButton of configuredButtons) {
+    const id = String(rawButton?.id || "").trim();
+    const title = String(rawButton?.title || "").trim();
+    const flowId = String(rawButton?.flowId || "").trim();
+    if (!id || !title || !isObjectIdString(flowId)) continue;
+    if (!byId.has(id)) {
+      byId.set(id, {
+        id,
+        title: title.slice(0, 20),
+        flowId,
+      });
+    }
+  }
+
+  const selected = [];
+  for (const requestedId of args.buttonIds || []) {
+    const id = String(requestedId || "").trim();
+    const button = byId.get(id);
+    if (!button) {
+      return {
+        ok: false,
+        action: "reply",
+        publicReply: "That option is not configured right now. Let me connect you with our team.",
+        error: "button_not_configured",
+      };
+    }
+    selected.push(button);
+  }
+
+  if (!selected.length) {
+    return {
+      ok: false,
+      action: "reply",
+      publicReply: "No options are configured right now. Let me connect you with our team.",
+      error: "buttons_not_configured",
+    };
+  }
+
+  const text =
+    String(args.text || "").trim() ||
+    String(toolConfig?.config?.defaultBody || "").trim() ||
+    "Please choose an option.";
+  const buttons = selected.slice(0, 3).map((button) => ({
+    id: button.id,
+    title: button.title,
+  }));
+
+  return {
+    ok: true,
+    action: "reply",
+    publicReply: text,
+    result: {
+      buttonIds: buttons.map((button) => button.id),
+      count: buttons.length,
+    },
+    outbound: {
+      type: "interactive_buttons",
+      text,
+      buttons,
+      aiButtonActions: {
+        version: 1,
+        source: "ai_agent",
+        agentId: agent?._id ? String(agent._id) : null,
+        buttons: selected.slice(0, 3).map((button) => ({
+          id: button.id,
+          title: button.title,
+          action: {
+            type: "start_flow",
+            flowId: button.flowId,
+          },
+        })),
+      },
+    },
+  };
+}
+
 function timeoutForTool(toolConfig) {
   const configured = Number(toolConfig?.config?.timeoutMs || 0);
   return Math.max(configured || DEFAULT_TOOL_TIMEOUT_MS, 1000);
@@ -342,6 +450,7 @@ const TOOL_EXECUTORS = {
   set_attribute: executeSetAttribute,
   api_request: executeApiRequest,
   handover: executeHandover,
+  send_buttons: executeSendButtons,
 };
 
 async function executeSingleTool({ workspaceId, agent, toolCall, context = {} }) {
@@ -394,6 +503,7 @@ async function executeSingleTool({ workspaceId, agent, toolCall, context = {} })
       action: execution?.action || "reply",
       publicReply: execution?.publicReply || "I completed that action.",
       result: execution?.result || null,
+      outbound: execution?.outbound || null,
       error: execution?.error || null,
     };
   } catch (error) {
@@ -433,6 +543,7 @@ async function executeRequestedTools({ workspaceId, agent, toolCalls = [], conte
     executed,
     publicReply: first?.publicReply || null,
     action: first?.action || "reply",
+    outbound: first?.outbound || null,
     ok: executed.every((item) => item.ok),
     note: executed.length ? "Tool execution completed." : "No tool execution requested.",
   };

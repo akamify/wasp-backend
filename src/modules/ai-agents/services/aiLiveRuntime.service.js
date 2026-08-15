@@ -39,6 +39,7 @@ const {
 } = require("@modules/ai-agents/services/aiRuntimeError.service");
 const { writeConversationEvent } = require("@modules/crm/services/conversationEvent.service");
 const {
+  sendInteractiveButtonMessageForUser,
   sendTextMessageForUser,
   sendTypingIndicatorForUser,
 } = require("@shared/services/outboundMessageService");
@@ -1707,17 +1708,38 @@ async function processInboundJob({
 
     await maintainLock();
     assertLockActive();
-    const outbound = await sendTextMessageForUser({
-      userId: workspaceObjectId,
-      contactId: contact?._id || undefined,
-      to: lockedConversation.phone,
-      text: guardrail.reply,
-      idempotencyKey: outboundReplyIdempotencyKey,
-      sentBy: { kind: "system" },
-      source: "automation",
-      senderType: "automation",
-      triggeredByMessageId: inboundMessage.whatsappMessageId || null,
-    });
+    const interactiveOutbound =
+      guardrail.action === "reply" &&
+      toolExecution?.outbound?.type === "interactive_buttons"
+        ? toolExecution.outbound
+        : null;
+    const outbound = interactiveOutbound
+      ? await sendInteractiveButtonMessageForUser({
+          userId: workspaceObjectId,
+          contactId: contact?._id || undefined,
+          to: lockedConversation.phone,
+          text: interactiveOutbound.text || guardrail.reply,
+          buttons: interactiveOutbound.buttons || [],
+          idempotencyKey: outboundReplyIdempotencyKey,
+          sentBy: { kind: "system" },
+          source: "automation",
+          senderType: "automation",
+          triggeredByMessageId: inboundMessage.whatsappMessageId || null,
+          aiAgentId: agent._id,
+          aiConversationId: aiConversation._id,
+          buttonActions: interactiveOutbound.aiButtonActions || null,
+        })
+      : await sendTextMessageForUser({
+          userId: workspaceObjectId,
+          contactId: contact?._id || undefined,
+          to: lockedConversation.phone,
+          text: guardrail.reply,
+          idempotencyKey: outboundReplyIdempotencyKey,
+          sentBy: { kind: "system" },
+          source: "automation",
+          senderType: "automation",
+          triggeredByMessageId: inboundMessage.whatsappMessageId || null,
+        });
 
     await aiRuntimeRepository.createUsageLog({
       workspaceId: workspaceObjectId,

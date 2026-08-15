@@ -13,12 +13,42 @@ const knowledgeSourceSchema = Joi.object({
   metadata: Joi.object().unknown(true).default({}),
 });
 
+const sendButtonsConfigSchema = Joi.object({
+  defaultBody: Joi.string().trim().max(1024).allow("").default(""),
+  buttons: Joi.array()
+    .items(
+      Joi.object({
+        id: Joi.string().trim().min(1).max(256).required(),
+        title: Joi.string().trim().min(1).max(20).required(),
+        description: Joi.string().trim().max(120).allow("").optional(),
+        flowId: Joi.string().trim().hex().length(24).required(),
+      }).unknown(false)
+    )
+    .max(30)
+    .custom((buttons, helpers) => {
+      const seen = new Set();
+      for (const button of buttons || []) {
+        const id = String(button?.id || "").trim();
+        if (seen.has(id)) return helpers.error("any.invalid");
+        seen.add(id);
+      }
+      return buttons;
+    }, "unique send_buttons ids")
+    .default([]),
+}).unknown(false);
+
 const toolSchema = Joi.object({
   type: Joi.string()
-    .valid("crm_lookup", "contact_update", "set_tag", "set_attribute", "api_request", "handover")
+    .valid("crm_lookup", "contact_update", "set_tag", "set_attribute", "api_request", "handover", "send_buttons")
     .required(),
   enabled: Joi.boolean().default(true),
-  config: Joi.object().unknown(true).default({}),
+  config: Joi.when("type", {
+    is: "send_buttons",
+    then: sendButtonsConfigSchema.default({}),
+    otherwise: Joi.object().unknown(true).default({}),
+  }),
+}).messages({
+  "any.invalid": "send_buttons button ids must be unique",
 });
 
 const guardrailsSchema = Joi.object({

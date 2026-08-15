@@ -8,6 +8,7 @@ const {
   resolveInboundContact,
 } = require("@shared/services/contactService");
 const flowInboundRepository = require("@modules/flows/repositories/flowInbound.repository");
+const flowSessionRepository = require("@modules/flows/repositories/flowSession.repository");
 const {
   findMatchingFlowVersion,
 } = require("@modules/flows/services/flowTrigger.service");
@@ -63,6 +64,121 @@ function serializeError(error) {
     name: String(error?.name || "Error"),
     message: String(error?.message || "Inbound message processing failed"),
   };
+}
+
+function aiButtonLog(reason, data = {}) {
+  flowLog("[FLOW_AI_BUTTON_RESOLUTION]", {
+    reason,
+    ...data,
+  });
+}
+
+function normalizeAiButtonActions(value) {
+  const actions = value?.payload?.aiButtonActions || null;
+  if (!actions || typeof actions !== "object") return null;
+  if (Number(actions.version || 1) !== 1) return null;
+  const buttons = Array.isArray(actions.buttons) ? actions.buttons : [];
+  return { ...actions, buttons };
+}
+
+async function findAiButtonFlowMatch({ workspaceId, inboundMessage }) {
+  if (String(inboundMessage?.type || "") !== "button_reply") return null;
+  const contextWamid = String(inboundMessage?.context?.id || "").trim();
+  const clickedButtonId = String(inboundMessage?.buttonReply?.id || "").trim();
+  if (!contextWamid || !clickedButtonId) return null;
+
+  const origin = await flowSessionRepository.findOutboundMessageByWamid({
+    workspaceId,
+    wamid: contextWamid,
+  });
+  if (!origin) {
+    aiButtonLog("origin_not_found", { contextWamid });
+    return null;
+  }
+  const aiButtonActions = normalizeAiButtonActions(origin);
+  if (!aiButtonActions) return null;
+
+  const buttonAction = aiButtonActions.buttons.find(
+    (button) => String(button?.id || "").trim() === clickedButtonId
+  );
+  if (!buttonAction) {
+    aiButtonLog("button_not_configured", {
+      contextWamid,
+      clickedButtonId,
+      originMessageId: String(origin._id || ""),
+    });
+    return null;
+  }
+
+  const action = buttonAction.action || {};
+  if (String(action.type || "") !== "start_flow") {
+    aiButtonLog("unsupported_action", {
+      contextWamid,
+      clickedButtonId,
+      actionType: String(action.type || ""),
+    });
+    return null;
+  }
+
+  const flowId = String(action.flowId || "").trim();
+  if (!mongoose.Types.ObjectId.isValid(flowId)) {
+    aiButtonLog("invalid_flow_id", { contextWamid, clickedButtonId });
+    return null;
+  }
+
+  const flow = await flowSessionRepository.findActivePublishedFlowForAiButton({
+    workspaceId,
+    flowId,
+  });
+  const version = flow?.activeVersionId || null;
+  if (!flow || !version) {
+    aiButtonLog("flow_not_active_or_published", {
+      contextWamid,
+      clickedButtonId,
+      flowId,
+    });
+    return null;
+  }
+
+  return {
+    flow,
+    version,
+    origin,
+    buttonAction,
+    contextWamid,
+    clickedButtonId,
+  };
+}
+
+async function startAiButtonFlow({
+  workspaceId,
+  contact,
+  match,
+  inboundMessage,
+  now,
+}) {
+  const session = await startSession({
+    workspaceId,
+    contactId: contact._id,
+    flow: match.flow,
+    version: match.version,
+    initialContext: {
+      aiButtonAction: {
+        buttonId: match.clickedButtonId,
+        title: String(match.buttonAction?.title || inboundMessage?.buttonReply?.title || "").trim(),
+        originMessageId: String(match.origin?._id || ""),
+        originWhatsappMessageId: match.contextWamid,
+      },
+    },
+    now,
+  });
+  const runtimeResult = await executeSession({
+    workspaceId,
+    sessionId: session._id,
+    inboundMessage,
+    businessInitiated: false,
+  });
+  return { session, runtimeResult };
 }
 
 async function persistInboundDisplayMessage({
@@ -362,6 +478,36 @@ async function processInboundMessage(normalizedMessage) {
           };
         }
       } else {
+        const aiButtonMatch = await findAiButtonFlowMatch({
+          workspaceId,
+          inboundMessage: normalizedMessage,
+        });
+        if (aiButtonMatch) {
+          const { session, runtimeResult } = await startAiButtonFlow({
+            workspaceId,
+            contact,
+            match: aiButtonMatch,
+            inboundMessage: normalizedMessage,
+            now,
+          });
+          flowLog("[FLOW_AI_BUTTON_FLOW_STARTED]", {
+            workspaceId: String(workspaceId),
+            contactId: String(contact._id),
+            sessionId: String(session._id),
+            flowId: String(aiButtonMatch.flow._id),
+            originWhatsappMessageId: aiButtonMatch.contextWamid,
+            buttonId: aiButtonMatch.clickedButtonId,
+          });
+          automationResult = {
+            status: "session_started",
+            sessionId: String(session._id),
+            flowId: String(aiButtonMatch.flow._id),
+            flowVersionId: String(aiButtonMatch.version._id),
+            runtimeStatus: runtimeResult.status,
+            source: "ai_button_action",
+          };
+        }
+        if (automationResult.status === "no_trigger_match") {
         if (
           ["button_reply", "list_reply"].includes(
             String(normalizedMessage.type || "")
@@ -397,6 +543,7 @@ async function processInboundMessage(normalizedMessage) {
             flowVersionId: String(match.version._id),
             runtimeStatus: runtimeResult.status,
           };
+        }
         }
       }
     }
