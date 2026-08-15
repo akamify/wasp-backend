@@ -375,7 +375,7 @@ function getAgentStoreConfig(agent) {
   if (!isEnabled()) return null;
   const managed = normalizeManagedConfig(agent);
   if (!managed.enabled || !managed.storeName) return null;
-  if (managed.status === "failed" && managed.documentCount <= 0) return null;
+  if (managed.documentCount <= 0) return null;
   return {
     storeName: managed.storeName,
     topK: MANAGED_FILE_SEARCH_TOP_K,
