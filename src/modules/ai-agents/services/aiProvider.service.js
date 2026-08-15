@@ -222,7 +222,7 @@ async function generateGeminiInteractionResponse({
         input: sanitizeProviderText(retryPrompt.prompt),
         system_instruction: sanitizeProviderText(systemInstruction) || undefined,
         generation_config: {
-          maxOutputTokens: resolveMaxOutputTokens(agent, 600),
+          max_output_tokens: resolveMaxOutputTokens(agent, 600),
         },
         tools: managedFileSearch?.storeName
           ? [
