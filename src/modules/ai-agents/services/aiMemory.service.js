@@ -1,4 +1,5 @@
 const aiRuntimeRepository = require("@modules/ai-agents/repositories/aiRuntime.repository");
+const aiCustomerMemoryService = require("@modules/ai-agents/services/aiCustomerMemory.service");
 
 const MAX_CONTEXT_MESSAGES = 12;
 const MAX_STORED_MESSAGES_BEFORE_SUMMARY = 40;
@@ -31,6 +32,10 @@ function recentMessages(conversation) {
 
 function conversationSummary(conversation) {
   return String(conversation?.summary || "").trim();
+}
+
+function conversationMemory(conversation) {
+  return aiCustomerMemoryService.normalizeProfile(conversation?.metadata?.customerMemory || {});
 }
 
 function summarizeMessages(messages, previousSummary = "") {
@@ -95,7 +100,44 @@ async function appendExchange({ workspaceId, conversation, userMessage, assistan
       },
     ],
   });
-  return compactIfNeeded({ workspaceId, conversation: updatedConversation });
+  const enrichedConversation = await captureConversationMemory({
+    workspaceId,
+    conversation: updatedConversation,
+    contact: metadata?.contact || null,
+    userMessage,
+    assistantMessage,
+  });
+  return compactIfNeeded({ workspaceId, conversation: enrichedConversation });
+}
+
+async function captureConversationMemory({
+  workspaceId,
+  conversation,
+  contact = null,
+  userMessage = "",
+  assistantMessage = "",
+}) {
+  if (!conversation) return conversation;
+  const nextProfile = aiCustomerMemoryService.updateProfile({
+    currentProfile: conversationMemory(conversation),
+    userMessage,
+    assistantMessage,
+  });
+  const updatedConversation = await aiRuntimeRepository.updateConversationMetadata({
+    workspaceId,
+    conversationId: conversation._id,
+    metadataPatch: {
+      customerMemory: nextProfile,
+    },
+  });
+  if (contact?._id || conversation?.contactId) {
+    await aiRuntimeRepository.updateContactAiMemory({
+      workspaceId,
+      contactId: contact?._id || conversation.contactId,
+      profile: nextProfile,
+    }).catch(() => {});
+  }
+  return updatedConversation || conversation;
 }
 
 async function listConversations({ workspaceId, agentId }) {
@@ -116,6 +158,8 @@ module.exports = {
   getTestConversation,
   recentMessages,
   conversationSummary,
+  conversationMemory,
+  captureConversationMemory,
   appendExchange,
   listConversations,
   clearTestMemory,

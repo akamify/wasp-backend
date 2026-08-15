@@ -61,6 +61,12 @@ const runtimeControlsSchema = Joi.object({
   }).optional(),
 }).optional();
 
+const metadataSchema = Joi.object({
+  managedFileSearch: Joi.object({
+    enabled: Joi.boolean().optional(),
+  }).optional(),
+}).optional();
+
 const createAiAgentSchema = Joi.object({
   name: Joi.string().trim().min(1).max(120).required(),
   slug: Joi.string().trim().max(140).allow("").optional(),
@@ -76,6 +82,7 @@ const createAiAgentSchema = Joi.object({
   tools: Joi.array().items(toolSchema).max(20).optional(),
   guardrails: guardrailsSchema,
   runtimeControls: runtimeControlsSchema,
+  metadata: metadataSchema,
 });
 
 const updateAiAgentSchema = createAiAgentSchema.fork(["name"], (schema) => schema.optional()).min(1);

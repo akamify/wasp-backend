@@ -7,6 +7,7 @@ const {
   sendInteractiveButtonMessage,
   sendInteractiveListMessage,
   sendMediaMessage,
+  sendTypingIndicator,
 } = require("@shared/utils/whatsappSender");
 const { touchConversation } = require("@shared/services/conversationService");
 const { touchContactFromMessage } = require("@shared/services/contactService");
@@ -1173,9 +1174,35 @@ async function sendMediaMessageForUser({
   return { message, apiResponse };
 }
 
+async function sendTypingIndicatorForUser({
+  userId,
+  messageId,
+  type = "text",
+}) {
+  const normalizedMessageId = String(messageId || "").trim();
+  if (!userId || !normalizedMessageId) {
+    return { success: false, skipped: "missing_message_id" };
+  }
+
+  const creds = await getCredentialsForUser(userId);
+  const apiResponse = await sendTypingIndicator({
+    accessToken: creds.accessToken,
+    phoneNumberId: creds.phoneNumberId,
+    messageId: normalizedMessageId,
+    graphApiVersion: creds.graphApiVersion,
+    type,
+  });
+
+  return {
+    success: true,
+    apiResponse,
+  };
+}
+
 module.exports = {
   sendTemplateMessageForUser,
   sendTextMessageForUser,
+  sendTypingIndicatorForUser,
   sendInteractiveButtonMessageForUser,
   sendInteractiveButtonsMessage,
   sendInteractiveListMessageForUser,

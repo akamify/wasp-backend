@@ -4,6 +4,7 @@ const aiAgentRepository = require("@modules/ai-agents/repositories/aiAgent.repos
 const aiKnowledgeRepository = require("@modules/ai-agents/repositories/aiKnowledge.repository");
 const aiKnowledgeIndexer = require("@modules/ai-agents/services/aiKnowledgeIndexer.service");
 const aiKnowledgeExtraction = require("@modules/ai-agents/services/aiKnowledgeExtraction.service");
+const aiManagedFileSearchService = require("@modules/ai-agents/services/aiManagedFileSearch.service");
 const aiAddonService = require("@modules/ai-agents/services/aiAddon.service");
 const { assertStorageQuotaAvailable } = require("@modules/billing/services/workspaceQuota.service");
 
@@ -48,6 +49,8 @@ async function normalizePayload(payload = {}, { existing = null } = {}) {
   const question = String(payload.question || payload.metadata?.question || "").trim();
   const answer = String(payload.answer || payload.metadata?.answer || "").trim();
   const content = String(payload.content || "").trim();
+  const sectionKey = String(payload.metadata?.sectionKey ?? existing?.metadata?.sectionKey ?? "").trim().slice(0, 80);
+  const sectionLabel = String(payload.metadata?.sectionLabel ?? existing?.metadata?.sectionLabel ?? "").trim().slice(0, 160);
   const searchBoost = Math.min(10, Math.max(0, Number(payload.searchBoost ?? payload.metadata?.searchBoost ?? existing?.metadata?.searchBoost ?? 1) || 1));
   const chunkSize = Math.min(2000, Math.max(100, Number(payload.chunkSize ?? payload.metadata?.chunkSize ?? existing?.metadata?.chunkSize ?? 900) || 900));
   const maxChunks = Math.min(1000, Math.max(1, Number(payload.maxChunks ?? payload.metadata?.maxChunks ?? existing?.metadata?.maxChunks ?? 500) || 500));
@@ -85,6 +88,8 @@ async function normalizePayload(payload = {}, { existing = null } = {}) {
       ...(existing?.metadata?.toObject ? existing.metadata.toObject() : existing?.metadata || {}),
       question: type === "faq" ? question : "",
       answer: type === "faq" ? answer : "",
+      sectionKey,
+      sectionLabel,
       searchBoost,
       chunkSize,
       maxChunks,
@@ -339,12 +344,23 @@ async function uploadFileSource({ workspaceId, agentId, actorId, file }) {
 }
 
 async function deleteSource({ workspaceId, agentId, sourceId, actorId }) {
-  await requireAgent({ workspaceId, agentId });
+  const agent = await requireAgent({ workspaceId, agentId });
   assertObjectId(sourceId, "knowledge source id");
+  const existing = await aiKnowledgeRepository.findSourceById({ workspaceId, agentId, sourceId });
+  if (!existing) throw new HttpError(404, "Knowledge source not found");
   const now = new Date();
   const deleted = await aiKnowledgeRepository.softDeleteSource({ workspaceId, agentId, sourceId, actorId, now });
   if (!deleted) throw new HttpError(404, "Knowledge source not found");
   await aiKnowledgeRepository.deleteChunksForSource({ workspaceId, agentId, sourceId });
+  await aiManagedFileSearchService.deleteSourceDocument({
+    workspaceId,
+    agent,
+    source: existing,
+  }).catch(() => {});
+  await aiManagedFileSearchService.cleanupStoreIfEmpty({
+    workspaceId,
+    agent,
+  }).catch(() => {});
   return { success: true };
 }
 

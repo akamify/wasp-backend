@@ -2,6 +2,7 @@ const { GoogleGenAI } = require("@google/genai");
 const { HttpError } = require("@shared/utils/httpError");
 const aiProviderConfigService = require("@modules/ai-agents/services/aiProviderConfig.service");
 const aiProviderCircuitBreakerService = require("@modules/ai-agents/services/aiProviderCircuitBreaker.service");
+const aiManagedFileSearchService = require("@modules/ai-agents/services/aiManagedFileSearch.service");
 const {
   normalizeProviderError,
   isRetryableRuntimeError,
@@ -38,7 +39,7 @@ function clampPromptToTokenLimit(prompt, maxInputTokens) {
   return { prompt: trimmed, truncated: true };
 }
 
-function shrinkPromptForRetry(prompt, retryMaxTokens = 2500) {
+function shrinkPromptForRetry(prompt, retryMaxTokens = 1800) {
   const text = String(prompt || "");
   const maxChars = Math.max(200, Number(retryMaxTokens || 2500) * 4);
   if (text.length <= maxChars) {
@@ -104,7 +105,7 @@ function buildGeminiRequestBody({ systemInstruction, prompt, agent }) {
       },
     ],
     generationConfig: {
-      maxOutputTokens: Math.max(1, Number(agent?.runtimeLimits?.maxTokensPerReply || 600)),
+      maxOutputTokens: resolveMaxOutputTokens(agent, 600),
     },
   };
   if (sanitizedSystem) {
@@ -113,6 +114,10 @@ function buildGeminiRequestBody({ systemInstruction, prompt, agent }) {
     };
   }
   return body;
+}
+
+function resolveMaxOutputTokens(agent, fallback = 600) {
+  return Math.max(1, Number(agent?.runtimeLimits?.maxTokensPerReply || fallback) || fallback);
 }
 
 async function withRetry(operation, { provider, maxRetries = DEFAULT_RETRIES } = {}) {
@@ -144,6 +149,23 @@ function extractGeminiText(response) {
   return parts.map((part) => part?.text || "").join("").trim();
 }
 
+function extractInteractionText(interaction) {
+  const direct = String(interaction?.output_text || "").trim();
+  if (direct) return direct;
+  const textOutputs = Array.isArray(interaction?.outputs)
+    ? interaction.outputs.filter((item) => item?.type === "text")
+    : [];
+  return textOutputs.map((item) => String(item?.text || "")).join("\n").trim();
+}
+
+function extractInteractionUsage(usage) {
+  return {
+    inputTokens: Number(usage?.total_input_tokens || 0),
+    outputTokens: Number(usage?.total_output_tokens || 0),
+    totalTokens: Number(usage?.total_tokens || 0),
+  };
+}
+
 async function generateManualResponse({ agent, userMessage, prompt, knowledgeChunks }) {
   const knowledge = (knowledgeChunks || [])
     .map((source) => [source.title, source.text, source.url].filter(Boolean).join(" - "))
@@ -165,7 +187,103 @@ async function generateManualResponse({ agent, userMessage, prompt, knowledgeChu
   };
 }
 
-async function generateGeminiResponse({ workspaceId = null, agent, prompt, systemInstruction = "" }) {
+async function generateGeminiInteractionResponse({
+  workspaceId = null,
+  agent,
+  prompt,
+  systemInstruction = "",
+  managedFileSearch = null,
+}) {
+  const { model } = await aiProviderConfigService.resolveGeminiModel(
+    agent.modelName || DEFAULT_GEMINI_MODEL,
+    { allowFallback: true }
+  );
+  const startedAt = Date.now();
+  return withRetry(async (attempt) => {
+    const client = getGeminiClient();
+    if (!client) {
+      throw new HttpError(500, "Gemini client could not be initialized");
+    }
+    const retryPrompt =
+      attempt > 1 ? shrinkPromptForRetry(prompt, 1800) : { prompt, reduced: false };
+    logGeminiDebug("Gemini interactions attempt", {
+      model,
+      attempt,
+      promptChars: String(retryPrompt.prompt || "").length,
+      systemChars: String(systemInstruction || "").length,
+      reducedPrompt: retryPrompt.reduced,
+      workspaceId: workspaceId ? String(workspaceId) : null,
+      agentId: agent?._id ? String(agent._id) : agent?.id ? String(agent.id) : null,
+      fileSearchStore: managedFileSearch?.storeName || null,
+    });
+    const interaction = await Promise.race([
+      client.interactions.create({
+        model,
+        input: sanitizeProviderText(retryPrompt.prompt),
+        system_instruction: sanitizeProviderText(systemInstruction) || undefined,
+        generation_config: {
+          maxOutputTokens: resolveMaxOutputTokens(agent, 600),
+        },
+        tools: managedFileSearch?.storeName
+          ? [
+              {
+                type: "file_search",
+                fileSearchStoreNames: [managedFileSearch.storeName],
+                topK: Number(managedFileSearch.topK || aiManagedFileSearchService.MANAGED_FILE_SEARCH_TOP_K || 4),
+              },
+            ]
+          : undefined,
+        labels: {
+          channel: "ai-agent",
+          workspace_id: workspaceId ? String(workspaceId) : "global",
+        },
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("AI provider timeout")), DEFAULT_TIMEOUT_MS)
+      ),
+    ]);
+    const reply = extractInteractionText(interaction) || "I could not generate a response.";
+    const usage = extractInteractionUsage(interaction?.usage);
+    logGeminiDebug("Gemini interactions success", {
+      model,
+      attempt,
+      latencyMs: Date.now() - startedAt,
+      promptTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+      replyChars: reply.length,
+      fileSearchStore: managedFileSearch?.storeName || null,
+    });
+    return {
+      reply,
+      provider: "gemini",
+      model,
+      raw: {
+        latencyMs: Date.now() - startedAt,
+        retryPromptReduced: retryPrompt.reduced,
+        interactionId: interaction?.id || null,
+        interactionStatus: interaction?.status || null,
+        managedFileSearch: {
+          enabled: Boolean(managedFileSearch?.storeName),
+          storeName: managedFileSearch?.storeName || null,
+        },
+      },
+      usage: {
+        inputTokens: usage.inputTokens || estimateTokens(retryPrompt.prompt),
+        outputTokens: usage.outputTokens || estimateTokens(reply),
+        totalTokens: usage.totalTokens || usage.inputTokens + usage.outputTokens,
+      },
+    };
+  }, { provider: "gemini" });
+}
+
+async function generateGeminiResponse({
+  workspaceId = null,
+  agent,
+  prompt,
+  systemInstruction = "",
+  managedFileSearch = null,
+}) {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
     throw normalizeProviderError(new HttpError(500, "GEMINI_API_KEY is not configured"), {
@@ -180,66 +298,77 @@ async function generateGeminiResponse({ workspaceId = null, agent, prompt, syste
     model,
   });
   const startedAt = Date.now();
-  return withRetry(async (attempt) => {
-    const client = getGeminiClient();
-    if (!client) {
-      throw new HttpError(500, "Gemini client could not be initialized");
-    }
-    const retryPrompt =
-      attempt > 1
-        ? shrinkPromptForRetry(prompt, 2500)
-        : { prompt, reduced: false };
-    logGeminiDebug("Gemini generateContent attempt", {
-      model,
-      attempt,
-      promptChars: String(retryPrompt.prompt || "").length,
-      systemChars: String(systemInstruction || "").length,
-      reducedPrompt: retryPrompt.reduced,
-      workspaceId: workspaceId ? String(workspaceId) : null,
-      agentId: agent?._id ? String(agent._id) : agent?.id ? String(agent.id) : null,
-    });
-    const responseData = await Promise.race([
-      client.models.generateContent({
-        model,
-        contents: sanitizeProviderText(retryPrompt.prompt),
-        config: {
-          systemInstruction: sanitizeProviderText(systemInstruction) || undefined,
-          maxOutputTokens: Math.max(1, Number(agent?.runtimeLimits?.maxTokensPerReply || 600)),
-        },
-      }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("AI provider timeout")), DEFAULT_TIMEOUT_MS)
-      ),
-    ]);
-    const replyText =
-      typeof responseData?.text === "function"
-        ? responseData.text()
-        : String(responseData?.text || "");
-    const reply = replyText.trim() || extractGeminiText(responseData) || "I could not generate a response.";
-    const usage = responseData?.usageMetadata || {};
-    logGeminiDebug("Gemini generateContent success", {
-      model,
-      attempt,
-      latencyMs: Date.now() - startedAt,
-      promptTokens: Number(usage.promptTokenCount || 0),
-      outputTokens: Number(usage.candidatesTokenCount || 0),
-      totalTokens: Number(usage.totalTokenCount || 0),
-      replyChars: reply.length,
-    });
-    return {
-      reply,
-      provider: "gemini",
-      model,
-      raw: {
-        latencyMs: Date.now() - startedAt,
-        retryPromptReduced: retryPrompt.reduced,
-      },
-      usage: {
-        inputTokens: Number(usage.promptTokenCount || estimateTokens(retryPrompt.prompt)),
-        outputTokens: Number(usage.candidatesTokenCount || estimateTokens(reply)),
-      },
-    };
-  }, { provider: "gemini" })
+  const requestPromise =
+    managedFileSearch?.storeName
+      ? generateGeminiInteractionResponse({
+          workspaceId,
+          agent,
+          prompt,
+          systemInstruction,
+          managedFileSearch,
+        })
+      : withRetry(async (attempt) => {
+          const client = getGeminiClient();
+          if (!client) {
+            throw new HttpError(500, "Gemini client could not be initialized");
+          }
+          const retryPrompt =
+            attempt > 1
+              ? shrinkPromptForRetry(prompt, 2500)
+              : { prompt, reduced: false };
+          logGeminiDebug("Gemini generateContent attempt", {
+            model,
+            attempt,
+            promptChars: String(retryPrompt.prompt || "").length,
+            systemChars: String(systemInstruction || "").length,
+            reducedPrompt: retryPrompt.reduced,
+            workspaceId: workspaceId ? String(workspaceId) : null,
+            agentId: agent?._id ? String(agent._id) : agent?.id ? String(agent.id) : null,
+          });
+          const responseData = await Promise.race([
+            client.models.generateContent({
+              model,
+              contents: sanitizeProviderText(retryPrompt.prompt),
+              config: {
+                systemInstruction: sanitizeProviderText(systemInstruction) || undefined,
+                maxOutputTokens: resolveMaxOutputTokens(agent, 600),
+              },
+            }),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("AI provider timeout")), DEFAULT_TIMEOUT_MS)
+            ),
+          ]);
+          const replyText =
+            typeof responseData?.text === "function"
+              ? responseData.text()
+              : String(responseData?.text || "");
+          const reply = replyText.trim() || extractGeminiText(responseData) || "I could not generate a response.";
+          const usage = responseData?.usageMetadata || {};
+          logGeminiDebug("Gemini generateContent success", {
+            model,
+            attempt,
+            latencyMs: Date.now() - startedAt,
+            promptTokens: Number(usage.promptTokenCount || 0),
+            outputTokens: Number(usage.candidatesTokenCount || 0),
+            totalTokens: Number(usage.totalTokenCount || 0),
+            replyChars: reply.length,
+          });
+          return {
+            reply,
+            provider: "gemini",
+            model,
+            raw: {
+              latencyMs: Date.now() - startedAt,
+              retryPromptReduced: retryPrompt.reduced,
+            },
+            usage: {
+              inputTokens: Number(usage.promptTokenCount || estimateTokens(retryPrompt.prompt)),
+              outputTokens: Number(usage.candidatesTokenCount || estimateTokens(reply)),
+              totalTokens: Number(usage.totalTokenCount || 0),
+            },
+          };
+        }, { provider: "gemini" });
+  return requestPromise
     .then(async (result) => {
       await aiProviderCircuitBreakerService.recordProviderSuccess({
         workspaceId: workspaceId ? String(workspaceId) : "global",
@@ -282,13 +411,31 @@ async function generateGeminiResponse({ workspaceId = null, agent, prompt, syste
   });
 }
 
-async function generateResponse({ workspaceId = null, agent, prompt, system = "", limits = {} }) {
+async function generateResponse({
+  workspaceId = null,
+  agent,
+  prompt,
+  system = "",
+  limits = {},
+  managedFileSearch = null,
+  style = null,
+}) {
   const maxInputTokens = Math.max(1, Number(limits.maxInputTokens || 4096) || 4096);
-  const normalizedPrompt = clampPromptToTokenLimit(prompt, maxInputTokens);
+  const effectiveInputTokenLimit = Math.min(
+    maxInputTokens,
+    Math.max(1200, Number(process.env.AI_PROVIDER_EFFECTIVE_INPUT_TOKEN_LIMIT || 2200))
+  );
+  const normalizedPrompt = clampPromptToTokenLimit(prompt, effectiveInputTokenLimit);
   const normalizedAgent = {
     ...agent,
     runtimeLimits: {
-      maxTokensPerReply: Math.max(1, Number(limits.maxTokensPerReply || 1024) || 1024),
+      maxTokensPerReply: Math.max(
+        1,
+        Math.min(
+          Number(limits.maxTokensPerReply || 1024) || 1024,
+          Number(style?.maxOutputTokens || limits.maxTokensPerReply || 1024) || 1024
+        )
+      ),
     },
   };
   return generateGeminiResponse({
@@ -296,13 +443,15 @@ async function generateResponse({ workspaceId = null, agent, prompt, system = ""
     agent: normalizedAgent,
     prompt: normalizedPrompt.prompt,
     systemInstruction: system,
+    managedFileSearch,
   })
     .then((result) => ({
       ...result,
       raw: {
         ...(result.raw || {}),
         promptTruncated: normalizedPrompt.truncated,
-        promptLimitTokens: maxInputTokens,
+        promptLimitTokens: effectiveInputTokenLimit,
+        replyStyle: style || null,
       },
     }));
 }

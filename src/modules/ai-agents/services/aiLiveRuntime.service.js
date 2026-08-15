@@ -13,6 +13,8 @@ const aiGuardrailService = require("@modules/ai-agents/services/aiGuardrail.serv
 const aiToolService = require("@modules/ai-agents/services/aiTool.service");
 const aiBillingService = require("@modules/ai-agents/services/aiBilling.service");
 const aiKnowledgeService = require("@modules/ai-agents/services/aiKnowledge.service");
+const aiManagedFileSearchService = require("@modules/ai-agents/services/aiManagedFileSearch.service");
+const aiConversationStyleService = require("@modules/ai-agents/services/aiConversationStyle.service");
 const aiRuntimeRepository = require("@modules/ai-agents/repositories/aiRuntime.repository");
 const aiMemoryService = require("@modules/ai-agents/services/aiMemory.service");
 const {
@@ -36,7 +38,10 @@ const {
   isRetryableRuntimeError,
 } = require("@modules/ai-agents/services/aiRuntimeError.service");
 const { writeConversationEvent } = require("@modules/crm/services/conversationEvent.service");
-const { sendTextMessageForUser } = require("@shared/services/outboundMessageService");
+const {
+  sendTextMessageForUser,
+  sendTypingIndicatorForUser,
+} = require("@shared/services/outboundMessageService");
 
 const LOCK_WINDOW_MS = Math.max(Number(process.env.AI_RUNTIME_LOCK_MS || 45000), 5000);
 const LOCK_REFRESH_MS = Math.max(
@@ -46,6 +51,7 @@ const LOCK_REFRESH_MS = Math.max(
     Math.max(LOCK_WINDOW_MS - 1000, 3000)
   )
 );
+const TYPING_HEARTBEAT_MS = Math.max(Number(process.env.WHATSAPP_TYPING_HEARTBEAT_MS || 8000), 3000);
 
 function asObjectId(value) {
   return mongoose.Types.ObjectId.isValid(String(value || ""))
@@ -192,6 +198,56 @@ function buildUsageMetadata({ executionKey, metadata = {} }) {
   return {
     ...metadata,
     executionKey,
+  };
+}
+
+function createTypingIndicatorController({ workspaceId, inboundWhatsappMessageId }) {
+  let timer = null;
+  let active = false;
+  let inFlight = null;
+
+  async function pulse() {
+    if (!active || !workspaceId || !inboundWhatsappMessageId) return;
+    if (inFlight) return inFlight;
+    inFlight = sendTypingIndicatorForUser({
+      userId: workspaceId,
+      messageId: inboundWhatsappMessageId,
+      type: "text",
+    })
+      .catch((error) => {
+        console.warn("[ai-runtime] typing indicator failed", {
+          workspaceId: String(workspaceId),
+          messageId: String(inboundWhatsappMessageId),
+          error: String(error?.message || "Typing indicator failed"),
+        });
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+    return inFlight;
+  }
+
+  return {
+    async start() {
+      if (active || !workspaceId || !inboundWhatsappMessageId) return;
+      active = true;
+      await pulse();
+      if (!active) return;
+      timer = setInterval(() => {
+        pulse().catch(() => {});
+      }, TYPING_HEARTBEAT_MS);
+      if (typeof timer?.unref === "function") timer.unref();
+    },
+    async stop() {
+      active = false;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      if (inFlight) {
+        await inFlight.catch(() => {});
+      }
+    },
   };
 }
 
@@ -377,7 +433,7 @@ async function appendAssistantMessage({ workspaceId, aiConversation, reply, meta
       });
     }
   }
-  return AiConversation.findOneAndUpdate(
+  const updatedConversation = await AiConversation.findOneAndUpdate(
     { _id: aiConversation._id, workspaceId, deletedAt: null },
     {
       $push: {
@@ -395,6 +451,11 @@ async function appendAssistantMessage({ workspaceId, aiConversation, reply, meta
     },
     { returnDocument: "after", runValidators: true }
   );
+  return aiMemoryService.captureConversationMemory({
+    workspaceId,
+    conversation: updatedConversation,
+    assistantMessage: reply,
+  });
 }
 
 async function hasActiveFlowSession({ workspaceId, contactId }) {
@@ -730,6 +791,7 @@ async function processInboundJob({
   });
   let lockHeartbeat = null;
   let lockLost = false;
+  let typingIndicator = null;
   const maintainLock = async () => {
     const extended = await extendConversationLock(conversationLock).catch(() => ({ extended: false }));
     if (!extended?.extended) {
@@ -958,27 +1020,41 @@ async function processInboundJob({
       inboundText,
       inboundMessage,
     });
+    aiConversation = await aiMemoryService.captureConversationMemory({
+      workspaceId: workspaceObjectId,
+      conversation: aiConversation,
+      contact,
+      userMessage: inboundText,
+    });
+
+    typingIndicator = createTypingIndicatorController({
+      workspaceId: workspaceObjectId,
+      inboundWhatsappMessageId: inboundMessage.whatsappMessageId || null,
+    });
 
     const aiLimits = await getWorkspaceAiLimits(workspaceObjectId);
 
     const conversationMessages = aiMemoryService.recentMessages(aiConversation);
     const conversationSummary = aiMemoryService.conversationSummary(aiConversation);
-    const knowledgeChunks = await aiKnowledgeService.searchKnowledge({
+    const conversationMemoryProfile = aiMemoryService.conversationMemory(aiConversation);
+    let knowledgeChunks = await aiKnowledgeService.searchKnowledge({
       workspaceId: workspaceObjectId,
       agentId: agent._id,
       agent,
       query: inboundText,
-      limit: 5,
+      limit: 4,
     });
 
-    const promptPayload = aiPromptBuilder.buildRuntimePrompt({
+    let promptPayload = aiPromptBuilder.buildRuntimePrompt({
       agent,
       contact,
       conversationMessages,
       conversationSummary,
+      conversationMemoryProfile,
       knowledgeChunks,
       userMessage: inboundText,
     });
+    const managedFileSearch = aiManagedFileSearchService.getAgentStoreConfig(agent);
 
     const startedAt = Date.now();
     const businessHours = evaluateBusinessHours({
@@ -1243,6 +1319,7 @@ async function processInboundJob({
       agent,
       userMessage: inboundText,
       conversation: aiConversation,
+      contact,
     });
 
     if (!preCheck.passed) {
@@ -1359,8 +1436,31 @@ async function processInboundJob({
       agentId: agent._id,
       agent,
     });
+    const forceHandoverOnKnowledgeMiss = aiConversationStyleService.shouldForceHandoverOnKnowledgeMiss(inboundText);
 
-    if (!knowledgeChunks.length && hasConfiguredKnowledge) {
+    if (!knowledgeChunks.length && hasConfiguredKnowledge && !managedFileSearch?.storeName && !forceHandoverOnKnowledgeMiss) {
+      const fallbackKnowledgeChunks = await aiKnowledgeService.getKnowledgeMissFallbackChunks({
+        workspaceId: workspaceObjectId,
+        agentId: agent._id,
+        agent,
+        limit: 3,
+      });
+      if (fallbackKnowledgeChunks.length) {
+        knowledgeChunks = fallbackKnowledgeChunks;
+        promptPayload = aiPromptBuilder.buildRuntimePrompt({
+          agent,
+          contact,
+          conversationMessages,
+          conversationSummary,
+          conversationMemoryProfile,
+          knowledgeChunks,
+          userMessage: inboundText,
+        });
+      }
+    }
+
+    if (!knowledgeChunks.length && hasConfiguredKnowledge && !managedFileSearch?.storeName) {
+      await typingIndicator?.start();
       const reply = fallbackReplyFor(
         agent,
         "noAnswer",
@@ -1376,7 +1476,7 @@ async function processInboundJob({
           model: "no-relevant-source",
           confidence: 0.2,
           action: "handover",
-          reason: "no_relevant_knowledge",
+          reason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
           executionKey: normalizedExecutionKey,
         },
         now: replyAt,
@@ -1411,9 +1511,9 @@ async function processInboundJob({
         metadata: buildUsageMetadata({
           executionKey: normalizedExecutionKey,
           metadata: {
-          channel: "whatsapp",
-          reason: "no_relevant_knowledge",
-          inboundMessageId: String(inboundMessage._id),
+            channel: "whatsapp",
+            reason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
+            inboundMessageId: String(inboundMessage._id),
           },
         }),
       });
@@ -1425,7 +1525,7 @@ async function processInboundJob({
             aiState: AI_STATES.HANDOVER_PENDING,
             aiBusinessHoursStatus: "within_hours",
             aiHandoverAt: replyAt,
-            aiHandoverReason: "no_relevant_knowledge",
+            aiHandoverReason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
             aiSlaDueAt: agent.runtimeControls?.conversationSla?.enabled
               ? new Date(replyAt.getTime() + Number(agent.runtimeControls?.conversationSla?.firstResponseMinutes || 15) * 60 * 1000)
               : null,
@@ -1442,7 +1542,7 @@ async function processInboundJob({
         actor: { kind: "system" },
         payload: {
           source: "knowledge_guard",
-          reason: "no_relevant_knowledge",
+          reason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
           aiAgentId: String(agent._id),
           aiConversationId: String(aiConversation._id),
         },
@@ -1454,7 +1554,7 @@ async function processInboundJob({
             aiProcessedAt: replyAt,
             aiStatus: "handover",
             aiAction: "handover",
-            aiReason: "no_relevant_knowledge",
+            aiReason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
             aiReplyMessageId: outbound?.message?._id || null,
             aiError: null,
             aiExecutionKey: normalizedExecutionKey,
@@ -1476,14 +1576,20 @@ async function processInboundJob({
     });
     await maintainLock();
     assertLockActive();
+    await typingIndicator?.start();
     const providerResult = await aiProviderService.generateResponse({
       workspaceId: workspaceObjectId,
       agent,
       userMessage: inboundText,
       knowledgeChunks,
+      managedFileSearch,
       limits: aiLimits,
       ...promptPayload,
     });
+    providerResult.raw = {
+      ...(providerResult.raw || {}),
+      knowledgeSourceCount: knowledgeChunks.length,
+    };
     const plannedToolCall = aiToolService.parseToolCall(providerResult.reply);
     const toolExecution = plannedToolCall
       ? await aiToolService.executeRequestedTools({
@@ -1502,7 +1608,11 @@ async function processInboundJob({
           },
         })
       : null;
-    const assistantReply = toolExecution?.publicReply || providerResult.reply;
+    const assistantReply = aiConversationStyleService.normalizeReplyForPolicy({
+      reply: toolExecution?.publicReply || providerResult.reply,
+      userMessage: inboundText,
+      style: promptPayload.style,
+    });
     const guardrail = aiGuardrailService.applyGuardrails({
       agent,
       userMessage: inboundText,
@@ -1700,6 +1810,7 @@ async function processInboundJob({
     }
     throw error;
   } finally {
+    await typingIndicator?.stop();
     if (lockHeartbeat) clearInterval(lockHeartbeat);
     await releaseConversationLock(conversationLock).catch(() => {});
   }

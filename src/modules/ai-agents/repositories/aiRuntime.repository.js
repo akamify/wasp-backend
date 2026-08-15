@@ -72,6 +72,32 @@ function compactConversation({ workspaceId, conversationId, summary, messages, s
   );
 }
 
+function updateConversationMetadata({ workspaceId, conversationId, metadataPatch = {} }) {
+  const flattened = {};
+  for (const [key, value] of Object.entries(metadataPatch || {})) {
+    flattenObjectToDotted(`metadata.${key}`, value, flattened);
+  }
+  return AiConversation.findOneAndUpdate(
+    { _id: conversationId, workspaceId, deletedAt: null },
+    { $set: flattened },
+    { returnDocument: "after", runValidators: true }
+  );
+}
+
+function updateContactAiMemory({ workspaceId, contactId, profile = {} }) {
+  if (!contactId) return null;
+  return Contact.findOneAndUpdate(
+    { _id: contactId, workspaceId },
+    {
+      $set: {
+        "attributes.ai_memory_profile": profile,
+        ...(profile?.preferredLanguageStyle ? { language: profile.preferredLanguageStyle } : {}),
+      },
+    },
+    { returnDocument: "after", runValidators: true }
+  );
+}
+
 function listConversations({ workspaceId, agentId, limit = 20 }) {
   return AiConversation.find({
     workspaceId,
@@ -137,6 +163,8 @@ module.exports = {
   findOrCreateTestConversation,
   appendMessages,
   compactConversation,
+  updateConversationMetadata,
+  updateContactAiMemory,
   listConversations,
   clearTestMemory,
   createUsageLog,

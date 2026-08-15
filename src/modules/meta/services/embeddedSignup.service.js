@@ -27,6 +27,7 @@ const { decryptPin, encryptPin } = require("@modules/meta/services/pinLifecycle.
 const { getToken, META_TOKEN_TYPES } = require("@modules/meta/services/tokenProvider.service");
 const { ensureSystemUserProvisionedOnWaba } = require("@modules/meta/services/wabaProvisioning.service");
 const { findLatestConnectionDocument } = require("@shared/services/whatsappConnectionService");
+const { serializeWhatsAppConnection } = require("@shared/services/whatsappConnectionMetadataService");
 
 const REGISTRATION_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -91,6 +92,69 @@ function buildMetaStepError(err, {
   });
 
   return new HttpError(statusCode >= 400 && statusCode < 600 ? statusCode : 500, message, details);
+}
+
+function isUsedAuthorizationCodeError(err) {
+  const meta = err?.response?.data?.error || err?.details?.meta || null;
+  const code = Number(meta?.code || err?.code || 0);
+  const subcode = Number(meta?.error_subcode || meta?.subcode || err?.subcode || 0);
+  const message = String(meta?.message || err?.message || "").toLowerCase();
+  return (
+    (code === 100 && subcode === 36009) ||
+    message.includes("authorization code has been used") ||
+    message.includes("this authorization code has been used")
+  );
+}
+
+async function recoverExistingEmbeddedSignupSession({ workspaceId, wabaId, phoneNumberId }) {
+  const doc = await findLatestConnectionDocument(
+    workspaceId,
+    "status webhookSubscribed connectedAt lastError displayPhoneNumber phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain wabaName verifiedName nameStatus qualityRating codeVerificationStatus platformType accountMode throughput messagingLimitTier messagingLimitTierCached businessProfile lastMetadataSyncAt lastMetaSyncAt metadataFetchStatus metadataWarnings isValid isActive connectionMode tokenType tokenDebugSummary onboardingStage registrationStatus registrationVersion phoneRegistrationState registrationLastAttemptAt registrationCompletedAt embeddedSignupCompletedAt registrationDeadlineAt registrationExpired registrationRetryCount registrationLastError registrationLastErrorCode registrationRetryAllowed registrationRetryAfterAt registrationRecommendedAction businessManagerId templateSyncStatus templateSyncCompletedAt templateSyncLastError",
+    { onlyEmbeddedSignup: true }
+  );
+  if (!doc) return null;
+
+  const docWabaId = String(doc.wabaId || doc.businessAccountIdPlain || "").trim();
+  const docPhoneNumberId = String(doc.phoneNumberId || doc.phoneNumberIdPlain || "").trim();
+  if (wabaId && docWabaId && String(wabaId).trim() !== docWabaId) return null;
+  if (phoneNumberId && docPhoneNumberId && String(phoneNumberId).trim() !== docPhoneNumberId) return null;
+
+  const connection = serializeWhatsAppConnection(doc);
+  const lifecycleState = String(connection?.lifecycleState || connection?.onboardingStage || "").trim();
+  const registrationStatus = String(connection?.registrationStatus || "").trim();
+  const resumableStates = [
+    ONBOARDING_STAGES.PIN_REQUIRED,
+    ONBOARDING_STAGES.REGISTERING,
+    ONBOARDING_STAGES.PHONE_REGISTERED,
+    ONBOARDING_STAGES.METADATA_SYNCING,
+    ONBOARDING_STAGES.TEMPLATE_SYNCING,
+    ONBOARDING_STAGES.SYNC_WARNING,
+    ONBOARDING_STAGES.FAILED,
+    ONBOARDING_STAGES.READY,
+    ONBOARDING_STAGES.READY_WITH_WARNINGS,
+  ];
+  if (!resumableStates.includes(lifecycleState)) return null;
+
+  return {
+    success: true,
+    connected: Boolean(connection?.connected),
+    status: connection?.connected ? "active" : "pending",
+    recoveredFromUsedCode: true,
+    requiresPinSetup: [
+      REGISTRATION_STATUSES.PIN_REQUIRED,
+      REGISTRATION_STATUSES.PENDING,
+      REGISTRATION_STATUSES.FAILED,
+      REGISTRATION_STATUSES.RETRYING,
+    ].includes(registrationStatus),
+    connectionId: String(doc._id),
+    lifecycleState,
+    onboardingStage: lifecycleState,
+    registrationStatus,
+    embeddedSignupCompletedAt: connection?.embeddedSignupCompletedAt || null,
+    registrationDeadlineAt: connection?.registrationDeadlineAt || null,
+    message: "Previous Meta signup session already started. Resuming existing onboarding state.",
+    connection,
+  };
 }
 
 async function exchangeCodeForToken(code) {
@@ -456,7 +520,21 @@ async function executeEmbeddedSignupExchange({
   phoneNumberId,
   pin,
 }) {
-  const { token, appId } = await exchangeCodeForToken(code).catch((err) => {
+  let token;
+  let appId;
+  try {
+    const exchanged = await exchangeCodeForToken(code);
+    token = exchanged.token;
+    appId = exchanged.appId;
+  } catch (err) {
+    if (isUsedAuthorizationCodeError(err)) {
+      const recovered = await recoverExistingEmbeddedSignupSession({
+        workspaceId: workspace?.id,
+        wabaId,
+        phoneNumberId,
+      });
+      if (recovered) return recovered;
+    }
     throw buildMetaStepError(err, {
       step: "exchange_code_for_token",
       endpoint: "/oauth/access_token",
@@ -464,7 +542,7 @@ async function executeEmbeddedSignupExchange({
       message: "Meta code exchange failed.",
       workspaceId: workspace?.id,
     });
-  });
+  }
   const graphApiVersion = getMetaGraphVersion();
   const debugTokenData = await debugBusinessToken({
     token,

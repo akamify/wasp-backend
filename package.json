@@ -9,6 +9,7 @@
     "dev": "node index.js",
     "worker": "node worker.js",
     "verify:worker-env": "node scripts/verify-worker-env.cjs",
+    "reindex:knowledge-embeddings": "node scripts/reindex-knowledge-embeddings.cjs",
     "cleanup:stale-waba-templates": "node scripts/cleanup-stale-waba-templates.cjs",
     "sync:active-waba-product-indexes": "node scripts/sync-active-waba-product-indexes.cjs",
     "verify:template-waba-scoping": "node scripts/verify-template-waba-scoping.cjs",

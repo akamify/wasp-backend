@@ -12,6 +12,8 @@ const PROMPT_INJECTION_PATTERNS = [
   /override (your )?(rules|instructions|policy)/i,
 ];
 
+const aiConversationStyleService = require("@modules/ai-agents/services/aiConversationStyle.service");
+
 function textMatchesAny(text, items) {
   const normalized = String(text || "").toLowerCase();
   return (items || []).some((item) => item && normalized.includes(String(item).toLowerCase()));
@@ -23,6 +25,8 @@ function estimateConfidence({ reply, agent, providerResult }) {
   let confidence = providerResult.provider === "manual" ? 0.72 : 0.86;
   if (/not sure|not fully sure|don't know|cannot confirm|unable to confirm/i.test(text)) confidence -= 0.25;
   if (!Array.isArray(agent.knowledgeSources) || agent.knowledgeSources.length === 0) confidence -= 0.15;
+  if (Number(providerResult?.raw?.knowledgeSourceCount || 0) > 0) confidence += 0.05;
+  if (providerResult?.raw?.managedFileSearch?.enabled) confidence += 0.03;
   return Math.max(0.1, Math.min(0.98, Number(confidence.toFixed(2))));
 }
 
@@ -31,7 +35,7 @@ function detectPromptInjection(text) {
   return PROMPT_INJECTION_PATTERNS.some((pattern) => pattern.test(value));
 }
 
-function preCheckUserMessage({ agent, userMessage, conversation }) {
+function preCheckUserMessage({ agent, userMessage, conversation, contact = null }) {
   const guardrails = agent.guardrails || {};
   const blockedTopics = guardrails.blockedTopics || [];
   const maxMessages = Number(guardrails.maxMessagesPerSession || 50);
@@ -74,6 +78,19 @@ function preCheckUserMessage({ agent, userMessage, conversation }) {
       confidence: 0.9,
       reply: guardrails.fallbackMessage || "Let me connect you with our team for further help.",
       reason: "max_messages_exceeded",
+    };
+  }
+
+  if (aiConversationStyleService.isSimpleGreeting(userMessage)) {
+    return {
+      passed: false,
+      action: "reply",
+      confidence: 0.96,
+      reply: aiConversationStyleService.buildGreetingReply({
+        userMessage,
+        contactName: contact?.name || "",
+      }),
+      reason: "greeting",
     };
   }
 
@@ -132,4 +149,9 @@ function applyGuardrails({ agent, userMessage, reply, providerResult, conversati
   };
 }
 
-module.exports = { applyGuardrails, preCheckUserMessage, detectPromptInjection };
+module.exports = {
+  applyGuardrails,
+  preCheckUserMessage,
+  detectPromptInjection,
+  isSimpleGreeting: aiConversationStyleService.isSimpleGreeting,
+};

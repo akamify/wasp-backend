@@ -821,6 +821,39 @@ async function markMessageAsRead({
   }
 }
 
+async function sendTypingIndicator({
+  accessToken,
+  phoneNumberId,
+  messageId,
+  graphApiVersion,
+  type = "text",
+}) {
+  const baseURL = graphBaseUrl(graphApiVersion);
+  const client = axios.create({ baseURL, timeout: 20000 });
+  const payload = {
+    messaging_product: "whatsapp",
+    status: "read",
+    message_id: messageId,
+    typing_indicator: {
+      type: String(type || "text").trim() || "text",
+    },
+  };
+  try {
+    const res = await client.post(`/${phoneNumberId}/messages`, payload, {
+      headers: authHeaders(accessToken),
+    });
+    return res.data;
+  } catch (err) {
+    throw Object.assign(new Error("Meta typing indicator failed"), {
+      metaDebug: toMetaErrorInfo(err, "send_typing_indicator", {
+        method: "POST",
+        url: `/${phoneNumberId}/messages`,
+        body: payload,
+      }),
+    });
+  }
+}
+
 async function deleteMessageTemplate({
   accessToken,
   wabaId,
@@ -858,5 +891,6 @@ module.exports = {
   sendInteractiveListMessage,
   sendMediaMessage,
   markMessageAsRead,
+  sendTypingIndicator,
   deleteMessageTemplate,
 };

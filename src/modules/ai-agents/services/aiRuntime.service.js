@@ -9,6 +9,8 @@ const aiGuardrailService = require("@modules/ai-agents/services/aiGuardrail.serv
 const aiToolService = require("@modules/ai-agents/services/aiTool.service");
 const aiBillingService = require("@modules/ai-agents/services/aiBilling.service");
 const aiKnowledgeService = require("@modules/ai-agents/services/aiKnowledge.service");
+const aiManagedFileSearchService = require("@modules/ai-agents/services/aiManagedFileSearch.service");
+const aiConversationStyleService = require("@modules/ai-agents/services/aiConversationStyle.service");
 const {
   tokensToCreditsExact,
   getWorkspaceAiLimits,
@@ -71,21 +73,24 @@ async function testMessage({ workspaceId, agentId, payload }) {
 
   const conversationMessages = aiMemoryService.recentMessages(conversation);
   const conversationSummary = aiMemoryService.conversationSummary(conversation);
-  const knowledgeChunks = await aiKnowledgeService.searchKnowledge({
+  const conversationMemoryProfile = aiMemoryService.conversationMemory(conversation);
+  let knowledgeChunks = await aiKnowledgeService.searchKnowledge({
     workspaceId,
     agentId,
     agent,
     query: message,
-    limit: 5,
+    limit: 4,
   });
-  const promptPayload = aiPromptBuilder.buildRuntimePrompt({
+  let promptPayload = aiPromptBuilder.buildRuntimePrompt({
     agent,
     contact,
     conversationMessages,
     conversationSummary,
+    conversationMemoryProfile,
     knowledgeChunks,
     userMessage: message,
   });
+  const managedFileSearch = aiManagedFileSearchService.getAgentStoreConfig(agent);
   const startedAt = Date.now();
   const aiLimits = await getWorkspaceAiLimits(workspaceId);
   let providerResult;
@@ -96,6 +101,7 @@ async function testMessage({ workspaceId, agentId, payload }) {
       agent,
       userMessage: message,
       conversation,
+      contact,
     });
     if (!preCheck.passed) {
       const updatedConversation = await aiMemoryService.appendExchange({
@@ -108,11 +114,12 @@ async function testMessage({ workspaceId, agentId, payload }) {
             provider: "guardrail",
             model: "pre-check",
             confidence: preCheck.confidence,
-            action: preCheck.action,
-            guardrailReason: preCheck.reason,
-          },
+          action: preCheck.action,
+          guardrailReason: preCheck.reason,
         },
-      });
+        contact,
+      },
+    });
       usageLog = await aiRuntimeRepository.createUsageLog({
         workspaceId,
         agentId,
@@ -151,7 +158,28 @@ async function testMessage({ workspaceId, agentId, payload }) {
     }
 
     const hasConfiguredKnowledge = await aiKnowledgeService.hasIndexedKnowledge({ workspaceId, agentId, agent });
-    if (!knowledgeChunks.length && hasConfiguredKnowledge) {
+    const forceHandoverOnKnowledgeMiss = aiConversationStyleService.shouldForceHandoverOnKnowledgeMiss(message);
+    if (!knowledgeChunks.length && hasConfiguredKnowledge && !managedFileSearch?.storeName && !forceHandoverOnKnowledgeMiss) {
+      const fallbackKnowledgeChunks = await aiKnowledgeService.getKnowledgeMissFallbackChunks({
+        workspaceId,
+        agentId,
+        agent,
+        limit: 3,
+      });
+      if (fallbackKnowledgeChunks.length) {
+        knowledgeChunks = fallbackKnowledgeChunks;
+        promptPayload = aiPromptBuilder.buildRuntimePrompt({
+          agent,
+          contact,
+          conversationMessages,
+          conversationSummary,
+          conversationMemoryProfile,
+          knowledgeChunks,
+          userMessage: message,
+        });
+      }
+    }
+    if (!knowledgeChunks.length && hasConfiguredKnowledge && !managedFileSearch?.storeName) {
       const fallbackReply = agent.guardrails?.fallbackMessage || "I do not have enough verified knowledge to answer that. Let me connect you with our team.";
       const updatedConversation = await aiMemoryService.appendExchange({
         workspaceId,
@@ -163,12 +191,13 @@ async function testMessage({ workspaceId, agentId, payload }) {
             provider: "knowledge_guard",
             model: "no-relevant-source",
             confidence: 0.2,
-            action: "handover",
-            guardrailReason: "no_relevant_knowledge",
-            sources: [],
-          },
+          action: "handover",
+          guardrailReason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
+          sources: [],
         },
-      });
+        contact,
+      },
+    });
       usageLog = await aiRuntimeRepository.createUsageLog({
         workspaceId,
         agentId,
@@ -185,7 +214,7 @@ async function testMessage({ workspaceId, agentId, payload }) {
         action: "handover",
         metadata: {
           channel: "test",
-          guardrailReason: "no_relevant_knowledge",
+          guardrailReason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge",
           sources: [],
         },
       });
@@ -194,7 +223,7 @@ async function testMessage({ workspaceId, agentId, payload }) {
         reply: fallbackReply,
         confidence: 0.2,
         action: "handover",
-        guardrail: { passed: false, reason: "no_relevant_knowledge" },
+        guardrail: { passed: false, reason: forceHandoverOnKnowledgeMiss ? "knowledge_miss_high_risk" : "no_relevant_knowledge" },
         provider: "knowledge_guard",
         model: "no-relevant-source",
         usage: serializeUsage(usageLog),
@@ -210,9 +239,14 @@ async function testMessage({ workspaceId, agentId, payload }) {
       agent,
       userMessage: message,
       knowledgeChunks,
+      managedFileSearch,
       limits: aiLimits,
       ...promptPayload,
     });
+    providerResult.raw = {
+      ...(providerResult.raw || {}),
+      knowledgeSourceCount: knowledgeChunks.length,
+    };
     const plannedToolCall = aiToolService.parseToolCall(providerResult.reply);
     const toolExecution = plannedToolCall
       ? await aiToolService.executeRequestedTools({
@@ -228,7 +262,11 @@ async function testMessage({ workspaceId, agentId, payload }) {
           },
         })
       : null;
-    const assistantReply = toolExecution?.publicReply || providerResult.reply;
+    const assistantReply = aiConversationStyleService.normalizeReplyForPolicy({
+      reply: toolExecution?.publicReply || providerResult.reply,
+      userMessage: message,
+      style: promptPayload.style,
+    });
     guardrail = aiGuardrailService.applyGuardrails({
       agent,
       userMessage: message,
@@ -264,6 +302,7 @@ async function testMessage({ workspaceId, agentId, payload }) {
             chunkId: chunk.chunkId,
           })),
         },
+        contact,
       },
     });
     const inputTokens = Number(providerResult.usage?.inputTokens || 0);

@@ -3,6 +3,8 @@ const { HttpError } = require("@shared/utils/httpError");
 const aiAgentRepository = require("@modules/ai-agents/repositories/aiAgent.repository");
 const aiAddonService = require("@modules/ai-agents/services/aiAddon.service");
 const aiProviderConfigService = require("@modules/ai-agents/services/aiProviderConfig.service");
+const aiManagedFileSearchService = require("@modules/ai-agents/services/aiManagedFileSearch.service");
+const aiKnowledgeRepository = require("@modules/ai-agents/repositories/aiKnowledge.repository");
 const { slugifyAiAgent } = require("@modules/ai-agents/utils/slugifyAiAgent");
 
 function assertValidAgentId(agentId) {
@@ -110,6 +112,16 @@ function normalizeRuntimeControls(runtimeControls = {}) {
   };
 }
 
+function normalizeMetadata(metadata = {}) {
+  const managedFileSearch = metadata?.managedFileSearch;
+  if (!managedFileSearch || typeof managedFileSearch !== "object") return undefined;
+  return {
+    managedFileSearch: {
+      enabled: managedFileSearch.enabled !== false,
+    },
+  };
+}
+
 function buildVersionSnapshot(agent, updates = {}) {
   const value = typeof agent?.toObject === "function" ? agent.toObject() : agent || {};
   return {
@@ -123,6 +135,7 @@ function buildVersionSnapshot(agent, updates = {}) {
     temperature: updates.temperature !== undefined ? updates.temperature : value.temperature,
     guardrails: updates.guardrails !== undefined ? updates.guardrails : value.guardrails,
     runtimeControls: updates.runtimeControls !== undefined ? updates.runtimeControls : value.runtimeControls,
+    metadata: updates.metadata !== undefined ? updates.metadata : value.metadata,
     tools: updates.tools !== undefined ? updates.tools : value.tools,
   };
 }
@@ -152,7 +165,76 @@ function normalizePayload(payload, { partial = false } = {}) {
   assign("tools", payload.tools !== undefined ? normalizeTools(payload.tools) : undefined);
   assign("guardrails", payload.guardrails !== undefined ? normalizeGuardrails(payload.guardrails) : undefined);
   assign("runtimeControls", payload.runtimeControls !== undefined ? normalizeRuntimeControls(payload.runtimeControls) : undefined);
+  assign("metadata", payload.metadata !== undefined ? normalizeMetadata(payload.metadata) : undefined);
   return updates;
+}
+
+async function refreshManagedFileSearchState({ workspaceId, agent, enabled }) {
+  if (!agent) return null;
+  let currentAgent = agent;
+  const enabledValue = enabled !== false;
+  const basePatch = {
+    "metadata.managedFileSearch.enabled": enabledValue,
+    "metadata.managedFileSearch.status": enabledValue ? "syncing" : "disabled",
+    "metadata.managedFileSearch.lastError": "",
+    "metadata.managedFileSearch.syncedAt": new Date(),
+  };
+
+  await aiAgentRepository.update({
+    workspaceId,
+    agentId: agent._id,
+    updates: basePatch,
+  });
+
+  if (!enabledValue || !aiManagedFileSearchService.isEnabled()) {
+    return aiAgentRepository.findById({ workspaceId, agentId: agent._id });
+  }
+
+  const sources = await aiKnowledgeRepository.listSources({
+    workspaceId,
+    agentId: agent._id,
+  });
+
+  if (!sources.length) {
+    await aiAgentRepository.update({
+      workspaceId,
+      agentId: agent._id,
+      updates: {
+        "metadata.managedFileSearch.enabled": true,
+        "metadata.managedFileSearch.status": "idle",
+        "metadata.managedFileSearch.lastError": "",
+        "metadata.managedFileSearch.documentCount": 0,
+        "metadata.managedFileSearch.syncedAt": new Date(),
+      },
+    });
+    return aiAgentRepository.findById({ workspaceId, agentId: agent._id });
+  }
+
+  let syncedCount = 0;
+  let lastError = "";
+  for (const source of sources) {
+    try {
+      const result = await aiManagedFileSearchService.syncSource({ workspaceId, agent: currentAgent, source });
+      if (String(result?.documentName || "").trim()) syncedCount += 1;
+      currentAgent = (await aiAgentRepository.findById({ workspaceId, agentId: agent._id })) || currentAgent;
+    } catch (error) {
+      lastError = String(error?.message || "Managed File Search sync failed").slice(0, 1000);
+    }
+  }
+
+  await aiAgentRepository.update({
+    workspaceId,
+    agentId: agent._id,
+    updates: {
+      "metadata.managedFileSearch.enabled": true,
+      "metadata.managedFileSearch.status": lastError ? (syncedCount > 0 ? "degraded" : "failed") : "ready",
+      "metadata.managedFileSearch.lastError": lastError,
+      "metadata.managedFileSearch.documentCount": syncedCount,
+      "metadata.managedFileSearch.syncedAt": new Date(),
+    },
+  });
+
+  return aiAgentRepository.findById({ workspaceId, agentId: agent._id });
 }
 
 async function uniqueSlug({ workspaceId, baseSlug, excludeId = null }) {
@@ -233,7 +315,12 @@ async function createAgent({ workspaceId, actorId, payload }) {
     createdBy: actorId || null,
     updatedBy: actorId || null,
   });
-  return { success: true, agent: serializeAgent(agent) };
+  const managedEnabled = updates.metadata?.managedFileSearch?.enabled;
+  const hydratedAgent =
+    managedEnabled !== undefined
+      ? await refreshManagedFileSearchState({ workspaceId, agent, enabled: managedEnabled })
+      : agent;
+  return { success: true, agent: serializeAgent(hydratedAgent) };
 }
 
 async function updateAgent({ workspaceId, agentId, actorId, payload }) {
@@ -277,7 +364,12 @@ async function updateAgent({ workspaceId, agentId, actorId, payload }) {
     updates,
     pushes: { versionHistory: { $each: [historyEntry], $slice: -25 } },
   });
-  return { success: true, agent: serializeAgent(agent) };
+  const managedEnabled = payload?.metadata?.managedFileSearch?.enabled;
+  const hydratedAgent =
+    managedEnabled !== undefined
+      ? await refreshManagedFileSearchState({ workspaceId, agent, enabled: managedEnabled })
+      : agent;
+  return { success: true, agent: serializeAgent(hydratedAgent) };
 }
 
 async function deleteAgent({ workspaceId, agentId, actorId }) {

@@ -1,5 +1,8 @@
 const crypto = require("crypto");
 const aiKnowledgeRepository = require("@modules/ai-agents/repositories/aiKnowledge.repository");
+const aiAgentRepository = require("@modules/ai-agents/repositories/aiAgent.repository");
+const aiEmbeddingService = require("@modules/ai-agents/services/aiEmbedding.service");
+const aiManagedFileSearchService = require("@modules/ai-agents/services/aiManagedFileSearch.service");
 
 const MIN_CHUNK_CHARS = 40;
 const MAX_CHUNK_CHARS = 900;
@@ -93,6 +96,26 @@ async function indexSource({ workspaceId, agentId, sourceId }) {
     if (!chunkTexts.length) {
       throw new Error("Knowledge source has no indexable content");
     }
+    let embeddings = [];
+    let embeddingError = "";
+    if (aiEmbeddingService.isConfigured()) {
+      try {
+        embeddings = await aiEmbeddingService.embedDocuments(
+          chunkTexts.map((chunkText) => ({
+            title: source.title,
+            text: chunkText,
+          }))
+        );
+      } catch (error) {
+        embeddingError = String(error?.message || "Embedding generation failed").slice(0, 1000);
+        console.warn("[ai-knowledge] embedding generation failed", {
+          workspaceId: String(workspaceId),
+          agentId: String(agentId),
+          sourceId: String(sourceId),
+          error: embeddingError,
+        });
+      }
+    }
     await aiKnowledgeRepository.deleteChunksForSource({ workspaceId, agentId, sourceId });
     await aiKnowledgeRepository.createChunks(
       chunkTexts.map((chunkText, chunkIndex) => ({
@@ -106,13 +129,19 @@ async function indexSource({ workspaceId, agentId, sourceId }) {
           sourceTitle: source.title,
           sourceType: source.type,
           sourceUrl: source.sourceUrl || "",
+          sectionKey: String(source.metadata?.sectionKey || ""),
+          sectionLabel: String(source.metadata?.sectionLabel || ""),
           searchBoost: Number(source.metadata?.searchBoost || 1),
           chunkSize,
           maxChunks,
+          embeddingModel:
+            embeddings[chunkIndex]?.length > 0 ? aiEmbeddingService.DEFAULT_EMBEDDING_MODEL : "",
+          embeddingDimensions: Number(embeddings[chunkIndex]?.length || 0),
         },
+        embedding: Array.isArray(embeddings[chunkIndex]) ? embeddings[chunkIndex] : [],
       })),
     );
-    return aiKnowledgeRepository.updateSource({
+    const indexedSource = await aiKnowledgeRepository.updateSource({
       workspaceId,
       agentId,
       sourceId,
@@ -121,9 +150,36 @@ async function indexSource({ workspaceId, agentId, sourceId }) {
         contentHash: sourceHash,
         "metadata.totalChunks": chunkTexts.length,
         "metadata.lastIndexedAt": new Date(),
+        "metadata.embeddingModel":
+          embeddings.some((item) => Array.isArray(item) && item.length > 0)
+            ? aiEmbeddingService.DEFAULT_EMBEDDING_MODEL
+            : "",
+        "metadata.embeddingDimensions":
+          Number(embeddings.find((item) => Array.isArray(item) && item.length > 0)?.length || 0),
+        "metadata.lastEmbeddedAt":
+          embeddings.some((item) => Array.isArray(item) && item.length > 0) ? new Date() : null,
+        "metadata.embeddingError": embeddingError,
         "metadata.error": "",
       },
     });
+    if (indexedSource && aiManagedFileSearchService.isEnabled()) {
+      const agent = await aiAgentRepository.findById({ workspaceId, agentId });
+      if (agent) {
+        await aiManagedFileSearchService.syncSource({
+          workspaceId,
+          agent,
+          source: indexedSource,
+        }).catch((error) => {
+          console.warn("[ai-knowledge] managed file search sync failed", {
+            workspaceId: String(workspaceId),
+            agentId: String(agentId),
+            sourceId: String(sourceId),
+            error: String(error?.message || "Managed File Search sync failed"),
+          });
+        });
+      }
+    }
+    return indexedSource;
   } catch (error) {
     return aiKnowledgeRepository.updateSource({
       workspaceId,

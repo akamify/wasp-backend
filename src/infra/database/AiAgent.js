@@ -151,6 +151,10 @@ const AiAgentSchema = new mongoose.Schema(
       type: AiAgentRuntimeControlsSchema,
       default: () => ({}),
     },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({}),
+    },
     version: { type: Number, min: 1, default: 1 },
     versionHistory: {
       type: [AiAgentVersionSchema],
