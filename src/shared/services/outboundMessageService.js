@@ -165,7 +165,19 @@ async function sendTemplateMessageForUser({
   flowSessionId,
   flowId,
   nodeId,
+  idempotencyKey,
+  aiAgentId,
+  aiConversationId,
+  aiActionMetadata,
 }) {
+  const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
+  if (normalizedIdempotencyKey) {
+    const existing = await Message.findOne({
+      workspaceId: userId,
+      idempotencyKey: normalizedIdempotencyKey,
+    });
+    if (existing) return { message: existing, apiResponse: null, idempotent: true };
+  }
   await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const resolvedLanguageCode = String(languageCode || template?.languageCode || template?.language || "").trim();
   const templateLanguageCode = String(template?.languageCode || template?.language || "").trim();
@@ -264,6 +276,9 @@ async function sendTemplateMessageForUser({
     ...(flowSessionId ? { flowSessionId } : {}),
     ...(flowId ? { flowId } : {}),
     ...(nodeId ? { nodeId } : {}),
+    ...(aiAgentId ? { aiAgentId } : {}),
+    ...(aiConversationId ? { aiConversationId } : {}),
+    idempotencyKey: normalizedIdempotencyKey,
     whatsappMessageId: waMessageId,
     status: "sent",
     statusTimestamps: { acceptedAt: now, sentAt: now },
@@ -298,6 +313,7 @@ async function sendTemplateMessageForUser({
         flowActionData: flowActionData || [],
       },
       components: sendComponents,
+      ...(aiActionMetadata && typeof aiActionMetadata === "object" ? aiActionMetadata : {}),
     },
   };
   const message = messageId
@@ -696,7 +712,19 @@ async function sendInteractiveListMessageForUser({
   flowSessionId,
   flowId,
   nodeId,
+  idempotencyKey,
+  aiAgentId,
+  aiConversationId,
+  aiActionMetadata,
 }) {
+  const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
+  if (normalizedIdempotencyKey) {
+    const existing = await Message.findOne({
+      workspaceId: userId,
+      idempotencyKey: normalizedIdempotencyKey,
+    });
+    if (existing) return { message: existing, apiResponse: null, idempotent: true };
+  }
   await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const creds = await getCredentialsForUser(userId);
   let apiResponse;
@@ -736,6 +764,9 @@ async function sendInteractiveListMessageForUser({
     ...(flowSessionId ? { flowSessionId } : {}),
     ...(flowId ? { flowId } : {}),
     ...(nodeId ? { nodeId } : {}),
+    ...(aiAgentId ? { aiAgentId } : {}),
+    ...(aiConversationId ? { aiConversationId } : {}),
+    idempotencyKey: normalizedIdempotencyKey,
     type: "interactive_list",
     whatsappMessageId,
     status: "sent",
@@ -759,6 +790,7 @@ async function sendInteractiveListMessageForUser({
         body: { text },
         action: { button: buttonText, sections },
       },
+      ...(aiActionMetadata && typeof aiActionMetadata === "object" ? aiActionMetadata : {}),
     },
     ...buildAttributionDefaults(),
   });
@@ -1108,7 +1140,19 @@ async function sendMediaMessageForUser({
   flowSessionId,
   flowId,
   nodeId,
+  idempotencyKey,
+  aiAgentId,
+  aiConversationId,
+  aiActionMetadata,
 }) {
+  const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
+  if (normalizedIdempotencyKey) {
+    const existing = await Message.findOne({
+      workspaceId: userId,
+      idempotencyKey: normalizedIdempotencyKey,
+    });
+    if (existing) return { message: existing, apiResponse: null, idempotent: true };
+  }
   await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const normalizedType = String(type || "").toLowerCase();
   const creds = await getCredentialsForUser(userId);
@@ -1164,6 +1208,9 @@ async function sendMediaMessageForUser({
     ...(flowSessionId ? { flowSessionId } : {}),
     ...(flowId ? { flowId } : {}),
     ...(nodeId ? { nodeId } : {}),
+    ...(aiAgentId ? { aiAgentId } : {}),
+    ...(aiConversationId ? { aiConversationId } : {}),
+    idempotencyKey: normalizedIdempotencyKey,
     type: normalizedType,
     whatsappMessageId: waMessageId,
     status: "sent",
@@ -1175,7 +1222,10 @@ async function sendMediaMessageForUser({
     text: caption ? String(caption).slice(0, 160) : "",
     displayText: caption ? String(caption).slice(0, 160) : mediaPreview,
     previewText: caption ? String(caption).slice(0, 160) : mediaPreview,
-    payload,
+    payload: {
+      ...payload,
+      ...(aiActionMetadata && typeof aiActionMetadata === "object" ? aiActionMetadata : {}),
+    },
     ...buildAttributionDefaults(),
   });
 

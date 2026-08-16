@@ -4,6 +4,8 @@ const { Conversation } = require("@infra/database/Conversation");
 const { Contact } = require("@infra/database/Contact");
 const { Message } = require("@infra/database/Message");
 const { FlowSession } = require("@infra/database/FlowSession");
+const { Flow } = require("@infra/database/Flow");
+const { Template } = require("@infra/database/Template");
 const { AiConversation } = require("@infra/database/AiConversation");
 const { AiAgent } = require("@infra/database/AiAgent");
 const { AiCreditTransaction } = require("@infra/database/AiCreditTransaction");
@@ -40,9 +42,16 @@ const {
 const { writeConversationEvent } = require("@modules/crm/services/conversationEvent.service");
 const {
   sendInteractiveButtonMessageForUser,
+  sendInteractiveListMessageForUser,
+  sendTemplateMessageForUser,
   sendTextMessageForUser,
   sendTypingIndicatorForUser,
 } = require("@shared/services/outboundMessageService");
+const {
+  startSession,
+  findLatestActiveSession,
+} = require("@modules/flows/services/flowSession.service");
+const { executeSession } = require("@modules/flows/services/flowRuntime.service");
 
 const LOCK_WINDOW_MS = Math.max(Number(process.env.AI_RUNTIME_LOCK_MS || 45000), 5000);
 const LOCK_REFRESH_MS = Math.max(
@@ -340,8 +349,244 @@ function fallbackReplyForRuntimeError(agent, error) {
   return fallbackReplyFor(
     agent,
     "escalation",
-    "I am unable to continue this chat automatically right now. Let me connect you with our team."
+    agent?.guardrails?.fallbackMessage ||
+      "I am unable to continue this chat automatically right now. Let me connect you with our team."
   );
+}
+
+async function findAuthorizedAssignedFlow({ workspaceId, agent, flowKey }) {
+  const action = aiToolService.resolveAssignedAction(agent, flowKey);
+  if (!action || action.kind !== "flow" || !action.serverConfig?.flowId) return null;
+  if (!mongoose.Types.ObjectId.isValid(String(action.serverConfig.flowId))) return null;
+  const flow = await Flow.findOne({
+    _id: action.serverConfig.flowId,
+    workspaceId,
+    status: "active",
+    deletedAt: null,
+    activeVersionId: { $ne: null },
+  }).populate({
+    path: "activeVersionId",
+    match: { workspaceId, status: "active" },
+  });
+  const version = flow?.activeVersionId || null;
+  if (!flow || !version) return null;
+  return { action, flow, version };
+}
+
+async function findAuthorizedAssignedTemplate({ workspaceId, wabaId, agent, templateKey }) {
+  const action = aiToolService.resolveAssignedAction(agent, templateKey);
+  if (!action || action.kind !== "template" || !action.serverConfig?.templateId) return null;
+  if (!mongoose.Types.ObjectId.isValid(String(action.serverConfig.templateId))) return null;
+  const template = await Template.findOne({
+    _id: action.serverConfig.templateId,
+    workspaceId,
+    ...(wabaId ? { wabaId } : {}),
+    status: "approved",
+    isActive: { $ne: false },
+    deletedAt: null,
+  });
+  if (!template) return null;
+  return { action, template };
+}
+
+function resolveTemplateVariablesForAi({ assignedTemplate, contact, conversation }) {
+  const allowed = Array.isArray(assignedTemplate?.allowedVariables)
+    ? assignedTemplate.allowedVariables.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  if (!allowed.length) return { ok: true, variables: [] };
+  const source = {
+    name: contact?.name || conversation?.profileName || "",
+    phone: contact?.phone || conversation?.phone || "",
+    email: contact?.email || "",
+    company: contact?.company || "",
+  };
+  const variables = [];
+  const missing = [];
+  for (const key of allowed) {
+    const value = String(source[key] || "").trim();
+    if (!value) missing.push(key);
+    else variables.push(value);
+  }
+  if (missing.length) {
+    return {
+      ok: false,
+      missing,
+      message: `I need ${missing.join(", ")} before I can send that template.`,
+    };
+  }
+  return { ok: true, variables };
+}
+
+async function executeAiStartFlowAction({
+  workspaceId,
+  agent,
+  contact,
+  inboundMessage,
+  flowKey,
+  reason,
+  executionKey,
+  now,
+}) {
+  const authorized = await findAuthorizedAssignedFlow({ workspaceId, agent, flowKey });
+  if (!authorized) {
+    return { ok: false, publicReply: fallbackReplyFor(agent, "escalation", agent?.guardrails?.fallbackMessage || "That automation is not available right now.") };
+  }
+  const existingSession = await findLatestActiveSession({ workspaceId, contactId: contact._id });
+  if (existingSession) {
+    return { ok: false, skipped: "active_flow_session", publicReply: "" };
+  }
+  const session = await startSession({
+    workspaceId,
+    contactId: contact._id,
+    flow: authorized.flow,
+    version: authorized.version,
+    initialContext: {
+      aiAction: {
+        type: "start_flow",
+        flowKey,
+        reason: String(reason || "ai_start_flow").slice(0, 240),
+        executionKey,
+        agentId: agent?._id ? String(agent._id) : null,
+        inboundMessageId: inboundMessage?._id ? String(inboundMessage._id) : null,
+        inboundWhatsappMessageId: inboundMessage?.whatsappMessageId || null,
+      },
+    },
+    now,
+  });
+  const runtimeResult = await executeSession({
+    workspaceId,
+    sessionId: session._id,
+    inboundMessage,
+    businessInitiated: false,
+  });
+  return {
+    ok: true,
+    action: "start_flow",
+    session,
+    runtimeResult,
+    flowId: authorized.flow._id,
+    flowVersionId: authorized.version._id,
+  };
+}
+
+async function sendAiToolOutbound({
+  workspaceId,
+  agent,
+  contact,
+  conversation,
+  inboundMessage,
+  aiConversation,
+  toolExecution,
+  guardrailReply,
+  idempotencyKey,
+  executionKey,
+  now,
+}) {
+  const outbound = toolExecution?.outbound || null;
+  if (!outbound?.type) {
+    return sendTextMessageForUser({
+      userId: workspaceId,
+      contactId: contact?._id || undefined,
+      to: conversation.phone,
+      text: guardrailReply,
+      idempotencyKey,
+      sentBy: { kind: "system" },
+      source: "automation",
+      senderType: "automation",
+      triggeredByMessageId: inboundMessage.whatsappMessageId || null,
+    });
+  }
+  if (outbound.type === "start_flow") {
+    return executeAiStartFlowAction({
+      workspaceId,
+      agent,
+      contact,
+      inboundMessage,
+      flowKey: outbound.flowKey,
+      reason: outbound.reason,
+      executionKey,
+      now,
+    });
+  }
+  if (outbound.type === "interactive_buttons") {
+    return sendInteractiveButtonMessageForUser({
+      userId: workspaceId,
+      contactId: contact?._id || undefined,
+      to: conversation.phone,
+      text: outbound.text || guardrailReply,
+      buttons: outbound.buttons || [],
+      idempotencyKey,
+      sentBy: { kind: "system" },
+      source: "automation",
+      senderType: "automation",
+      triggeredByMessageId: inboundMessage.whatsappMessageId || null,
+      aiAgentId: agent._id,
+      aiConversationId: aiConversation._id,
+      buttonActions: outbound.aiButtonActions || null,
+    });
+  }
+  if (outbound.type === "interactive_list") {
+    return sendInteractiveListMessageForUser({
+      userId: workspaceId,
+      contactId: contact?._id || undefined,
+      to: conversation.phone,
+      text: outbound.text || guardrailReply,
+      buttonText: outbound.buttonText || "View options",
+      sections: outbound.sections || [],
+      idempotencyKey,
+      sentBy: { kind: "system" },
+      source: "automation",
+      senderType: "automation",
+      triggeredByMessageId: inboundMessage.whatsappMessageId || null,
+      aiAgentId: agent._id,
+      aiConversationId: aiConversation._id,
+      aiActionMetadata: outbound.aiListActions ? { aiListActions: outbound.aiListActions } : null,
+    });
+  }
+  if (outbound.type === "template") {
+    const authorized = await findAuthorizedAssignedTemplate({
+      workspaceId,
+      wabaId: conversation.wabaId || null,
+      agent,
+      templateKey: outbound.templateKey,
+    });
+    if (!authorized) throw new Error("Assigned AI template is not available");
+    const resolved = resolveTemplateVariablesForAi({
+      assignedTemplate: authorized.action.serverConfig,
+      contact,
+      conversation,
+    });
+    if (!resolved.ok) {
+      return sendTextMessageForUser({
+        userId: workspaceId,
+        contactId: contact?._id || undefined,
+        to: conversation.phone,
+        text: resolved.message || fallbackReplyFor(agent, "noAnswer", agent?.guardrails?.fallbackMessage || "I need one more detail before I can send that."),
+        idempotencyKey,
+        sentBy: { kind: "system" },
+        source: "automation",
+        senderType: "automation",
+        triggeredByMessageId: inboundMessage.whatsappMessageId || null,
+      });
+    }
+    return sendTemplateMessageForUser({
+      userId: workspaceId,
+      contactId: contact?._id || undefined,
+      to: conversation.phone,
+      template: authorized.template,
+      languageCode: authorized.template.languageCode || authorized.template.language,
+      variables: resolved.variables,
+      idempotencyKey,
+      sentBy: { kind: "system" },
+      source: "automation",
+      senderType: "automation",
+      triggeredByMessageId: inboundMessage.whatsappMessageId || null,
+      aiAgentId: agent._id,
+      aiConversationId: aiConversation._id,
+      aiActionMetadata: { aiTemplateAction: { key: outbound.templateKey, kind: "template" } },
+    });
+  }
+  throw new Error("Unsupported AI outbound action");
 }
 
 async function findOrCreateWhatsappConversation({ workspaceId, agentId, contactId, conversation, now }) {
@@ -1708,38 +1953,25 @@ async function processInboundJob({
 
     await maintainLock();
     assertLockActive();
-    const interactiveOutbound =
-      guardrail.action === "reply" &&
-      toolExecution?.outbound?.type === "interactive_buttons"
-        ? toolExecution.outbound
-        : null;
-    const outbound = interactiveOutbound
-      ? await sendInteractiveButtonMessageForUser({
-          userId: workspaceObjectId,
-          contactId: contact?._id || undefined,
-          to: lockedConversation.phone,
-          text: interactiveOutbound.text || guardrail.reply,
-          buttons: interactiveOutbound.buttons || [],
-          idempotencyKey: outboundReplyIdempotencyKey,
-          sentBy: { kind: "system" },
-          source: "automation",
-          senderType: "automation",
-          triggeredByMessageId: inboundMessage.whatsappMessageId || null,
-          aiAgentId: agent._id,
-          aiConversationId: aiConversation._id,
-          buttonActions: interactiveOutbound.aiButtonActions || null,
-        })
-      : await sendTextMessageForUser({
-          userId: workspaceObjectId,
-          contactId: contact?._id || undefined,
-          to: lockedConversation.phone,
-          text: guardrail.reply,
-          idempotencyKey: outboundReplyIdempotencyKey,
-          sentBy: { kind: "system" },
-          source: "automation",
-          senderType: "automation",
-          triggeredByMessageId: inboundMessage.whatsappMessageId || null,
-        });
+    const shouldDispatchToolOutbound = Boolean(
+      toolExecution?.outbound &&
+      plannedToolCall?.name &&
+      guardrail.reason === plannedToolCall.name &&
+      guardrail.action === toolExecution.action
+    );
+    const outbound = await sendAiToolOutbound({
+      workspaceId: workspaceObjectId,
+      agent,
+      contact,
+      conversation: lockedConversation,
+      inboundMessage,
+      aiConversation,
+      toolExecution: shouldDispatchToolOutbound || guardrail.action === "reply" ? toolExecution : null,
+      guardrailReply: guardrail.reply,
+      idempotencyKey: outboundReplyIdempotencyKey,
+      executionKey: normalizedExecutionKey,
+      now: replyAt,
+    });
 
     await aiRuntimeRepository.createUsageLog({
       workspaceId: workspaceObjectId,

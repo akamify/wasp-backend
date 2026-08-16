@@ -25,6 +25,17 @@ function normalizeStringArray(values) {
   );
 }
 
+function normalizeSemanticKey(value, fallback = "") {
+  const source = String(value || fallback || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, "")
+    .replace(/[\s-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return source.slice(0, 80);
+}
+
 function normalizeKnowledgeSources(values) {
   return (Array.isArray(values) ? values : [])
     .map((source) => ({
@@ -38,13 +49,95 @@ function normalizeKnowledgeSources(values) {
     .slice(0, 25);
 }
 
+function normalizeAssignedFlows(config = {}) {
+  const seen = new Set();
+  return {
+    flows: (Array.isArray(config.flows) ? config.flows : [])
+      .map((flow) => {
+        const name = String(flow?.name || flow?.title || "").trim();
+        const key = normalizeSemanticKey(flow?.key, name || flow?.flowId);
+        if (!key || seen.has(key)) return null;
+        seen.add(key);
+        return {
+          key,
+          flowId: String(flow?.flowId || "").trim(),
+          name,
+          title: String(flow?.title || name || key).trim().slice(0, 20),
+          purpose: String(flow?.purpose || flow?.description || name || key).trim().slice(0, 300),
+          whenToUse: normalizeStringArray(flow?.whenToUse).slice(0, 8),
+        };
+      })
+      .filter((flow) => flow && mongoose.Types.ObjectId.isValid(flow.flowId))
+      .slice(0, 50),
+  };
+}
+
+function normalizeAssignedTemplates(config = {}) {
+  const seen = new Set();
+  return {
+    templates: (Array.isArray(config.templates) ? config.templates : [])
+      .map((template) => {
+        const name = String(template?.name || template?.title || "").trim();
+        const key = normalizeSemanticKey(template?.key, name || template?.templateId);
+        if (!key || seen.has(key)) return null;
+        seen.add(key);
+        return {
+          key,
+          templateId: String(template?.templateId || "").trim(),
+          name,
+          languageCode: String(template?.languageCode || template?.language || "").trim(),
+          title: String(template?.title || name || key).trim().slice(0, 40),
+          purpose: String(template?.purpose || name || key).trim().slice(0, 300),
+          allowedVariables: normalizeStringArray(template?.allowedVariables).slice(0, 30),
+        };
+      })
+      .filter((template) => template && mongoose.Types.ObjectId.isValid(template.templateId))
+      .slice(0, 50),
+  };
+}
+
+function normalizeSendButtonsConfig(config = {}) {
+  return {
+    defaultBody: String(config.defaultBody || "").trim().slice(0, 1024),
+    buttons: (Array.isArray(config.buttons) ? config.buttons : [])
+      .map((button) => ({
+        id: String(button?.id || button?.key || "").trim(),
+        title: String(button?.title || button?.id || button?.key || "").trim().slice(0, 20),
+        ...(button?.description ? { description: String(button.description).trim().slice(0, 120) } : {}),
+        ...(button?.flowId && mongoose.Types.ObjectId.isValid(String(button.flowId)) ? { flowId: String(button.flowId).trim() } : {}),
+        ...(button?.key ? { key: normalizeSemanticKey(button.key) } : {}),
+        ...(button?.kind ? { kind: String(button.kind).trim() } : {}),
+      }))
+      .filter((button) => button.id && button.title)
+      .slice(0, 30),
+  };
+}
+
+function normalizeToolConfig(tool) {
+  const config = tool?.config && typeof tool.config === "object" ? tool.config : {};
+  if (tool.type === "start_flow") return normalizeAssignedFlows(config);
+  if (tool.type === "send_template") return normalizeAssignedTemplates(config);
+  if (tool.type === "send_buttons") return normalizeSendButtonsConfig(config);
+  if (tool.type === "send_list") {
+    return {
+      defaultBody: String(config.defaultBody || "").trim().slice(0, 1024),
+      defaultTitle: String(config.defaultTitle || "").trim().slice(0, 60),
+      defaultButtonText: String(config.defaultButtonText || "View options").trim().slice(0, 20) || "View options",
+    };
+  }
+  return config;
+}
+
 function normalizeTools(values) {
   return (Array.isArray(values) ? values : [])
-    .map((tool) => ({
-      type: String(tool?.type || "").trim(),
-      enabled: tool?.enabled !== false,
-      config: tool?.config && typeof tool.config === "object" ? tool.config : {},
-    }))
+    .map((tool) => {
+      const normalized = {
+        type: String(tool?.type || "").trim(),
+        enabled: tool?.enabled !== false,
+      };
+      normalized.config = normalizeToolConfig(normalized.type ? { ...tool, type: normalized.type } : tool);
+      return normalized;
+    })
     .filter((tool) => tool.type)
     .slice(0, 20);
 }

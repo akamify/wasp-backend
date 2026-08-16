@@ -13,6 +13,63 @@ const knowledgeSourceSchema = Joi.object({
   metadata: Joi.object().unknown(true).default({}),
 });
 
+const assignedActionKeySchema = Joi.string()
+  .trim()
+  .lowercase()
+  .pattern(/^[a-z0-9][a-z0-9_-]{0,79}$/)
+  .required();
+
+function uniqueByKey(items, helpers) {
+  const seen = new Set();
+  for (const item of items || []) {
+    const key = String(item?.key || item?.id || "").trim().toLowerCase();
+    if (seen.has(key)) return helpers.error("any.invalid");
+    seen.add(key);
+  }
+  return items;
+}
+
+const assignedFlowConfigSchema = Joi.object({
+  flows: Joi.array()
+    .items(
+      Joi.object({
+        key: assignedActionKeySchema,
+        flowId: Joi.string().trim().hex().length(24).required(),
+        name: Joi.string().trim().max(120).allow("").default(""),
+        title: Joi.string().trim().max(20).allow("").default(""),
+        purpose: Joi.string().trim().max(300).allow("").default(""),
+        whenToUse: Joi.array().items(Joi.string().trim().max(160)).max(8).default([]),
+      }).unknown(false)
+    )
+    .max(50)
+    .custom(uniqueByKey, "unique assigned flow keys")
+    .default([]),
+}).unknown(false);
+
+const assignedTemplateConfigSchema = Joi.object({
+  templates: Joi.array()
+    .items(
+      Joi.object({
+        key: assignedActionKeySchema,
+        templateId: Joi.string().trim().hex().length(24).required(),
+        name: Joi.string().trim().max(512).allow("").default(""),
+        languageCode: Joi.string().trim().max(32).allow("").default(""),
+        title: Joi.string().trim().max(40).allow("").default(""),
+        purpose: Joi.string().trim().max(300).allow("").default(""),
+        allowedVariables: Joi.array().items(Joi.string().trim().max(80)).max(30).default([]),
+      }).unknown(false)
+    )
+    .max(50)
+    .custom(uniqueByKey, "unique assigned template keys")
+    .default([]),
+}).unknown(false);
+
+const sendListConfigSchema = Joi.object({
+  defaultBody: Joi.string().trim().max(1024).allow("").default(""),
+  defaultTitle: Joi.string().trim().max(60).allow("").default(""),
+  defaultButtonText: Joi.string().trim().max(20).allow("").default("View options"),
+}).unknown(false);
+
 const sendButtonsConfigSchema = Joi.object({
   defaultBody: Joi.string().trim().max(1024).allow("").default(""),
   buttons: Joi.array()
@@ -21,7 +78,9 @@ const sendButtonsConfigSchema = Joi.object({
         id: Joi.string().trim().min(1).max(256).required(),
         title: Joi.string().trim().min(1).max(20).required(),
         description: Joi.string().trim().max(120).allow("").optional(),
-        flowId: Joi.string().trim().hex().length(24).required(),
+        flowId: Joi.string().trim().hex().length(24).optional(),
+        key: Joi.string().trim().lowercase().pattern(/^[a-z0-9][a-z0-9_-]{0,79}$/).optional(),
+        kind: Joi.string().valid("flow", "template", "handover").optional(),
       }).unknown(false)
     )
     .max(30)
@@ -39,16 +98,31 @@ const sendButtonsConfigSchema = Joi.object({
 
 const toolSchema = Joi.object({
   type: Joi.string()
-    .valid("crm_lookup", "contact_update", "set_tag", "set_attribute", "api_request", "handover", "send_buttons")
+    .valid(
+      "crm_lookup",
+      "contact_update",
+      "set_tag",
+      "set_attribute",
+      "api_request",
+      "handover",
+      "send_buttons",
+      "start_flow",
+      "send_list",
+      "send_template"
+    )
     .required(),
   enabled: Joi.boolean().default(true),
-  config: Joi.when("type", {
-    is: "send_buttons",
-    then: sendButtonsConfigSchema.default({}),
+  config: Joi.alternatives().conditional("type", {
+    switch: [
+      { is: "send_buttons", then: sendButtonsConfigSchema.default({}) },
+      { is: "start_flow", then: assignedFlowConfigSchema.default({}) },
+      { is: "send_list", then: sendListConfigSchema.default({}) },
+      { is: "send_template", then: assignedTemplateConfigSchema.default({}) },
+    ],
     otherwise: Joi.object().unknown(true).default({}),
   }),
 }).messages({
-  "any.invalid": "send_buttons button ids must be unique",
+  "any.invalid": "AI tool semantic keys must be unique",
 });
 
 const guardrailsSchema = Joi.object({

@@ -236,6 +236,10 @@ async function findActivePublishedFlowForAiButton({ workspaceId, flowId }) {
     .lean();
 }
 
+async function findActivePublishedFlowForAiAction({ workspaceId, flowId }) {
+  return findActivePublishedFlowForAiButton({ workspaceId, flowId });
+}
+
 async function findWorkspaceById({ workspaceId }) {
   return Workspace.findOne({ _id: workspaceId }).select("_id name businessName");
 }
@@ -307,6 +311,7 @@ module.exports = {
   findFlowById,
   findOutboundMessageByWamid,
   findActivePublishedFlowForAiButton,
+  findActivePublishedFlowForAiAction,
   findWorkspaceById,
   findConversationInboundState,
   createFailedExpiryMessage,

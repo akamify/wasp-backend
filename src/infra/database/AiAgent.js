@@ -19,7 +19,18 @@ const AiAgentToolSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ["crm_lookup", "contact_update", "set_tag", "set_attribute", "api_request", "handover", "send_buttons"],
+      enum: [
+        "crm_lookup",
+        "contact_update",
+        "set_tag",
+        "set_attribute",
+        "api_request",
+        "handover",
+        "send_buttons",
+        "start_flow",
+        "send_list",
+        "send_template",
+      ],
       required: true,
     },
     enabled: { type: Boolean, default: true },
