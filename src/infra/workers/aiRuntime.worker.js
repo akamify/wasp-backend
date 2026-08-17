@@ -11,6 +11,41 @@ const {
 const LOCK_RECOVERY_DELAY_MS = Math.max(Number(process.env.AI_RUNTIME_LOCK_RECOVERY_DELAY_MS || 5000), 1000);
 const MAX_LOCK_RECOVERY_REQUEUES = Math.max(Number(process.env.AI_RUNTIME_LOCK_RECOVERY_REQUEUES || 3), 1);
 
+function isLockContentionError(error) {
+  return (
+    error?.code === "AI_CONVERSATION_LOCK_BUSY" ||
+    error?.code === "AI_CONVERSATION_LOCK_LOST"
+  );
+}
+
+async function requeueLockContentionJob(job, collisionRecoveryCount) {
+  const queue = getAiRuntimeQueue();
+  const recoveryCount = collisionRecoveryCount + 1;
+  const recoveryExecutionKey =
+    String(job?.data?.executionKey || "").trim() ||
+    String(job?.data?.messageId || "").trim() ||
+    String(job?.id || "").trim();
+  const delay = LOCK_RECOVERY_DELAY_MS * recoveryCount;
+  await queue.add(
+    "ai-runtime.process-inbound",
+    {
+      ...(job.data || {}),
+      collisionRecoveryCount: recoveryCount,
+    },
+    {
+      jobId: `ai-live-recovery:${recoveryExecutionKey}:${recoveryCount}`,
+      delay,
+    }
+  );
+  return {
+    success: true,
+    requeued: true,
+    reason: "lock_contention_recovery",
+    recoveryCount,
+    delay,
+  };
+}
+
 function startAiRuntimeWorker() {
   return createWorker(
     QUEUE_NAMES.AI_RUNTIME,
@@ -45,6 +80,10 @@ function startAiRuntimeWorker() {
         const maxAttempts = Math.max(Number(job?.opts?.attempts || 1), 1);
         const currentAttempt = Math.max(Number(job?.attemptsMade || 0) + 1, 1);
         const finalAttempt = currentAttempt >= maxAttempts;
+        const collisionRecoveryCount = Math.max(Number(job?.data?.collisionRecoveryCount || 0), 0);
+        if (isLockContentionError(error) && collisionRecoveryCount < MAX_LOCK_RECOVERY_REQUEUES) {
+          return requeueLockContentionJob(job, collisionRecoveryCount);
+        }
         const providerRateLimited =
           error?.code === "AI_PROVIDER_RATE_LIMITED" ||
           error?.reason === "provider_rate_limited";
@@ -60,35 +99,6 @@ function startAiRuntimeWorker() {
           throw new UnrecoverableError(error?.message || "AI runtime non-retryable failure");
         }
         if (isRetryableRuntimeError(error) && finalAttempt) {
-          const lockContention =
-            error?.code === "AI_CONVERSATION_LOCK_BUSY" ||
-            error?.code === "AI_CONVERSATION_LOCK_LOST";
-          const collisionRecoveryCount = Math.max(Number(job?.data?.collisionRecoveryCount || 0), 0);
-          if (lockContention && collisionRecoveryCount < MAX_LOCK_RECOVERY_REQUEUES) {
-            const queue = getAiRuntimeQueue();
-            const recoveryCount = collisionRecoveryCount + 1;
-            const recoveryExecutionKey =
-              String(job?.data?.executionKey || "").trim() ||
-              String(job?.data?.messageId || "").trim() ||
-              String(job?.id || "").trim();
-            await queue.add(
-              "ai-runtime.process-inbound",
-              {
-                ...(job.data || {}),
-                collisionRecoveryCount: recoveryCount,
-              },
-              {
-                jobId: `ai-live-recovery:${recoveryExecutionKey}:${recoveryCount}`,
-                delay: LOCK_RECOVERY_DELAY_MS,
-              }
-            );
-            return {
-              success: true,
-              requeued: true,
-              reason: "lock_contention_recovery",
-              recoveryCount,
-            };
-          }
           return aiLiveRuntimeService.handleRetryExhaustedJob({
             ...(job.data || {}),
             error,

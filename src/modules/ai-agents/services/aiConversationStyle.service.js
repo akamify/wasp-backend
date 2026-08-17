@@ -248,6 +248,7 @@ function normalizeReplyForPolicy({ reply, userMessage, style }) {
 
   let lines = normalizeLines(text);
   lines = rewriteFalseHumanClaims(lines, effectiveStyle.languageStyle);
+  lines = repairDanglingEnding(lines);
   lines = enforceSingleQuestion(lines);
 
   if (!hasQuestion(lines) && shouldAddFollowUpQuestion({ userMessage, style: effectiveStyle, lines })) {
@@ -256,6 +257,31 @@ function normalizeReplyForPolicy({ reply, userMessage, style }) {
 
   lines = limitLines(lines, effectiveStyle.responseLength);
   return lines.join("\n").trim();
+}
+
+function repairDanglingEnding(lines) {
+  if (!Array.isArray(lines) || !lines.length) return [];
+  const repaired = [...lines];
+  const last = String(repaired[repaired.length - 1] || "").trim();
+  if (!last) return repaired.filter(Boolean);
+
+  const danglingPattern =
+    /\b(in|for|with|about|on|at|from|to|of|including|like|such as|such|and|or|because|through|via)\s*$/i;
+
+  if (danglingPattern.test(last)) {
+    if (repaired.length > 1) {
+      repaired.pop();
+      return repaired.filter(Boolean);
+    }
+    repaired[0] = last.replace(danglingPattern, "").trim();
+  }
+
+  const finalLine = String(repaired[repaired.length - 1] || "").trim();
+  if (finalLine && !/[.!?]$/.test(finalLine) && finalLine.split(/\s+/).length >= 5) {
+    repaired[repaired.length - 1] = `${finalLine}.`;
+  }
+
+  return repaired.filter(Boolean);
 }
 
 function shouldAddFollowUpQuestion({ userMessage, style, lines }) {

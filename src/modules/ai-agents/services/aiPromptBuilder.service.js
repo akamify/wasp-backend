@@ -14,12 +14,11 @@ function contactText(contact) {
   if (!contact) return "No contact selected. This is a test conversation.";
   const attributes = asPlainAttributes(contact.attributes);
   delete attributes.ai_memory_profile;
-  const safeAttributes = JSON.stringify(attributes).replace(/\s+/g, " ").slice(0, 140);
+  const safeAttributes = JSON.stringify(attributes).replace(/\s+/g, " ").slice(0, 80);
   return [
     `Name: ${contact.name || "Unknown"}`,
-    `Phone: ${contact.phone || "Unknown"}`,
     `Company: ${contact.company || "Unknown"}`,
-    `Tags: ${(contact.tags || []).join(", ") || "none"}`.slice(0, 80),
+    `Tags: ${(contact.tags || []).join(", ") || "none"}`.slice(0, 50),
     safeAttributes && safeAttributes !== "{}" ? `Attributes: ${safeAttributes}` : "",
   ]
     .filter(Boolean)
@@ -33,8 +32,8 @@ function toolsText(agent) {
 function historyText(messages) {
   if (!messages.length) return "No previous messages.";
   return messages
-    .slice(-8)
-    .map((message) => `${message.role.toUpperCase()}: ${String(message.text || "").replace(/\s+/g, " ").slice(0, 160)}`)
+    .slice(-4)
+    .map((message) => `${message.role.toUpperCase()}: ${String(message.text || "").replace(/\s+/g, " ").slice(0, 120)}`)
     .join("\n");
 }
 
@@ -150,7 +149,7 @@ function buildRuntimePrompt({ agent, contact, conversationMessages, conversation
     toolsText(agent),
     "",
     "MEMORY:",
-    String(conversationSummary || "No summarized earlier memory.").replace(/\s+/g, " ").slice(0, 450),
+    String(conversationSummary || "No summarized earlier memory.").replace(/\s+/g, " ").slice(0, 220),
     "",
     "RECENT CHAT:",
     historyText(conversationMessages),
