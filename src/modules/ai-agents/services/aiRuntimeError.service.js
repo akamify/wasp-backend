@@ -54,17 +54,25 @@ function isRetryableMessage(message) {
   );
 }
 
+function extractStatusCode(error) {
+  const direct = Number(error?.statusCode || error?.status || error?.response?.status || 0);
+  if (direct) return direct;
+  const message = String(error?.message || "");
+  const match = message.match(/(?:^|\s)(\d{3})(?:\s|$)/);
+  return match ? Number(match[1]) : 0;
+}
+
 function isRetryableRuntimeError(error) {
   if (!error) return false;
   if (typeof error.retryable === "boolean") return error.retryable;
-  if (isRetryableStatus(error?.statusCode || error?.status || error?.response?.status)) return true;
+  if (isRetryableStatus(extractStatusCode(error))) return true;
   return isRetryableCode(error?.code) || isRetryableMessage(error?.message);
 }
 
 function isNonRetryableRuntimeError(error) {
   if (!error) return false;
   if (typeof error.retryable === "boolean") return !error.retryable;
-  const status = Number(error?.statusCode || error?.status || error?.response?.status || 0);
+  const status = extractStatusCode(error);
   if (status && !isRetryableStatus(status)) return true;
   return false;
 }
@@ -87,7 +95,7 @@ function normalizeProviderError(error, { provider = "gemini", model = null } = {
     return new AiRuntimeNonRetryableError(error.message || "AI provider request failed", base);
   }
 
-  const status = Number(error?.response?.status || 0);
+  const status = extractStatusCode(error);
   const timeoutLike =
     isRetryableCode(error?.code) &&
     ["ETIMEDOUT", "ECONNABORTED"].includes(String(error?.code || ""));
@@ -113,7 +121,7 @@ function normalizeProviderError(error, { provider = "gemini", model = null } = {
   }
   if (isRetryableStatus(status) || isRetryableCode(error?.code)) {
     return new AiRuntimeRetryableError("AI provider temporarily unavailable", {
-      code: "AI_PROVIDER_RETRYABLE",
+      code: status === 429 ? "AI_PROVIDER_RATE_LIMITED" : "AI_PROVIDER_RETRYABLE",
       statusCode: status || null,
       category: "provider",
       reason: status === 429 ? "provider_rate_limited" : "provider_unavailable",

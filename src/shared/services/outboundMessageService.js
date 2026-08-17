@@ -165,7 +165,19 @@ async function sendTemplateMessageForUser({
   flowSessionId,
   flowId,
   nodeId,
+  idempotencyKey,
+  aiAgentId,
+  aiConversationId,
+  aiActionMetadata,
 }) {
+  const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
+  if (normalizedIdempotencyKey) {
+    const existing = await Message.findOne({
+      workspaceId: userId,
+      idempotencyKey: normalizedIdempotencyKey,
+    });
+    if (existing) return { message: existing, apiResponse: null, idempotent: true };
+  }
   await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const resolvedLanguageCode = String(languageCode || template?.languageCode || template?.language || "").trim();
   const templateLanguageCode = String(template?.languageCode || template?.language || "").trim();
@@ -264,6 +276,9 @@ async function sendTemplateMessageForUser({
     ...(flowSessionId ? { flowSessionId } : {}),
     ...(flowId ? { flowId } : {}),
     ...(nodeId ? { nodeId } : {}),
+    ...(aiAgentId ? { aiAgentId } : {}),
+    ...(aiConversationId ? { aiConversationId } : {}),
+    idempotencyKey: normalizedIdempotencyKey,
     whatsappMessageId: waMessageId,
     status: "sent",
     statusTimestamps: { acceptedAt: now, sentAt: now },
@@ -298,6 +313,7 @@ async function sendTemplateMessageForUser({
         flowActionData: flowActionData || [],
       },
       components: sendComponents,
+      ...(aiActionMetadata && typeof aiActionMetadata === "object" ? aiActionMetadata : {}),
     },
   };
   const message = messageId
@@ -696,7 +712,19 @@ async function sendInteractiveListMessageForUser({
   flowSessionId,
   flowId,
   nodeId,
+  idempotencyKey,
+  aiAgentId,
+  aiConversationId,
+  aiActionMetadata,
 }) {
+  const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
+  if (normalizedIdempotencyKey) {
+    const existing = await Message.findOne({
+      workspaceId: userId,
+      idempotencyKey: normalizedIdempotencyKey,
+    });
+    if (existing) return { message: existing, apiResponse: null, idempotent: true };
+  }
   await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const creds = await getCredentialsForUser(userId);
   let apiResponse;
@@ -736,6 +764,9 @@ async function sendInteractiveListMessageForUser({
     ...(flowSessionId ? { flowSessionId } : {}),
     ...(flowId ? { flowId } : {}),
     ...(nodeId ? { nodeId } : {}),
+    ...(aiAgentId ? { aiAgentId } : {}),
+    ...(aiConversationId ? { aiConversationId } : {}),
+    idempotencyKey: normalizedIdempotencyKey,
     type: "interactive_list",
     whatsappMessageId,
     status: "sent",
@@ -759,6 +790,7 @@ async function sendInteractiveListMessageForUser({
         body: { text },
         action: { button: buttonText, sections },
       },
+      ...(aiActionMetadata && typeof aiActionMetadata === "object" ? aiActionMetadata : {}),
     },
     ...buildAttributionDefaults(),
   });
@@ -809,6 +841,7 @@ async function sendInteractiveButtonMessageForUser({
   to,
   text,
   buttons,
+  idempotencyKey,
   sentBy,
   source,
   senderType,
@@ -816,7 +849,25 @@ async function sendInteractiveButtonMessageForUser({
   flowSessionId,
   flowId,
   nodeId,
+  aiAgentId,
+  aiConversationId,
+  buttonActions,
 }) {
+  const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
+  if (normalizedIdempotencyKey) {
+    const existing = await Message.findOne({
+      workspaceId: userId,
+      idempotencyKey: normalizedIdempotencyKey,
+    });
+    if (existing) {
+      return {
+        message: existing,
+        apiResponse: null,
+        idempotent: true,
+        pendingDispatch: ["queued", "processing"].includes(String(existing.status || "").toLowerCase()),
+      };
+    }
+  }
   await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const normalizedButtons = (buttons || []).map((button) => ({
     id: String(button?.id || "").trim(),
@@ -838,7 +889,9 @@ async function sendInteractiveButtonMessageForUser({
   };
   const creds = await getCredentialsForUser(userId);
   const now = new Date();
-  const message = await Message.create({
+  let message;
+  try {
+    message = await Message.create({
     workspaceId: userId,
     wabaId: creds.wabaId,
     phoneNumberId: creds.phoneNumberId,
@@ -851,7 +904,11 @@ async function sendInteractiveButtonMessageForUser({
     ...(flowSessionId ? { flowSessionId } : {}),
     ...(flowId ? { flowId } : {}),
     ...(nodeId ? { nodeId } : {}),
+    ...(aiAgentId ? { aiAgentId } : {}),
+    ...(aiConversationId ? { aiConversationId } : {}),
+    idempotencyKey: normalizedIdempotencyKey,
     status: "processing",
+    providerDispatchStartedAt: now,
     sentBy: sentBy || { kind: "system" },
     type: "interactive_buttons",
     text,
@@ -862,9 +919,29 @@ async function sendInteractiveButtonMessageForUser({
       type: "button",
       buttons: normalizedButtons,
     },
-    payload,
+    payload: {
+      ...payload,
+      ...(buttonActions ? { aiButtonActions: buttonActions } : {}),
+    },
     ...buildAttributionDefaults(),
-  });
+    });
+  } catch (error) {
+    if (Number(error?.code) === 11000 && normalizedIdempotencyKey) {
+      const existing = await Message.findOne({
+        workspaceId: userId,
+        idempotencyKey: normalizedIdempotencyKey,
+      });
+      if (existing) {
+        return {
+          message: existing,
+          apiResponse: null,
+          idempotent: true,
+          pendingDispatch: ["queued", "processing"].includes(String(existing.status || "").toLowerCase()),
+        };
+      }
+    }
+    throw error;
+  }
 
   try {
     const apiResponse = await sendInteractiveButtonMessage({
@@ -893,6 +970,8 @@ async function sendInteractiveButtonMessageForUser({
           "statusTimestamps.sentAt": now,
           sentAt: now,
           sortAt: now,
+          providerDispatchCompletedAt: now,
+          error: null,
         },
         $unset: { error: 1 },
       },
@@ -938,6 +1017,7 @@ async function sendInteractiveButtonMessageForUser({
         $set: {
           status: "failed",
           "statusTimestamps.failedAt": new Date(),
+          providerDispatchCompletedAt: new Date(),
           error: failure,
         },
       }
@@ -967,6 +1047,10 @@ async function sendInteractiveButtonsMessage({
   flowId,
   nodeId,
   triggeredByMessageId,
+  idempotencyKey,
+  aiAgentId,
+  aiConversationId,
+  buttonActions,
   businessInitiated = false,
 }) {
   void conversationId;
@@ -1001,6 +1085,7 @@ async function sendInteractiveButtonsMessage({
       to,
       text: bodyText,
       buttons: normalizedButtons,
+      idempotencyKey,
       sentBy: { kind: "system" },
       source,
       senderType: source === "automation" ? "automation" : "business",
@@ -1008,6 +1093,9 @@ async function sendInteractiveButtonsMessage({
       flowSessionId,
       flowId,
       nodeId,
+      aiAgentId,
+      aiConversationId,
+      buttonActions,
     });
     return {
       ok: true,
@@ -1052,7 +1140,19 @@ async function sendMediaMessageForUser({
   flowSessionId,
   flowId,
   nodeId,
+  idempotencyKey,
+  aiAgentId,
+  aiConversationId,
+  aiActionMetadata,
 }) {
+  const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
+  if (normalizedIdempotencyKey) {
+    const existing = await Message.findOne({
+      workspaceId: userId,
+      idempotencyKey: normalizedIdempotencyKey,
+    });
+    if (existing) return { message: existing, apiResponse: null, idempotent: true };
+  }
   await assertDailyOutboundMessageAllowed({ workspaceId: userId });
   const normalizedType = String(type || "").toLowerCase();
   const creds = await getCredentialsForUser(userId);
@@ -1108,6 +1208,9 @@ async function sendMediaMessageForUser({
     ...(flowSessionId ? { flowSessionId } : {}),
     ...(flowId ? { flowId } : {}),
     ...(nodeId ? { nodeId } : {}),
+    ...(aiAgentId ? { aiAgentId } : {}),
+    ...(aiConversationId ? { aiConversationId } : {}),
+    idempotencyKey: normalizedIdempotencyKey,
     type: normalizedType,
     whatsappMessageId: waMessageId,
     status: "sent",
@@ -1119,7 +1222,10 @@ async function sendMediaMessageForUser({
     text: caption ? String(caption).slice(0, 160) : "",
     displayText: caption ? String(caption).slice(0, 160) : mediaPreview,
     previewText: caption ? String(caption).slice(0, 160) : mediaPreview,
-    payload,
+    payload: {
+      ...payload,
+      ...(aiActionMetadata && typeof aiActionMetadata === "object" ? aiActionMetadata : {}),
+    },
     ...buildAttributionDefaults(),
   });
 

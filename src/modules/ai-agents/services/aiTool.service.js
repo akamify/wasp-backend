@@ -8,6 +8,7 @@ const {
 } = require("@modules/ai-agents/services/aiRuntimeError.service");
 
 const DEFAULT_TOOL_TIMEOUT_MS = Math.max(Number(process.env.AI_TOOL_TIMEOUT_MS || 10000), 1000);
+const ACTION_KINDS = new Set(["flow", "template", "handover"]);
 
 function plannedTools(agent) {
   return (agent.tools || [])
@@ -64,7 +65,180 @@ const TOOL_SCHEMAS = {
       reason: Joi.string().trim().max(300).allow("").default("ai_tool_handover"),
     }),
   },
+  send_buttons: {
+    description: "Send approved WhatsApp reply buttons only when the customer needs to choose between assigned semantic actions.",
+    arguments: { text: "string", choices: "string[]" },
+    validator: Joi.object({
+      text: Joi.string().trim().max(1024).allow("").default(""),
+      choices: Joi.array().items(Joi.string().trim().min(1).max(80)).min(1).max(3).unique().optional(),
+      buttonIds: Joi.array().items(Joi.string().trim().min(1).max(256)).min(1).max(3).unique().optional(),
+    }).or("choices", "buttonIds"),
+  },
+  send_list: {
+    description: "Send an approved WhatsApp list only when more than three assigned choices are useful.",
+    arguments: { text: "string", title: "string", buttonText: "string", choices: "string[]" },
+    validator: Joi.object({
+      text: Joi.string().trim().max(1024).allow("").default(""),
+      title: Joi.string().trim().max(60).allow("").default("Options"),
+      buttonText: Joi.string().trim().max(20).allow("").default("View options"),
+      choices: Joi.array().items(Joi.string().trim().min(1).max(80)).min(1).max(10).unique().required(),
+    }),
+  },
+  start_flow: {
+    description: "Start one assigned automation flow when the customer clearly asks for that process.",
+    arguments: { flowKey: "string", reason: "string" },
+    validator: Joi.object({
+      flowKey: Joi.string().trim().min(1).max(80).required(),
+      reason: Joi.string().trim().max(240).allow("").default("ai_start_flow"),
+    }),
+  },
+  send_template: {
+    description: "Send one assigned approved WhatsApp template when specifically appropriate.",
+    arguments: { templateKey: "string", hints: "object" },
+    validator: Joi.object({
+      templateKey: Joi.string().trim().min(1).max(80).required(),
+      hints: Joi.object().pattern(Joi.string().trim().max(80), Joi.string().trim().max(300)).default({}),
+    }),
+  },
 };
+
+function normalizeKey(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function safeTitle(value, fallback) {
+  return String(value || fallback || "").trim().slice(0, 40);
+}
+
+function buildModelActionCatalog(agent) {
+  const tools = Array.isArray(agent?.tools) ? agent.tools : [];
+  const choices = [];
+  const flows = [];
+  const templates = [];
+  const seen = new Set();
+
+  const addChoice = (choice) => {
+    const key = normalizeKey(choice?.key);
+    const kind = String(choice?.kind || "").trim();
+    if (!key || !ACTION_KINDS.has(kind) || seen.has(key)) return;
+    seen.add(key);
+    choices.push({
+      key,
+      kind,
+      title: safeTitle(choice.title || choice.name, key),
+      purpose: String(choice.purpose || "").trim().slice(0, 300),
+      whenToUse: Array.isArray(choice.whenToUse)
+        ? choice.whenToUse.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
+        : [],
+    });
+  };
+
+  const flowTool = tools.find((tool) => tool?.enabled && tool.type === "start_flow");
+  for (const flow of Array.isArray(flowTool?.config?.flows) ? flowTool.config.flows : []) {
+    const key = normalizeKey(flow?.key);
+    if (!key) continue;
+    const item = {
+      key,
+      name: String(flow?.name || flow?.title || key).trim().slice(0, 120),
+      title: safeTitle(flow?.title || flow?.name, key),
+      purpose: String(flow?.purpose || flow?.description || "").trim().slice(0, 300),
+      whenToUse: Array.isArray(flow?.whenToUse)
+        ? flow.whenToUse.map((value) => String(value || "").trim()).filter(Boolean).slice(0, 8)
+        : [],
+    };
+    flows.push(item);
+    addChoice({ ...item, kind: "flow" });
+  }
+
+  const templateTool = tools.find((tool) => tool?.enabled && tool.type === "send_template");
+  for (const template of Array.isArray(templateTool?.config?.templates) ? templateTool.config.templates : []) {
+    const key = normalizeKey(template?.key);
+    if (!key) continue;
+    const item = {
+      key,
+      name: String(template?.name || template?.title || key).trim().slice(0, 120),
+      title: safeTitle(template?.title || template?.name, key),
+      purpose: String(template?.purpose || "").trim().slice(0, 300),
+    };
+    templates.push(item);
+    addChoice({ ...item, kind: "template" });
+  }
+
+  const buttonTool = tools.find((tool) => tool?.enabled && tool.type === "send_buttons");
+  for (const button of Array.isArray(buttonTool?.config?.buttons) ? buttonTool.config.buttons : []) {
+    const key = normalizeKey(button?.key || button?.id);
+    if (!key) continue;
+    if (button?.flowId) {
+      addChoice({
+        key,
+        kind: "flow",
+        title: safeTitle(button?.title, key),
+        purpose: String(button?.description || "").trim().slice(0, 300),
+      });
+    }
+  }
+
+  return { flows, templates, choices };
+}
+
+function resolveAssignedAction(agent, key) {
+  const requested = normalizeKey(key);
+  if (!requested) return null;
+  const tools = Array.isArray(agent?.tools) ? agent.tools : [];
+  const flowTool = tools.find((tool) => tool?.enabled && tool.type === "start_flow");
+  const flow = (Array.isArray(flowTool?.config?.flows) ? flowTool.config.flows : [])
+    .find((item) => normalizeKey(item?.key) === requested);
+  if (flow?.flowId) {
+    return {
+      key: requested,
+      kind: "flow",
+      title: safeTitle(flow.title || flow.name, requested).slice(0, 20),
+      purpose: String(flow.purpose || "").trim(),
+      serverConfig: flow,
+    };
+  }
+
+  const templateTool = tools.find((tool) => tool?.enabled && tool.type === "send_template");
+  const template = (Array.isArray(templateTool?.config?.templates) ? templateTool.config.templates : [])
+    .find((item) => normalizeKey(item?.key) === requested);
+  if (template?.templateId) {
+    return {
+      key: requested,
+      kind: "template",
+      title: safeTitle(template.title || template.name, requested).slice(0, 20),
+      purpose: String(template.purpose || "").trim(),
+      serverConfig: template,
+    };
+  }
+
+  const buttonTool = tools.find((tool) => tool?.enabled && tool.type === "send_buttons");
+  const legacy = (Array.isArray(buttonTool?.config?.buttons) ? buttonTool.config.buttons : [])
+    .find((item) => normalizeKey(item?.key || item?.id) === requested);
+  if (legacy?.flowId) {
+    return {
+      key: requested,
+      kind: "flow",
+      title: safeTitle(legacy.title, requested).slice(0, 20),
+      purpose: String(legacy.description || "").trim(),
+      serverConfig: {
+        key: requested,
+        flowId: legacy.flowId,
+        name: legacy.title || requested,
+        title: legacy.title || requested,
+        purpose: legacy.description || "",
+      },
+    };
+  }
+
+  return null;
+}
+
+function publicToolConfig(tool, agent) {
+  if (!["send_buttons", "send_list", "start_flow", "send_template"].includes(String(tool?.type || ""))) {
+    return {};
+  }
+  return { assignedActionCatalog: buildModelActionCatalog(agent) };
+}
 
 function toolDefinitions(agent) {
   return (agent.tools || [])
@@ -72,6 +246,7 @@ function toolDefinitions(agent) {
     .map((tool) => ({
       name: tool.type,
       ...TOOL_SCHEMAS[tool.type],
+      ...publicToolConfig(tool, agent),
     }));
 }
 
@@ -80,10 +255,16 @@ function toolInstruction(agent) {
   if (!definitions.length) return "No tools are enabled. Do not return tool calls.";
   return [
     "Tool mode is enabled.",
+    "Decision priority: answer with normal text when the customer's question can be answered from the provided knowledge/contact/runtime context.",
+    "Use start_flow only when the customer clearly wants an assigned process.",
+    "Use send_buttons or send_list only when the customer needs to choose between useful options; do not use them for every response.",
+    "For executable choices, use semantic keys from assignedActionCatalog. For purely conversational choices, you may provide short customer-facing option labels from the available knowledge.",
+    "Use send_template only when the assigned template is specifically appropriate.",
     "When a tool is needed, return ONLY compact JSON in this exact shape:",
     '{"type":"tool_call","name":"set_tag","arguments":{"tag":"hot_lead"},"confidence":0.8}',
     "Do not mix tool JSON with customer-facing text.",
     "Only call tools that are explicitly enabled.",
+    "Never output MongoDB IDs, Flow IDs, Template IDs, URLs, callback payloads, or Meta JSON.",
     "Available tool schemas:",
     JSON.stringify(definitions),
   ].join("\n");
@@ -305,6 +486,182 @@ async function executeHandover({ args }) {
   };
 }
 
+function selectedChoices(args) {
+  return (Array.isArray(args.choices) && args.choices.length ? args.choices : args.buttonIds || [])
+    .map((item) => {
+      const raw = String(item || "").trim();
+      return {
+        key: normalizeKey(raw),
+        title: raw,
+      };
+    })
+    .filter((item) => item.key || item.title);
+}
+
+function normalizeConversationChoiceId(value, fallback) {
+  return String(value || fallback || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+}
+
+function conversationalChoice(choice, index) {
+  const title = safeTitle(choice.title || choice.key, `Option ${index + 1}`);
+  const key = normalizeConversationChoiceId(choice.key || title, `option_${index + 1}`);
+  if (!key || !title) return null;
+  return {
+    key,
+    kind: "conversation",
+    title,
+    purpose: "",
+    serverConfig: null,
+  };
+}
+
+async function executeSendButtons({ agent, toolConfig, args }) {
+  void toolConfig;
+  const selected = [];
+  for (const choice of selectedChoices(args).slice(0, 3)) {
+    const action = resolveAssignedAction(agent, choice.key) || conversationalChoice(choice, selected.length);
+    if (action) selected.push(action);
+  }
+
+  if (!selected.length) {
+    return {
+      ok: false,
+      action: "reply",
+      publicReply: "No options are configured right now. Let me connect you with our team.",
+      error: "buttons_not_configured",
+    };
+  }
+
+  const text =
+    String(args.text || "").trim() ||
+    String(toolConfig?.config?.defaultBody || "").trim() ||
+    "Please choose an option.";
+  const buttons = selected.map((item) => ({
+    id: item.key,
+    title: item.title,
+  }));
+
+  return {
+    ok: true,
+    action: "reply",
+    publicReply: text,
+    result: {
+      buttonIds: buttons.map((button) => button.id),
+      count: buttons.length,
+    },
+    outbound: {
+      type: "interactive_buttons",
+      text,
+      buttons,
+      aiButtonActions: {
+        version: 1,
+        source: "ai_agent",
+        agentId: agent?._id ? String(agent._id) : null,
+        actions: selected.map((item) => ({
+          id: item.key,
+          key: item.key,
+          kind: item.kind,
+          title: item.title,
+        })),
+      },
+    },
+  };
+}
+
+async function executeSendList({ agent, toolConfig, args }) {
+  const selected = [];
+  for (const choice of selectedChoices(args).slice(0, 10)) {
+    const action = resolveAssignedAction(agent, choice.key) || conversationalChoice(choice, selected.length);
+    if (action) selected.push(action);
+  }
+  const text = String(args.text || "").trim() || String(toolConfig?.config?.defaultBody || "").trim() || "Please choose an option.";
+  const title = String(args.title || "").trim() || String(toolConfig?.config?.defaultTitle || "").trim() || "Options";
+  const buttonText = String(args.buttonText || "").trim() || String(toolConfig?.config?.defaultButtonText || "").trim() || "View options";
+  return {
+    ok: true,
+    action: "reply",
+    publicReply: text,
+    result: { choices: selected.map((item) => item.key), count: selected.length },
+    outbound: {
+      type: "interactive_list",
+      text,
+      buttonText: buttonText.slice(0, 20),
+      sections: [
+        {
+          title: title.slice(0, 60),
+          rows: selected.map((item) => ({
+            id: item.key,
+            title: item.title.slice(0, 24),
+            description: item.purpose ? item.purpose.slice(0, 72) : "",
+          })),
+        },
+      ],
+      aiListActions: {
+        version: 1,
+        source: "ai_agent",
+        agentId: agent?._id ? String(agent._id) : null,
+        actions: selected.map((item) => ({
+          id: item.key,
+          key: item.key,
+          kind: item.kind,
+          title: item.title,
+        })),
+      },
+    },
+  };
+}
+
+async function executeStartFlow({ agent, args }) {
+  const action = resolveAssignedAction(agent, args.flowKey);
+  if (!action || action.kind !== "flow") {
+    return {
+      ok: false,
+      action: "reply",
+      publicReply: "That automation is not configured right now. Let me connect you with our team.",
+      error: "flow_not_assigned",
+    };
+  }
+  return {
+    ok: true,
+    action: "reply",
+    publicReply: "I'll start that now.",
+    result: { flowKey: action.key },
+    outbound: {
+      type: "start_flow",
+      flowKey: action.key,
+      reason: args.reason || "ai_start_flow",
+    },
+  };
+}
+
+async function executeSendTemplate({ agent, args }) {
+  const action = resolveAssignedAction(agent, args.templateKey);
+  if (!action || action.kind !== "template") {
+    return {
+      ok: false,
+      action: "reply",
+      publicReply: "That template is not configured right now. Let me connect you with our team.",
+      error: "template_not_assigned",
+    };
+  }
+  return {
+    ok: true,
+    action: "reply",
+    publicReply: "I'll send that now.",
+    result: { templateKey: action.key },
+    outbound: {
+      type: "template",
+      templateKey: action.key,
+      hints: args.hints || {},
+    },
+  };
+}
+
 function timeoutForTool(toolConfig) {
   const configured = Number(toolConfig?.config?.timeoutMs || 0);
   return Math.max(configured || DEFAULT_TOOL_TIMEOUT_MS, 1000);
@@ -342,6 +699,10 @@ const TOOL_EXECUTORS = {
   set_attribute: executeSetAttribute,
   api_request: executeApiRequest,
   handover: executeHandover,
+  send_buttons: executeSendButtons,
+  send_list: executeSendList,
+  start_flow: executeStartFlow,
+  send_template: executeSendTemplate,
 };
 
 async function executeSingleTool({ workspaceId, agent, toolCall, context = {} }) {
@@ -394,6 +755,7 @@ async function executeSingleTool({ workspaceId, agent, toolCall, context = {} })
       action: execution?.action || "reply",
       publicReply: execution?.publicReply || "I completed that action.",
       result: execution?.result || null,
+      outbound: execution?.outbound || null,
       error: execution?.error || null,
     };
   } catch (error) {
@@ -433,6 +795,7 @@ async function executeRequestedTools({ workspaceId, agent, toolCalls = [], conte
     executed,
     publicReply: first?.publicReply || null,
     action: first?.action || "reply",
+    outbound: first?.outbound || null,
     ok: executed.every((item) => item.ok),
     note: executed.length ? "Tool execution completed." : "No tool execution requested.",
   };
@@ -443,5 +806,7 @@ module.exports = {
   toolDefinitions,
   toolInstruction,
   parseToolCall,
+  buildModelActionCatalog,
+  resolveAssignedAction,
   executeRequestedTools,
 };

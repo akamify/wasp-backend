@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
 const { Message } = require("@infra/database/Message");
+const { AiAgent } = require("@infra/database/AiAgent");
+const { Template } = require("@infra/database/Template");
 const {
   findTenantByPhoneNumberId,
 } = require("@shared/services/credentialsService");
@@ -8,6 +10,11 @@ const {
   resolveInboundContact,
 } = require("@shared/services/contactService");
 const flowInboundRepository = require("@modules/flows/repositories/flowInbound.repository");
+const flowSessionRepository = require("@modules/flows/repositories/flowSession.repository");
+const aiToolService = require("@modules/ai-agents/services/aiTool.service");
+const {
+  sendTemplateMessageForUser,
+} = require("@shared/services/outboundMessageService");
 const {
   findMatchingFlowVersion,
 } = require("@modules/flows/services/flowTrigger.service");
@@ -63,6 +70,244 @@ function serializeError(error) {
     name: String(error?.name || "Error"),
     message: String(error?.message || "Inbound message processing failed"),
   };
+}
+
+function aiButtonLog(reason, data = {}) {
+  flowLog("[FLOW_AI_BUTTON_RESOLUTION]", {
+    reason,
+    ...data,
+  });
+}
+
+function normalizeAiInteractiveActions(value, key) {
+  const actions = value?.payload?.[key] || null;
+  if (!actions || typeof actions !== "object") return null;
+  if (Number(actions.version || 1) !== 1) return null;
+  const items = Array.isArray(actions.actions) ? actions.actions : Array.isArray(actions.buttons) ? actions.buttons : [];
+  return { ...actions, actions: items };
+}
+
+function resolveAiTemplateVariables({ assignedTemplate, contact }) {
+  const allowed = Array.isArray(assignedTemplate?.allowedVariables)
+    ? assignedTemplate.allowedVariables.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  if (!allowed.length) return { ok: true, variables: [] };
+  const source = {
+    name: contact?.name || "",
+    phone: contact?.phone || "",
+    email: contact?.email || "",
+    company: contact?.company || "",
+  };
+  const variables = [];
+  const missing = [];
+  for (const key of allowed) {
+    const value = String(source[key] || "").trim();
+    if (!value) missing.push(key);
+    else variables.push(value);
+  }
+  if (missing.length) return { ok: false, missing };
+  return { ok: true, variables };
+}
+
+async function findAiInteractiveActionMatch({ workspaceId, inboundMessage }) {
+  const inboundType = String(inboundMessage?.type || "");
+  if (!["button_reply", "list_reply"].includes(inboundType)) return null;
+  const contextWamid = String(inboundMessage?.context?.id || "").trim();
+  const clickedId = String(
+    inboundType === "button_reply"
+      ? inboundMessage?.buttonReply?.id
+      : inboundMessage?.listReply?.id
+  ).trim();
+  if (!contextWamid || !clickedId) return null;
+
+  const origin = await flowSessionRepository.findOutboundMessageByWamid({
+    workspaceId,
+    wamid: contextWamid,
+  });
+  if (!origin) {
+    aiButtonLog("origin_not_found", { contextWamid });
+    return null;
+  }
+  const metadataKey = inboundType === "button_reply" ? "aiButtonActions" : "aiListActions";
+  const aiActions = normalizeAiInteractiveActions(origin, metadataKey);
+  if (!aiActions) return null;
+
+  const action = aiActions.actions.find(
+    (item) => String(item?.id || item?.key || "").trim() === clickedId
+  );
+  if (!action) {
+    aiButtonLog("button_not_configured", {
+      contextWamid,
+      clickedId,
+      originMessageId: String(origin._id || ""),
+    });
+    return null;
+  }
+
+  const agentId = String(aiActions.agentId || origin.aiAgentId || "").trim();
+  if (!mongoose.Types.ObjectId.isValid(agentId)) return null;
+  const agent = await AiAgent.findOne({
+    _id: agentId,
+    workspaceId,
+    deletedAt: null,
+    status: "active",
+  });
+  if (!agent) return null;
+
+  const assigned = aiToolService.resolveAssignedAction(agent, action.key || action.id);
+  const actionKind = String(action.kind || (action.action?.type === "start_flow" ? "flow" : "")).trim();
+  if (!assigned || (actionKind && String(assigned.kind) !== actionKind)) {
+    aiButtonLog("assigned_action_not_authorized", {
+      contextWamid,
+      clickedId,
+      key: action.key || action.id || null,
+      kind: actionKind || null,
+    });
+    return null;
+  }
+
+  if (assigned.kind === "flow") {
+    const flowId = String(assigned.serverConfig?.flowId || "").trim();
+    if (!mongoose.Types.ObjectId.isValid(flowId)) {
+      aiButtonLog("invalid_flow_id", { contextWamid, clickedId });
+      return null;
+    }
+
+    const flow = await flowSessionRepository.findActivePublishedFlowForAiAction({
+      workspaceId,
+      flowId,
+    });
+    const version = flow?.activeVersionId || null;
+    if (!flow || !version) {
+      aiButtonLog("flow_not_active_or_published", {
+        contextWamid,
+        clickedId,
+        flowId,
+      });
+      return null;
+    }
+
+    return {
+      type: "flow",
+      flow,
+      version,
+      origin,
+      action,
+      assigned,
+      agent,
+      contextWamid,
+      clickedId,
+    };
+  }
+
+  if (assigned.kind === "template") {
+    const template = await Template.findOne({
+      _id: assigned.serverConfig?.templateId,
+      workspaceId,
+      ...(origin.wabaId ? { wabaId: origin.wabaId } : {}),
+      status: "approved",
+      isActive: { $ne: false },
+      deletedAt: null,
+    });
+    if (!template) return null;
+    return {
+      type: "template",
+      template,
+      origin,
+      action,
+      assigned,
+      agent,
+      contextWamid,
+      clickedId,
+    };
+  }
+
+  aiButtonLog("unsupported_action_kind", {
+    contextWamid,
+    clickedId,
+    kind: assigned.kind,
+  });
+  return null;
+}
+
+async function startAiButtonFlow({
+  workspaceId,
+  contact,
+  match,
+  inboundMessage,
+  now,
+}) {
+  const session = await startSession({
+    workspaceId,
+    contactId: contact._id,
+    flow: match.flow,
+    version: match.version,
+    initialContext: {
+      aiButtonAction: {
+        buttonId: match.clickedId,
+        title: String(match.action?.title || inboundMessage?.buttonReply?.title || inboundMessage?.listReply?.title || "").trim(),
+        originMessageId: String(match.origin?._id || ""),
+        originWhatsappMessageId: match.contextWamid,
+      },
+    },
+    now,
+  });
+  const runtimeResult = await executeSession({
+    workspaceId,
+    sessionId: session._id,
+    inboundMessage,
+    businessInitiated: false,
+  });
+  return { session, runtimeResult };
+}
+
+async function executeAiInteractiveAction({
+  workspaceId,
+  contact,
+  match,
+  inboundMessage,
+  now,
+}) {
+  if (match.type === "flow") {
+    return startAiButtonFlow({ workspaceId, contact, match, inboundMessage, now });
+  }
+  if (match.type === "template") {
+    const resolved = resolveAiTemplateVariables({
+      assignedTemplate: match.assigned.serverConfig,
+      contact,
+    });
+    if (!resolved.ok) {
+      aiButtonLog("template_variables_missing", {
+        contextWamid: match.contextWamid,
+        clickedId: match.clickedId,
+        missing: resolved.missing || [],
+      });
+      return { failed: true, reason: "template_variables_missing" };
+    }
+    const result = await sendTemplateMessageForUser({
+      userId: workspaceId,
+      contactId: contact?._id || undefined,
+      to: contact.phone,
+      template: match.template,
+      languageCode: match.template.languageCode || match.template.language,
+      variables: resolved.variables,
+      idempotencyKey: `ai-click:${inboundMessage.whatsappMessageId}:${match.clickedId}`,
+      sentBy: { kind: "system" },
+      source: "automation",
+      senderType: "automation",
+      triggeredByMessageId: inboundMessage.whatsappMessageId || null,
+      aiAgentId: match.agent?._id || null,
+      aiActionMetadata: {
+        aiInteractiveClickAction: {
+          key: match.assigned.key,
+          kind: match.assigned.kind,
+          originWhatsappMessageId: match.contextWamid,
+        },
+      },
+    });
+    return { templateResult: result };
+  }
+  return { failed: true, reason: "unsupported_action_kind" };
 }
 
 async function persistInboundDisplayMessage({
@@ -362,6 +607,52 @@ async function processInboundMessage(normalizedMessage) {
           };
         }
       } else {
+        const aiActionMatch = await findAiInteractiveActionMatch({
+          workspaceId,
+          inboundMessage: normalizedMessage,
+        });
+        if (aiActionMatch) {
+          const actionResult = await executeAiInteractiveAction({
+            workspaceId,
+            contact,
+            match: aiActionMatch,
+            inboundMessage: normalizedMessage,
+            now,
+          });
+          if (aiActionMatch.type === "flow" && actionResult?.session) {
+            const { session, runtimeResult } = actionResult;
+            flowLog("[FLOW_AI_INTERACTIVE_FLOW_STARTED]", {
+              workspaceId: String(workspaceId),
+              contactId: String(contact._id),
+              sessionId: String(session._id),
+              flowId: String(aiActionMatch.flow._id),
+              originWhatsappMessageId: aiActionMatch.contextWamid,
+              actionKey: aiActionMatch.clickedId,
+            });
+            automationResult = {
+              status: "session_started",
+              sessionId: String(session._id),
+              flowId: String(aiActionMatch.flow._id),
+              flowVersionId: String(aiActionMatch.version._id),
+              runtimeStatus: runtimeResult.status,
+              source: "ai_interactive_action",
+            };
+          } else if (aiActionMatch.type === "template" && actionResult?.templateResult) {
+            automationResult = {
+              status: "ai_interactive_action_sent",
+              source: "ai_interactive_action",
+              actionKind: "template",
+            };
+          } else if (actionResult?.failed) {
+            automationResult = {
+              status: "ai_interactive_action_failed",
+              source: "ai_interactive_action",
+              actionKind: aiActionMatch.type,
+              reason: actionResult.reason || "action_failed",
+            };
+          }
+        }
+        if (automationResult.status === "no_trigger_match") {
         if (
           ["button_reply", "list_reply"].includes(
             String(normalizedMessage.type || "")
@@ -397,6 +688,7 @@ async function processInboundMessage(normalizedMessage) {
             flowVersionId: String(match.version._id),
             runtimeStatus: runtimeResult.status,
           };
+        }
         }
       }
     }
