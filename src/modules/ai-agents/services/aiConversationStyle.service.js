@@ -94,7 +94,8 @@ function inferResponseLength(text) {
   const detailIntent =
     /\b(how|why|explain|detail|details|process|strategy|benefit|pricing|services|steps|compare)\b/i.test(lower) ||
     /\b(kaise|kyu|kyun|samjhao|detail|process|pricing|service|services)\b/i.test(lower);
-  if (detailIntent || isBusinessInfoQuestion(value)) return words.length <= 12 ? "medium" : "detailed";
+  if (isBusinessInfoQuestion(value)) return words.length <= 6 ? "medium" : "detailed";
+  if (detailIntent) return words.length <= 12 ? "medium" : "detailed";
   if (words.length <= 4 || value.length <= 24) return "very_short";
   if (words.length <= 12) return "short";
   return "medium";
@@ -213,9 +214,11 @@ function buildReplyStyleGuide({ userMessage, contactName }) {
             : "Keep the reply concise: 1 to 2 short lines with only one useful next question unless the customer asks for detail."
           : responseLength === "medium"
             ? businessInfoQuestion
-              ? "Give a concise but complete answer. Do not cut the answer short just to force a follow-up question."
+              ? "Give a concise but complete answer in 3 to 5 short lines. Do not cut the answer short just to force a follow-up question."
               : "Give a concise explanation, keep it practical, and end with only one short useful follow-up question."
-            : "For a detailed business query, give a concise explanation, then short bullet points, then only one useful follow-up question.",
+            : businessInfoQuestion
+              ? "For business or service profile questions, give a complete answer first in 4 to 8 short lines or bullets. Add a follow-up only if it is genuinely useful."
+              : "For a detailed business query, give a concise explanation, then short bullet points, then only one useful follow-up question.",
     "Sound natural and conversational on WhatsApp, not robotic or overly formal.",
     "Never claim you are human, a person, or a team member. If the customer asks who you are, say you are the company's assistant or virtual assistant.",
     "Do not mention confidence scores, token limits, knowledge chunks, or internal retrieval.",
@@ -226,6 +229,7 @@ function buildReplyStyleGuide({ userMessage, contactName }) {
     languageStyle,
     responseLength,
     intent,
+    businessInfoQuestion,
     maxOutputTokens: maxOutputTokensForLength(responseLength),
     instructions,
   };
@@ -261,8 +265,8 @@ function shouldAddFollowUpQuestion({ userMessage, style, lines }) {
   const totalChars = (lines || []).join(" ").length;
 
   if (responseLength === "greeting") return true;
+  if (businessInfoQuestion) return false;
   if (["service_discovery", "pricing", "industry", "benefit", "qualification"].includes(intent)) return true;
-  if (businessInfoQuestion && totalChars >= 120) return false;
   if (responseLength === "very_short" && totalChars < 90) return true;
   return false;
 }
@@ -392,8 +396,8 @@ function limitLines(lines, responseLength) {
       : responseLength === "short"
         ? 3
       : responseLength === "medium"
-        ? 5
-        : 7;
+        ? 6
+        : 8;
   if (lines.length <= maxLines) return lines;
   return lines.slice(0, maxLines);
 }

@@ -422,14 +422,21 @@ async function generateResponse({
     Math.max(1200, Number(process.env.AI_PROVIDER_EFFECTIVE_INPUT_TOKEN_LIMIT || 2200))
   );
   const normalizedPrompt = clampPromptToTokenLimit(prompt, effectiveInputTokenLimit);
+  const styleOutputTarget = Number(style?.maxOutputTokens || limits.maxTokensPerReply || 1024) || 1024;
+  const businessInfoFloor = style?.businessInfoQuestion
+    ? Math.max(420, Math.min(styleOutputTarget, 720))
+    : 0;
   const normalizedAgent = {
     ...agent,
     runtimeLimits: {
       maxTokensPerReply: Math.max(
-        1,
-        Math.min(
-          Number(limits.maxTokensPerReply || 1024) || 1024,
-          Number(style?.maxOutputTokens || limits.maxTokensPerReply || 1024) || 1024
+        businessInfoFloor || 1,
+        Math.max(
+          Math.min(
+            Number(limits.maxTokensPerReply || 1024) || 1024,
+            styleOutputTarget
+          ),
+          businessInfoFloor
         )
       ),
     },

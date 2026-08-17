@@ -110,6 +110,7 @@ function buildRuntimePrompt({ agent, contact, conversationMessages, conversation
     "- Keep the reply concise, but do not cut off core business information into incomplete fragments.",
     "- For greetings or tiny one-word prompts, reply in 1 to 2 short lines only.",
     "- For short factual questions about the business, company profile, or services, you may use 2 to 4 short lines if needed to give a complete answer.",
+    "- If the customer asks what the business is, what it does, or which services it offers, answer clearly in 3 to 6 useful lines before asking anything else.",
     "- For detailed business queries, give a concise explanation, then short bullet points, then only one useful follow-up question.",
     "- Ask at most one useful next question in the whole reply, and only when it helps move the conversation forward.",
     "- If exact matching knowledge is missing but business profile or services context is available, give one short helpful answer from that context and then ask one clarification question instead of immediate handover.",
