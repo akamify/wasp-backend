@@ -11,7 +11,7 @@ function getAiRuntimeQueue() {
   if (_queue) return _queue;
   _queue = createQueue(name, {
     defaultJobOptions: {
-      attempts: Math.max(Number(process.env.AI_RUNTIME_JOB_ATTEMPTS || 5), 1),
+      attempts: Math.max(Number(process.env.AI_RUNTIME_JOB_ATTEMPTS || 3), 1),
       backoff: { type: "exponential", delay: Math.max(Number(process.env.AI_RUNTIME_JOB_BACKOFF_MS || 1500), 250) },
       removeOnComplete: 2000,
       removeOnFail: 3000,

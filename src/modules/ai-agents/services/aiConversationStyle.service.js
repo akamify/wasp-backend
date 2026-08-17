@@ -75,13 +75,26 @@ function isSimpleGreeting(text) {
 }
 
 function isBusinessInfoQuestion(text) {
+  return isCompanyProfileQuestion(text) || isServiceQuestion(text);
+}
+
+function isCompanyProfileQuestion(text) {
   const value = String(text || "").trim().toLowerCase();
   if (!value) return false;
   return (
     /\b(what is|who are you|about|business profile|company profile|profile)\b/.test(value) ||
-    /\b(services|service|what do you do|what do you offer)\b/.test(value) ||
+    /\b(what do you do)\b/.test(value) ||
     /\b(kya hai|kaun ho|kon ho|profile|business profile)\b/.test(value) ||
-    /\b(kya karte ho|konsi service|kon si service|services dete|service dete)\b/.test(value)
+    /\b(kya karte ho)\b/.test(value)
+  );
+}
+
+function isServiceQuestion(text) {
+  const value = String(text || "").trim().toLowerCase();
+  if (!value) return false;
+  return (
+    /\b(services|service|what do you offer|what services)\b/.test(value) ||
+    /\b(konsi service|kon si service|services dete|service dete|service provide|provide karte)\b/.test(value)
   );
 }
 
@@ -108,7 +121,10 @@ function detectConversationIntent(text) {
   if (/\b(price|pricing|cost|charge|charges|package|quote|budget)\b/.test(value) || /\b(price|pricing|budget|cost|charge|charges)\b/i.test(value) || /\b(price|pricing)\b/i.test(value) || /\b(price)\b/i.test(value) || /\b(kitna|price|pricing|budget|cost)\b/.test(value)) {
     return "pricing";
   }
-  if (/\b(service|services|offer|offering|provide|products)\b/.test(value) || /\b(service|services|dete|offer|provide|karte)\b/i.test(value)) {
+  if (isCompanyProfileQuestion(value)) {
+    return "business_profile";
+  }
+  if (isServiceQuestion(value) || /\b(service|services|offer|offering|provide|products)\b/.test(value) || /\b(service|services|dete|offer|provide|karte)\b/i.test(value)) {
     return "service_discovery";
   }
   if (/\b(profit|benefit|roi|result|results|grow|growth|advantage)\b/.test(value) || /\b(fayda|benefit|result|growth|profit)\b/i.test(value)) {
@@ -145,6 +161,7 @@ function shouldPreferClarificationOverHandover(text) {
   const intent = detectConversationIntent(value);
   return [
     "general",
+    "business_profile",
     "service_discovery",
     "industry",
     "benefit",
@@ -274,6 +291,14 @@ function repairDanglingEnding(lines) {
       return repaired.filter(Boolean);
     }
     repaired[0] = last.replace(danglingPattern, "").trim();
+  }
+
+  if (/[-:]\s*$/.test(last)) {
+    if (repaired.length > 1) {
+      repaired.pop();
+      return repaired.filter(Boolean);
+    }
+    repaired[0] = last.replace(/[-:]\s*$/, "").trim();
   }
 
   const finalLine = String(repaired[repaired.length - 1] || "").trim();
@@ -437,6 +462,8 @@ module.exports = {
   maxOutputTokensForLength,
   isSimpleGreeting,
   isBusinessInfoQuestion,
+  isCompanyProfileQuestion,
+  isServiceQuestion,
   buildGreetingReply,
   buildReplyStyleGuide,
   buildKnowledgeMissClarifier,

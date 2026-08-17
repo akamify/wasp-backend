@@ -9,7 +9,7 @@ const {
 } = require("@modules/ai-agents/services/aiRuntimeError.service");
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.AI_PROVIDER_TIMEOUT_MS || 30000);
-const DEFAULT_RETRIES = Number(process.env.AI_PROVIDER_RETRIES || 2);
+const DEFAULT_RETRIES = Number(process.env.AI_PROVIDER_RETRIES || 1);
 const DEFAULT_GEMINI_MODEL = aiProviderConfigService.DEFAULT_GEMINI_MODEL;
 let geminiClient = null;
 let geminiSdkInitLogged = false;
@@ -41,11 +41,13 @@ function clampPromptToTokenLimit(prompt, maxInputTokens) {
 
 function shrinkPromptForRetry(prompt, retryMaxTokens = 1800) {
   const text = String(prompt || "");
-  const maxChars = Math.max(200, Number(retryMaxTokens || 2500) * 4);
-  if (text.length <= maxChars) {
+  const targetTokens = Math.max(300, Number(retryMaxTokens || 1800));
+  const estimatedTokens = estimateTokens(text);
+  const maxChars = Math.max(1200, targetTokens * 4);
+  if (estimatedTokens <= targetTokens && text.length <= maxChars) {
     return { prompt: text, reduced: false };
   }
-  const headChars = Math.max(120, Math.floor(maxChars * 0.45));
+  const headChars = Math.max(200, Math.floor(maxChars * 0.42));
   const tailChars = Math.max(120, maxChars - headChars - 72);
   const reducedPrompt = `${text.slice(0, headChars)}\n\n[Context reduced for provider retry]\n\n${text.slice(-tailChars)}`;
   return { prompt: reducedPrompt, reduced: true };
@@ -205,7 +207,7 @@ async function generateGeminiInteractionResponse({
       throw new HttpError(500, "Gemini client could not be initialized");
     }
     const retryPrompt =
-      attempt > 1 ? shrinkPromptForRetry(prompt, 1800) : { prompt, reduced: false };
+      attempt > 1 ? shrinkPromptForRetry(prompt, 1400) : { prompt, reduced: false };
     logGeminiDebug("Gemini interactions attempt", {
       model,
       attempt,
@@ -310,7 +312,7 @@ async function generateGeminiResponse({
           }
           const retryPrompt =
             attempt > 1
-              ? shrinkPromptForRetry(prompt, 2500)
+              ? shrinkPromptForRetry(prompt, 1400)
               : { prompt, reduced: false };
           logGeminiDebug("Gemini generateContent attempt", {
             model,

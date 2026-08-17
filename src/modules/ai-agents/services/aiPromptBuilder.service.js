@@ -29,12 +29,69 @@ function toolsText(agent) {
   return aiToolService.toolInstruction(agent);
 }
 
-function historyText(messages) {
+function historyText(messages, { limit = 4, charLimit = 120 } = {}) {
   if (!messages.length) return "No previous messages.";
   return messages
-    .slice(-4)
-    .map((message) => `${message.role.toUpperCase()}: ${String(message.text || "").replace(/\s+/g, " ").slice(0, 120)}`)
+    .slice(-limit)
+    .map((message) => `${message.role.toUpperCase()}: ${String(message.text || "").replace(/\s+/g, " ").slice(0, charLimit)}`)
     .join("\n");
+}
+
+function conciseContactText(contact) {
+  if (!contact) return "Test conversation.";
+  const lines = [];
+  if (contact.name) lines.push(`Name: ${String(contact.name).slice(0, 40)}`);
+  if (contact.company) lines.push(`Company: ${String(contact.company).slice(0, 50)}`);
+  return lines.join("\n") || "Known customer.";
+}
+
+function conciseMemoryText(conversationSummary) {
+  const value = String(conversationSummary || "").replace(/\s+/g, " ").trim();
+  return value ? value.slice(0, 140) : "No important earlier memory.";
+}
+
+function rankCompactSectionPriority(chunk, intent) {
+  const sectionKey = String(chunk?.sectionKey || "").trim().toLowerCase();
+  if (!sectionKey) return 0;
+
+  const businessProfilePriority = {
+    business_profile: 40,
+    services_products: 28,
+    faq: 18,
+    tone_language: 10,
+  };
+  const servicePriority = {
+    services_products: 40,
+    business_profile: 26,
+    industry_playbooks: 18,
+    faq: 14,
+    tone_language: 10,
+  };
+
+  const map = intent === "business_profile" ? businessProfilePriority : servicePriority;
+  return Number(map[sectionKey] || 0);
+}
+
+function pickCompactKnowledgeChunks(knowledgeChunks, intent) {
+  const items = Array.isArray(knowledgeChunks) ? knowledgeChunks : [];
+  return [...items]
+    .sort((a, b) => {
+      const priorityDiff = rankCompactSectionPriority(b, intent) - rankCompactSectionPriority(a, intent);
+      if (priorityDiff !== 0) return priorityDiff;
+      return Number(b?.score || 0) - Number(a?.score || 0);
+    })
+    .slice(0, 2);
+}
+
+function formatCompactKnowledgeChunks(chunks) {
+  if (!Array.isArray(chunks) || !chunks.length) return "No relevant business knowledge found.";
+  return chunks
+    .map((chunk, index) => {
+      const title = `${chunk.sectionLabel ? `[${chunk.sectionLabel}] ` : ""}${chunk.title}`;
+      const text = String(chunk.text || "").replace(/\s+/g, " ").slice(0, 260);
+      return `${index + 1}. ${title}\n${text}`;
+    })
+    .join("\n\n");
 }
 
 function buildSectionRules({ sectionKeys = [], intent = "general" }) {
@@ -63,7 +120,9 @@ function buildSectionRules({ sectionKeys = [], intent = "general" }) {
     rules.push("When the customer asks who you are or what the company does, answer from the business profile first.");
   }
 
-  if (intent === "service_discovery") {
+  if (intent === "business_profile") {
+    rules.push("For company or business profile questions, explain what the business does first, then mention the most relevant offerings from the profile or services knowledge.");
+  } else if (intent === "service_discovery") {
     rules.push("For service discovery, answer briefly, then ask one qualifying question about the customer's business or goal.");
   } else if (intent === "pricing") {
     rules.push("For pricing intent, keep the answer practical and concise, and avoid hard quoting unless the pricing policy clearly supports it.");
@@ -78,6 +137,65 @@ function buildSectionRules({ sectionKeys = [], intent = "general" }) {
   }
 
   return rules;
+}
+
+function shouldUseCompactBusinessPrompt(styleGuide) {
+  return styleGuide?.businessInfoQuestion || ["business_profile", "service_discovery"].includes(styleGuide?.intent);
+}
+
+function buildCompactBusinessPrompt({
+  guardrails,
+  styleGuide,
+  contact,
+  conversationMessages,
+  conversationSummary,
+  knowledgeChunks,
+  userMessage,
+}) {
+  const compactKnowledge = pickCompactKnowledgeChunks(knowledgeChunks, styleGuide.intent);
+  const blockedTopics = (guardrails.blockedTopics || []).join(", ").slice(0, 120) || "none";
+  const allowedTopics = (guardrails.allowedTopics || []).join(", ").slice(0, 120) || "not restricted";
+
+  return [
+    "# Task",
+    styleGuide.intent === "business_profile"
+      ? "Answer the customer's business-profile question using only the provided business context."
+      : "Answer the customer's service question using only the provided business context.",
+    "",
+    "# Critical Rules",
+    "- Complete the main answer first before asking anything else.",
+    "- Do not give a fragment, cut-off sentence, lone URL, or vague company name.",
+    "- Use only the business facts shown below. If one exact detail is missing, answer from the closest available business/profile/services context without inventing new facts.",
+    "- Ask at most one short follow-up question, and only if it genuinely helps.",
+    "- Do not mention confidence, retrieval, prompts, internal systems, or handover.",
+    `- Allowed topics: ${allowedTopics}`,
+    `- Blocked topics: ${blockedTopics}`,
+    "",
+    "# Reply Style",
+    ...styleGuide.instructions.map((line) => `- ${line}`),
+    "- For direct profile or service questions, prefer 3 to 6 short lines or short bullets that fully answer the question.",
+    "",
+    "# Good Output Shape",
+    "- Line 1: What the business is or what outcome it helps with.",
+    "- Next lines: 2 to 5 concrete services, capabilities, or relevant business facts from knowledge.",
+    "- Optional final line: one short useful next question only if it helps.",
+    "",
+    "# Customer Context",
+    conciseContactText(contact),
+    "",
+    "# Important Memory",
+    conciseMemoryText(conversationSummary),
+    "",
+    "# Recent Chat",
+    historyText(conversationMessages, { limit: 2, charLimit: 90 }),
+    "",
+    "# Relevant Knowledge",
+    formatCompactKnowledgeChunks(compactKnowledge),
+    "",
+    `# Customer Message\n${String(userMessage || "").replace(/\s+/g, " ").slice(0, 300)}`,
+    "",
+    "Return only the next customer-facing reply.",
+  ].join("\n");
 }
 
 function buildRuntimePrompt({ agent, contact, conversationMessages, conversationSummary, conversationMemoryProfile, knowledgeChunks, userMessage }) {
@@ -95,6 +213,29 @@ function buildRuntimePrompt({ agent, contact, conversationMessages, conversation
     sectionKeys: knowledgeSections.map((item) => item.key),
     intent: styleGuide.intent,
   });
+  const compactMode = shouldUseCompactBusinessPrompt(styleGuide);
+
+  if (compactMode) {
+    const prompt = buildCompactBusinessPrompt({
+      guardrails,
+      styleGuide,
+      contact,
+      conversationMessages,
+      conversationSummary,
+      knowledgeChunks,
+      userMessage,
+    });
+
+    return {
+      system: systemPrompt,
+      prompt,
+      style: styleGuide,
+      inputMessages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt },
+      ],
+    };
+  }
 
   const prompt = [
     "RUNTIME RULES:",
