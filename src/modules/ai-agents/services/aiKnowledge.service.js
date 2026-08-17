@@ -27,7 +27,7 @@ function chunkText(text, size = MAX_CHUNK_CHARS) {
 function buildKnowledgeChunks(agent) {
   const sources = Array.isArray(agent?.knowledgeSources) ? agent.knowledgeSources : [];
   return sources.flatMap((source, sourceIndex) => {
-    const content = [source.title, source.content, source.url].filter(Boolean).join("\n");
+    const content = [source.title, source.content].filter(Boolean).join("\n\n");
     return chunkText(content).map((text, chunkIndex) => ({
       id: `${source._id || sourceIndex}:${chunkIndex}`,
       sourceId: source._id ? String(source._id) : null,
@@ -232,12 +232,11 @@ async function getKnowledgeMissFallbackChunks({ workspaceId, agentId, agent, lim
 function formatKnowledgeChunks(chunks) {
   if (!Array.isArray(chunks) || !chunks.length) return "No relevant knowledge found for this message.";
   return chunks
-    .slice(0, 4)
+    .slice(0, 3)
     .map((chunk, index) => {
       const lines = [
         `${index + 1}. ${chunk.sectionLabel ? `[${chunk.sectionLabel}] ` : ""}${chunk.title}`,
-        chunk.url ? `Ref: ${String(chunk.url).slice(0, 120)}` : "",
-        String(chunk.text || "").replace(/\s+/g, " ").slice(0, 220),
+        String(chunk.text || "").replace(/\s+/g, " ").slice(0, 360),
       ].filter(Boolean);
       return lines.join("\n");
     })

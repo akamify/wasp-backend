@@ -156,15 +156,15 @@ function maxOutputTokensForLength(length) {
     case "greeting":
       return 80;
     case "very_short":
-      return 140;
+      return 180;
     case "short":
-      return 220;
+      return 280;
     case "medium":
-      return 360;
+      return 480;
     case "detailed":
-      return 520;
+      return 720;
     default:
-      return 220;
+      return 280;
   }
 }
 
@@ -195,6 +195,7 @@ function buildReplyStyleGuide({ userMessage, contactName }) {
   const languageStyle = inferLanguageStyle(userMessage);
   const responseLength = inferResponseLength(userMessage);
   const intent = detectConversationIntent(userMessage);
+  const businessInfoQuestion = isBusinessInfoQuestion(userMessage);
   const name = firstName(contactName);
   const instructions = [
     languageStyle === "hindi"
@@ -207,9 +208,13 @@ function buildReplyStyleGuide({ userMessage, contactName }) {
       : responseLength === "very_short"
         ? "The customer message is short, so keep the reply very short: 1 to 2 compact lines with only one useful next question."
         : responseLength === "short"
-          ? "Keep the reply concise: 1 to 2 short lines with only one useful next question unless the customer asks for detail."
+          ? businessInfoQuestion
+            ? "Keep the reply concise but complete. For direct business or service questions, finish the answer first and add a follow-up only if it genuinely helps."
+            : "Keep the reply concise: 1 to 2 short lines with only one useful next question unless the customer asks for detail."
           : responseLength === "medium"
-            ? "Give a concise explanation, keep it practical, and end with only one short useful follow-up question."
+            ? businessInfoQuestion
+              ? "Give a concise but complete answer. Do not cut the answer short just to force a follow-up question."
+              : "Give a concise explanation, keep it practical, and end with only one short useful follow-up question."
             : "For a detailed business query, give a concise explanation, then short bullet points, then only one useful follow-up question.",
     "Sound natural and conversational on WhatsApp, not robotic or overly formal.",
     "Never claim you are human, a person, or a team member. If the customer asks who you are, say you are the company's assistant or virtual assistant.",
@@ -241,12 +246,25 @@ function normalizeReplyForPolicy({ reply, userMessage, style }) {
   lines = rewriteFalseHumanClaims(lines, effectiveStyle.languageStyle);
   lines = enforceSingleQuestion(lines);
 
-  if (!hasQuestion(lines)) {
+  if (!hasQuestion(lines) && shouldAddFollowUpQuestion({ userMessage, style: effectiveStyle, lines })) {
     lines.push(defaultFollowUpQuestion(effectiveStyle));
   }
 
   lines = limitLines(lines, effectiveStyle.responseLength);
   return lines.join("\n").trim();
+}
+
+function shouldAddFollowUpQuestion({ userMessage, style, lines }) {
+  const intent = style?.intent || "general";
+  const responseLength = style?.responseLength || "short";
+  const businessInfoQuestion = isBusinessInfoQuestion(userMessage);
+  const totalChars = (lines || []).join(" ").length;
+
+  if (responseLength === "greeting") return true;
+  if (["service_discovery", "pricing", "industry", "benefit", "qualification"].includes(intent)) return true;
+  if (businessInfoQuestion && totalChars >= 120) return false;
+  if (responseLength === "very_short" && totalChars < 90) return true;
+  return false;
 }
 
 function normalizeLines(text) {
@@ -369,15 +387,15 @@ function buildKnowledgeMissClarifier({ userMessage, style }) {
 
 function limitLines(lines, responseLength) {
   const maxLines =
-    responseLength === "greeting" || responseLength === "very_short" || responseLength === "short"
+    responseLength === "greeting" || responseLength === "very_short"
       ? 2
+      : responseLength === "short"
+        ? 3
       : responseLength === "medium"
-        ? 4
-        : 6;
+        ? 5
+        : 7;
   if (lines.length <= maxLines) return lines;
-  const head = lines.slice(0, Math.max(1, maxLines - 1));
-  const tail = lines[lines.length - 1];
-  return [...head, tail];
+  return lines.slice(0, maxLines);
 }
 
 module.exports = {
