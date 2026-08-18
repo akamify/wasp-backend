@@ -9,7 +9,8 @@ const {
 } = require("@modules/ai-agents/services/aiRuntimeError.service");
 
 const LOCK_RECOVERY_DELAY_MS = Math.max(Number(process.env.AI_RUNTIME_LOCK_RECOVERY_DELAY_MS || 5000), 1000);
-const MAX_LOCK_RECOVERY_REQUEUES = Math.max(Number(process.env.AI_RUNTIME_LOCK_RECOVERY_REQUEUES || 3), 1);
+const LOCK_RECOVERY_BUFFER_MS = Math.max(Number(process.env.AI_RUNTIME_LOCK_RECOVERY_BUFFER_MS || 1500), 250);
+const MAX_LOCK_RECOVERY_REQUEUES = Math.max(Number(process.env.AI_RUNTIME_LOCK_RECOVERY_REQUEUES || 5), 1);
 
 function isLockContentionError(error) {
   return (
@@ -18,14 +19,28 @@ function isLockContentionError(error) {
   );
 }
 
-async function requeueLockContentionJob(job, collisionRecoveryCount) {
+function computeLockRecoveryDelay(error, collisionRecoveryCount) {
+  const recoveryCount = collisionRecoveryCount + 1;
+  const fallbackDelay = LOCK_RECOVERY_DELAY_MS * recoveryCount;
+  const ttlDelay = Number(error?.details?.lockTtlMs || 0);
+  if (Number.isFinite(ttlDelay) && ttlDelay > 0) {
+    return Math.max(ttlDelay + LOCK_RECOVERY_BUFFER_MS, fallbackDelay);
+  }
+  const lockUntilRaw = error?.details?.lockUntil;
+  const lockUntilMs = lockUntilRaw ? new Date(lockUntilRaw).getTime() : 0;
+  if (Number.isFinite(lockUntilMs) && lockUntilMs > Date.now()) {
+    return Math.max(lockUntilMs - Date.now() + LOCK_RECOVERY_BUFFER_MS, fallbackDelay);
+  }
+  return fallbackDelay;
+}
+
+async function requeueLockContentionJobWithDelay(job, collisionRecoveryCount, delay) {
   const queue = getAiRuntimeQueue();
   const recoveryCount = collisionRecoveryCount + 1;
   const recoveryExecutionKey =
     String(job?.data?.executionKey || "").trim() ||
     String(job?.data?.messageId || "").trim() ||
     String(job?.id || "").trim();
-  const delay = LOCK_RECOVERY_DELAY_MS * recoveryCount;
   await queue.add(
     "ai-runtime.process-inbound",
     {
@@ -37,6 +52,15 @@ async function requeueLockContentionJob(job, collisionRecoveryCount) {
       delay,
     }
   );
+  console.info("[ai-runtime-worker] lock contention requeued", {
+    jobId: String(job?.id || ""),
+    workspaceId: job?.data?.workspaceId || null,
+    conversationId: job?.data?.conversationId || null,
+    messageId: job?.data?.messageId || null,
+    executionKey: job?.data?.executionKey || null,
+    recoveryCount,
+    delay,
+  });
   return {
     success: true,
     requeued: true,
@@ -82,7 +106,8 @@ function startAiRuntimeWorker() {
         const finalAttempt = currentAttempt >= maxAttempts;
         const collisionRecoveryCount = Math.max(Number(job?.data?.collisionRecoveryCount || 0), 0);
         if (isLockContentionError(error) && collisionRecoveryCount < MAX_LOCK_RECOVERY_REQUEUES) {
-          return requeueLockContentionJob(job, collisionRecoveryCount);
+          const delay = computeLockRecoveryDelay(error, collisionRecoveryCount);
+          return requeueLockContentionJobWithDelay(job, collisionRecoveryCount, delay);
         }
         const providerRateLimited =
           error?.code === "AI_PROVIDER_RATE_LIMITED" ||
