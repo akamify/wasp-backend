@@ -5,7 +5,6 @@ let _queue;
 let _events;
 let _scheduler;
 
-
 function getCampaignQueue() {
     if (_queue) return _queue;
     _queue = createQueue(QUEUE_NAMES.CAMPAIGN, {
@@ -18,6 +17,7 @@ function getCampaignQueue() {
     });
     return _queue;
 }
+
 
 function getCampaignQueueEvents() {
     if (_events) return _events;
