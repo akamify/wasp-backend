@@ -65,12 +65,12 @@ function resolveThinkingConfig(model, style = null) {
   const modelName = String(model || "").trim().toLowerCase();
   if (!modelName.startsWith("gemini-3")) return null;
   if (style?.responseLength === "greeting" || style?.responseLength === "very_short") {
-    return { thinkingLevel: "low" };
+    return { thinkingLevel: "minimal" };
   }
   if (style?.businessInfoQuestion || (Array.isArray(style?.requestedKnowledgeSections) && style.requestedKnowledgeSections.length)) {
-    return { thinkingLevel: "low" };
+    return { thinkingLevel: "minimal" };
   }
-  return { thinkingLevel: "low" };
+  return { thinkingLevel: "minimal" };
 }
 
 function getGeminiApiKey() {
@@ -217,7 +217,7 @@ function shouldRepairBusinessReply({ reply, style, finishReason }) {
 }
 
 function buildBusinessReplyRepairPrompt({ originalPrompt, draftReply, style }) {
-  const reducedOriginalPrompt = shrinkPromptForRetry(originalPrompt, 1200).prompt;
+  const reducedOriginalPrompt = shrinkPromptForRetry(originalPrompt, 700).prompt;
   const requestedSections = Array.isArray(style?.requestedKnowledgeSections)
     ? style.requestedKnowledgeSections
     : [];
@@ -227,7 +227,7 @@ function buildBusinessReplyRepairPrompt({ originalPrompt, draftReply, style }) {
     reducedOriginalPrompt,
     "",
     "# Previous Draft",
-    String(draftReply || "").trim() || "No draft available.",
+    String(draftReply || "").trim().slice(0, 120) || "No draft available.",
     "",
     "# Fix Required",
     `- Rewrite the next reply from scratch and fully answer all asked areas: ${askedAreas}.`,
@@ -383,6 +383,7 @@ async function generateGeminiResponse({
   systemInstruction = "",
   managedFileSearch = null,
   thinkingConfig = null,
+  style = null,
 }) {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
@@ -392,6 +393,7 @@ async function generateGeminiResponse({
     });
   }
   const { model } = await aiProviderConfigService.resolveGeminiModel(agent.modelName || DEFAULT_GEMINI_MODEL, { allowFallback: true });
+  const effectiveThinkingConfig = thinkingConfig || resolveThinkingConfig(model, style);
   await aiProviderCircuitBreakerService.beforeProviderRequest({
     workspaceId: workspaceId ? String(workspaceId) : "global",
     provider: "gemini",
@@ -406,7 +408,7 @@ async function generateGeminiResponse({
           prompt,
           systemInstruction,
           managedFileSearch,
-          thinkingConfig,
+          thinkingConfig: effectiveThinkingConfig,
         })
       : withRetry(async (attempt) => {
           const client = getGeminiClient();
@@ -425,7 +427,7 @@ async function generateGeminiResponse({
             reducedPrompt: retryPrompt.reduced,
             workspaceId: workspaceId ? String(workspaceId) : null,
             agentId: agent?._id ? String(agent._id) : agent?.id ? String(agent.id) : null,
-            thinkingLevel: thinkingConfig?.thinkingLevel || null,
+            thinkingLevel: effectiveThinkingConfig?.thinkingLevel || null,
           });
           const responseData = await Promise.race([
             client.models.generateContent({
@@ -434,10 +436,10 @@ async function generateGeminiResponse({
               config: {
                 systemInstruction: sanitizeProviderText(systemInstruction) || undefined,
                 maxOutputTokens: resolveMaxOutputTokens(agent, 600),
-                ...(thinkingConfig
+                ...(effectiveThinkingConfig
                   ? {
                       thinkingConfig: {
-                        thinkingLevel: thinkingConfig.thinkingLevel,
+                        thinkingLevel: effectiveThinkingConfig.thinkingLevel,
                       },
                     }
                   : {}),
@@ -571,6 +573,7 @@ async function generateResponse({
     systemInstruction: system,
     managedFileSearch,
     thinkingConfig,
+    style,
   })
     .then(async (initialResult) => {
       const attachSharedRaw = (result, extraRaw = {}) => ({
@@ -580,7 +583,7 @@ async function generateResponse({
           promptTruncated: normalizedPrompt.truncated,
           promptLimitTokens: effectiveInputTokenLimit,
           replyStyle: style || null,
-          thinkingLevel: thinkingConfig?.thinkingLevel || null,
+          thinkingLevel: thinkingConfig?.thinkingLevel || resolveThinkingConfig(initialResult.model, style)?.thinkingLevel || null,
           ...extraRaw,
         },
       });
@@ -607,10 +610,11 @@ async function generateResponse({
         const repairedResult = await generateGeminiResponse({
           workspaceId,
           agent: normalizedAgent,
-          prompt: repairPrompt,
+          prompt: shrinkPromptForRetry(repairPrompt, 850).prompt,
           systemInstruction: system,
           managedFileSearch,
           thinkingConfig,
+          style,
         });
         return attachSharedRaw(repairedResult, {
           repairedIncompleteReply: true,
