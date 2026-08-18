@@ -1,5 +1,6 @@
 const aiKnowledgeRepository = require("@modules/ai-agents/repositories/aiKnowledge.repository");
 const aiEmbeddingService = require("@modules/ai-agents/services/aiEmbedding.service");
+const aiConversationStyleService = require("@modules/ai-agents/services/aiConversationStyle.service");
 
 const MAX_CHUNK_CHARS = 900;
 const MAX_SOURCE_CHUNKS = 8;
@@ -115,6 +116,68 @@ function normalizeDbChunk(chunk, score = 0) {
   };
 }
 
+function trimTextAtBoundary(text, maxChars = 360) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.length <= maxChars) return normalized;
+  const slice = normalized.slice(0, maxChars);
+  const punctuationIndex = Math.max(
+    slice.lastIndexOf(". "),
+    slice.lastIndexOf("? "),
+    slice.lastIndexOf("! "),
+    slice.lastIndexOf("; "),
+    slice.lastIndexOf(": ")
+  );
+  if (punctuationIndex >= Math.floor(maxChars * 0.45)) {
+    return slice.slice(0, punctuationIndex + 1).trim();
+  }
+  const spaceIndex = slice.lastIndexOf(" ");
+  return (spaceIndex >= Math.floor(maxChars * 0.6) ? slice.slice(0, spaceIndex) : slice).trim();
+}
+
+function sectionCoverageScore(chunk, requestedSections = []) {
+  const sectionKey = String(chunk.sectionKey || chunk.metadata?.sectionKey || "").trim().toLowerCase();
+  if (!sectionKey) return 0;
+  const index = requestedSections.findIndex((item) => item === sectionKey);
+  if (index === -1) return 0;
+  return Math.max(1, requestedSections.length - index) * 1000;
+}
+
+function ensureIntentCoverage({ ranked, allChunks, query, limit = 5 }) {
+  const requestedSections = aiConversationStyleService.requestedKnowledgeSectionsForQuery(query);
+  if (!requestedSections.length) {
+    return (Array.isArray(ranked) ? ranked : []).slice(0, limit);
+  }
+
+  const pool = Array.isArray(allChunks) ? allChunks : [];
+  const rankedList = Array.isArray(ranked) ? ranked : [];
+  const selected = [];
+  const seen = new Set();
+  const pushChunk = (chunk) => {
+    const key = String(chunk?.chunkId || chunk?.id || "");
+    if (!chunk || !key || seen.has(key)) return;
+    seen.add(key);
+    selected.push(chunk);
+  };
+
+  for (const sectionKey of requestedSections) {
+    const bestSectionChunk = [...pool]
+      .filter((chunk) => String(chunk.sectionKey || "").trim().toLowerCase() === sectionKey)
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0];
+    pushChunk(bestSectionChunk);
+  }
+
+  rankedList.forEach(pushChunk);
+
+  const sorted = selected
+    .sort((a, b) => {
+      const coverageDiff = sectionCoverageScore(b, requestedSections) - sectionCoverageScore(a, requestedSections);
+      if (coverageDiff !== 0) return coverageDiff;
+      return Number(b.score || 0) - Number(a.score || 0);
+    });
+
+  return sorted.slice(0, Math.max(limit, requestedSections.length));
+}
+
 function searchLegacyKnowledge({ agent, query, limit = 5 }) {
   const chunks = buildKnowledgeChunks(agent);
   const queryTokens = tokenize(query);
@@ -124,7 +187,14 @@ function searchLegacyKnowledge({ agent, query, limit = 5 }) {
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map(normalizeLegacyChunk);
-  return ranked;
+  const normalizedPool = chunks
+    .map((chunk) => normalizeLegacyChunk({ ...chunk, score: scoreChunk(chunk, queryTokens, query) }));
+  return ensureIntentCoverage({
+    ranked,
+    allChunks: normalizedPool,
+    query,
+    limit,
+  });
 }
 
 async function searchKnowledge({ workspaceId, agentId, agent, query, limit = 5 }) {
@@ -158,7 +228,14 @@ async function searchKnowledge({ workspaceId, agentId, agent, query, limit = 5 }
           )
           .sort((a, b) => b.score - a.score)
           .slice(0, limit);
-        if (semanticRanked.length) return semanticRanked;
+        if (semanticRanked.length) {
+          return ensureIntentCoverage({
+            ranked: semanticRanked,
+            allChunks: normalizedChunks,
+            query,
+            limit,
+          });
+        }
       } catch (error) {
         console.warn("[ai-knowledge] semantic retrieval fallback", {
           workspaceId: String(workspaceId),
@@ -171,7 +248,14 @@ async function searchKnowledge({ workspaceId, agentId, agent, query, limit = 5 }
       .filter((chunk) => chunk.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
-    if (ranked.length) return ranked;
+    if (ranked.length) {
+      return ensureIntentCoverage({
+        ranked,
+        allChunks: normalizedChunks,
+        query,
+        limit,
+      });
+    }
   }
   return searchLegacyKnowledge({ agent, query, limit });
 }
@@ -236,7 +320,7 @@ function formatKnowledgeChunks(chunks) {
     .map((chunk, index) => {
       const lines = [
         `${index + 1}. ${chunk.sectionLabel ? `[${chunk.sectionLabel}] ` : ""}${chunk.title}`,
-        String(chunk.text || "").replace(/\s+/g, " ").slice(0, 360),
+        trimTextAtBoundary(chunk.text, 360),
       ].filter(Boolean);
       return lines.join("\n");
     })

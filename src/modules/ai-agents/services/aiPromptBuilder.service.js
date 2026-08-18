@@ -50,7 +50,25 @@ function conciseMemoryText(conversationSummary) {
   return value ? value.slice(0, 140) : "No important earlier memory.";
 }
 
-function rankCompactSectionPriority(chunk, intent) {
+function trimTextAtBoundary(text, maxChars = 260) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.length <= maxChars) return normalized;
+  const slice = normalized.slice(0, maxChars);
+  const punctuationIndex = Math.max(
+    slice.lastIndexOf(". "),
+    slice.lastIndexOf("? "),
+    slice.lastIndexOf("! "),
+    slice.lastIndexOf("; "),
+    slice.lastIndexOf(": ")
+  );
+  if (punctuationIndex >= Math.floor(maxChars * 0.45)) {
+    return slice.slice(0, punctuationIndex + 1).trim();
+  }
+  const spaceIndex = slice.lastIndexOf(" ");
+  return (spaceIndex >= Math.floor(maxChars * 0.6) ? slice.slice(0, spaceIndex) : slice).trim();
+}
+
+function rankCompactSectionPriority(chunk, intent, requestedSections = []) {
   const sectionKey = String(chunk?.sectionKey || "").trim().toLowerCase();
   if (!sectionKey) return 0;
 
@@ -67,20 +85,55 @@ function rankCompactSectionPriority(chunk, intent) {
     faq: 14,
     tone_language: 10,
   };
+  const pricingPriority = {
+    pricing_policy: 40,
+    services_products: 30,
+    business_profile: 22,
+    faq: 18,
+    objection_handling: 12,
+  };
 
-  const map = intent === "business_profile" ? businessProfilePriority : servicePriority;
-  return Number(map[sectionKey] || 0);
+  const sectionIndex = requestedSections.findIndex((item) => item === sectionKey);
+  const explicitSectionScore = sectionIndex === -1 ? 0 : (requestedSections.length - sectionIndex) * 100;
+  const map =
+    intent === "business_profile"
+      ? businessProfilePriority
+      : intent === "pricing"
+        ? pricingPriority
+        : servicePriority;
+  return explicitSectionScore + Number(map[sectionKey] || 0);
 }
 
-function pickCompactKnowledgeChunks(knowledgeChunks, intent) {
+function pickCompactKnowledgeChunks(knowledgeChunks, styleGuide) {
   const items = Array.isArray(knowledgeChunks) ? knowledgeChunks : [];
-  return [...items]
+  const requestedSections = Array.isArray(styleGuide?.requestedKnowledgeSections)
+    ? styleGuide.requestedKnowledgeSections
+    : [];
+  const prioritized = [...items]
     .sort((a, b) => {
-      const priorityDiff = rankCompactSectionPriority(b, intent) - rankCompactSectionPriority(a, intent);
+      const priorityDiff =
+        rankCompactSectionPriority(b, styleGuide?.intent, requestedSections) -
+        rankCompactSectionPriority(a, styleGuide?.intent, requestedSections);
       if (priorityDiff !== 0) return priorityDiff;
       return Number(b?.score || 0) - Number(a?.score || 0);
-    })
-    .slice(0, 2);
+    });
+
+  const selected = [];
+  const seen = new Set();
+  const pushChunk = (chunk) => {
+    const key = String(chunk?.chunkId || chunk?.id || "");
+    if (!chunk || !key || seen.has(key)) return;
+    seen.add(key);
+    selected.push(chunk);
+  };
+
+  for (const sectionKey of requestedSections) {
+    const match = prioritized.find((chunk) => String(chunk?.sectionKey || "").trim().toLowerCase() === sectionKey);
+    pushChunk(match);
+  }
+
+  prioritized.forEach(pushChunk);
+  return selected.slice(0, 4);
 }
 
 function formatCompactKnowledgeChunks(chunks) {
@@ -88,7 +141,7 @@ function formatCompactKnowledgeChunks(chunks) {
   return chunks
     .map((chunk, index) => {
       const title = `${chunk.sectionLabel ? `[${chunk.sectionLabel}] ` : ""}${chunk.title}`;
-      const text = String(chunk.text || "").replace(/\s+/g, " ").slice(0, 260);
+      const text = trimTextAtBoundary(chunk.text, 320);
       return `${index + 1}. ${title}\n${text}`;
     })
     .join("\n\n");
@@ -140,7 +193,29 @@ function buildSectionRules({ sectionKeys = [], intent = "general" }) {
 }
 
 function shouldUseCompactBusinessPrompt(styleGuide) {
-  return styleGuide?.businessInfoQuestion || ["business_profile", "service_discovery"].includes(styleGuide?.intent);
+  return styleGuide?.businessInfoQuestion || (Array.isArray(styleGuide?.requestedKnowledgeSections) && styleGuide.requestedKnowledgeSections.length > 0);
+}
+
+function compactOutputShape(styleGuide) {
+  const sections = Array.isArray(styleGuide?.requestedKnowledgeSections) ? styleGuide.requestedKnowledgeSections : [];
+  const lines = [];
+
+  if (sections.includes("business_profile")) {
+    lines.push("- First: briefly explain what the business is and what it helps customers achieve.");
+  }
+  if (sections.includes("services_products")) {
+    lines.push("- Then: mention the most relevant services or products in short bullets or short lines.");
+  }
+  if (sections.includes("pricing_policy")) {
+    lines.push("- Then: explain the pricing approach or starting guidance from the pricing policy.");
+    lines.push("- If exact pricing depends on the selected service, ask which one the customer wants pricing for only after giving the available pricing guidance.");
+  }
+  if (!lines.length) {
+    lines.push("- Give a direct, complete business answer in 3 to 6 short lines.");
+  }
+
+  lines.push("- If the customer asked multiple related parts, do not stop after answering only the first part.");
+  return lines;
 }
 
 function buildCompactBusinessPrompt({
@@ -152,18 +227,27 @@ function buildCompactBusinessPrompt({
   knowledgeChunks,
   userMessage,
 }) {
-  const compactKnowledge = pickCompactKnowledgeChunks(knowledgeChunks, styleGuide.intent);
+  const compactKnowledge = pickCompactKnowledgeChunks(knowledgeChunks, styleGuide);
   const blockedTopics = (guardrails.blockedTopics || []).join(", ").slice(0, 120) || "none";
   const allowedTopics = (guardrails.allowedTopics || []).join(", ").slice(0, 120) || "not restricted";
+  const sectionsInScope = Array.isArray(styleGuide.requestedKnowledgeSections) && styleGuide.requestedKnowledgeSections.length
+    ? styleGuide.requestedKnowledgeSections.join(", ")
+    : "business context";
+  const multiIntent = Array.isArray(styleGuide.intents) && styleGuide.intents.length > 1;
 
   return [
     "# Task",
-    styleGuide.intent === "business_profile"
-      ? "Answer the customer's business-profile question using only the provided business context."
-      : "Answer the customer's service question using only the provided business context.",
+    multiIntent
+      ? `Answer every part of the customer's mixed business question using only the provided context. Cover these areas if asked: ${sectionsInScope}.`
+      : styleGuide.intent === "pricing"
+        ? "Answer the customer's pricing question using only the provided business context."
+        : styleGuide.intent === "business_profile"
+          ? "Answer the customer's business-profile question using only the provided business context."
+          : "Answer the customer's service question using only the provided business context.",
     "",
     "# Critical Rules",
     "- Complete the main answer first before asking anything else.",
+    "- If the customer asked about business profile, services, and pricing in one message, include all three in the same reply.",
     "- Do not give a fragment, cut-off sentence, lone URL, or vague company name.",
     "- Use only the business facts shown below. If one exact detail is missing, answer from the closest available business/profile/services context without inventing new facts.",
     "- Ask at most one short follow-up question, and only if it genuinely helps.",
@@ -176,8 +260,7 @@ function buildCompactBusinessPrompt({
     "- For direct profile or service questions, prefer 3 to 6 short lines or short bullets that fully answer the question.",
     "",
     "# Good Output Shape",
-    "- Line 1: What the business is or what outcome it helps with.",
-    "- Next lines: 2 to 5 concrete services, capabilities, or relevant business facts from knowledge.",
+    ...compactOutputShape(styleGuide),
     "- Optional final line: one short useful next question only if it helps.",
     "",
     "# Customer Context",

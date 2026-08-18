@@ -39,6 +39,18 @@ const ROMAN_HINDI_HINTS = [
   "samjhao",
 ];
 
+const INTENT_PRIORITY = [
+  "greeting",
+  "business_profile",
+  "service_discovery",
+  "pricing",
+  "benefit",
+  "industry",
+  "qualification",
+  "objection",
+  "general",
+];
+
 function tokenize(text) {
   return String(text || "")
     .toLowerCase()
@@ -98,15 +110,79 @@ function isServiceQuestion(text) {
   );
 }
 
+function detectIntentSignals(text) {
+  const value = String(text || "").trim().toLowerCase();
+  if (!value) return ["general"];
+  if (isSimpleGreeting(value)) return ["greeting"];
+
+  const intents = [];
+  const pushIntent = (intent) => {
+    if (intent && !intents.includes(intent)) intents.push(intent);
+  };
+
+  if (isCompanyProfileQuestion(value)) pushIntent("business_profile");
+  if (
+    isServiceQuestion(value) ||
+    /\b(service|services|offer|offering|provide|products)\b/.test(value) ||
+    /\b(service|services|dete|offer|provide|karte)\b/i.test(value)
+  ) {
+    pushIntent("service_discovery");
+  }
+  if (
+    /\b(price|pricing|cost|charge|charges|package|quote|budget)\b/.test(value) ||
+    /\b(kitna|price|pricing|budget|cost)\b/.test(value)
+  ) {
+    pushIntent("pricing");
+  }
+  if (/\b(profit|benefit|roi|result|results|grow|growth|advantage)\b/.test(value) || /\b(fayda|benefit|result|growth|profit)\b/i.test(value)) {
+    pushIntent("benefit");
+  }
+  if (/\b(expensive|costly|high|trust|sure|guarantee|prove|proof|doubt)\b/.test(value) || /\b(mehenga|mahenga|trust|bharosa|sure|proof)\b/i.test(value)) {
+    pushIntent("objection");
+  }
+  if (/\b(real estate|builder|clinic|doctor|education|school|coaching|ecommerce|restaurant|salon)\b/.test(value) || /\b(realestate|property|builder|clinic|doctor|school|coaching|ecommerce)\b/i.test(value)) {
+    pushIntent("industry");
+  }
+  if (/\b(need|looking|want|help|suggest|recommend)\b/.test(value) || /\b(chahiye|suggest|recommend|help)\b/i.test(value)) {
+    pushIntent("qualification");
+  }
+
+  if (!intents.length) return ["general"];
+  return intents.sort((a, b) => INTENT_PRIORITY.indexOf(a) - INTENT_PRIORITY.indexOf(b));
+}
+
+function requestedKnowledgeSectionsForQuery(text) {
+  const intents = detectIntentSignals(text);
+  const sections = [];
+  const pushSection = (sectionKey) => {
+    if (sectionKey && !sections.includes(sectionKey)) sections.push(sectionKey);
+  };
+
+  for (const intent of intents) {
+    if (intent === "business_profile") pushSection("business_profile");
+    if (intent === "service_discovery") pushSection("services_products");
+    if (intent === "pricing") pushSection("pricing_policy");
+    if (intent === "benefit") pushSection("industry_playbooks");
+    if (intent === "industry") pushSection("industry_playbooks");
+    if (intent === "qualification") pushSection("lead_qualification");
+    if (intent === "objection") pushSection("objection_handling");
+  }
+
+  if (isBusinessInfoQuestion(text)) pushSection("faq");
+  return sections;
+}
+
 function inferResponseLength(text) {
   const value = String(text || "").trim();
   if (!value) return "short";
   if (isSimpleGreeting(value)) return "greeting";
+  const intents = detectIntentSignals(value);
   const words = value.split(/\s+/).filter(Boolean);
   const lower = value.toLowerCase();
   const detailIntent =
     /\b(how|why|explain|detail|details|process|strategy|benefit|pricing|services|steps|compare)\b/i.test(lower) ||
     /\b(kaise|kyu|kyun|samjhao|detail|process|pricing|service|services)\b/i.test(lower);
+  if (intents.length > 1) return "detailed";
   if (isBusinessInfoQuestion(value)) return words.length <= 6 ? "medium" : "detailed";
   if (detailIntent) return words.length <= 12 ? "medium" : "detailed";
   if (words.length <= 4 || value.length <= 24) return "very_short";
@@ -115,31 +191,7 @@ function inferResponseLength(text) {
 }
 
 function detectConversationIntent(text) {
-  const value = String(text || "").trim().toLowerCase();
-  if (!value) return "general";
-  if (isSimpleGreeting(value)) return "greeting";
-  if (/\b(price|pricing|cost|charge|charges|package|quote|budget)\b/.test(value) || /\b(price|pricing|budget|cost|charge|charges)\b/i.test(value) || /\b(price|pricing)\b/i.test(value) || /\b(price)\b/i.test(value) || /\b(kitna|price|pricing|budget|cost)\b/.test(value)) {
-    return "pricing";
-  }
-  if (isCompanyProfileQuestion(value)) {
-    return "business_profile";
-  }
-  if (isServiceQuestion(value) || /\b(service|services|offer|offering|provide|products)\b/.test(value) || /\b(service|services|dete|offer|provide|karte)\b/i.test(value)) {
-    return "service_discovery";
-  }
-  if (/\b(profit|benefit|roi|result|results|grow|growth|advantage)\b/.test(value) || /\b(fayda|benefit|result|growth|profit)\b/i.test(value)) {
-    return "benefit";
-  }
-  if (/\b(expensive|costly|high|trust|sure|guarantee|prove|proof|doubt)\b/.test(value) || /\b(mehenga|mahenga|trust|bharosa|sure|proof)\b/i.test(value)) {
-    return "objection";
-  }
-  if (/\b(real estate|builder|clinic|doctor|education|school|coaching|ecommerce|restaurant|salon)\b/.test(value) || /\b(realestate|property|builder|clinic|doctor|school|coaching|ecommerce)\b/i.test(value)) {
-    return "industry";
-  }
-  if (/\b(need|looking|want|help|suggest|recommend)\b/.test(value) || /\b(chahiye|suggest|recommend|help)\b/i.test(value)) {
-    return "qualification";
-  }
-  return "general";
+  return detectIntentSignals(text)[0] || "general";
 }
 
 function shouldForceHandoverOnKnowledgeMiss(text) {
@@ -212,8 +264,10 @@ function buildGreetingReply({ userMessage, contactName }) {
 function buildReplyStyleGuide({ userMessage, contactName }) {
   const languageStyle = inferLanguageStyle(userMessage);
   const responseLength = inferResponseLength(userMessage);
-  const intent = detectConversationIntent(userMessage);
+  const intents = detectIntentSignals(userMessage);
+  const intent = intents[0] || "general";
   const businessInfoQuestion = isBusinessInfoQuestion(userMessage);
+  const requestedKnowledgeSections = requestedKnowledgeSectionsForQuery(userMessage);
   const name = firstName(contactName);
   const instructions = [
     languageStyle === "hindi"
@@ -240,13 +294,18 @@ function buildReplyStyleGuide({ userMessage, contactName }) {
     "Never claim you are human, a person, or a team member. If the customer asks who you are, say you are the company's assistant or virtual assistant.",
     "Do not mention confidence scores, token limits, knowledge chunks, or internal retrieval.",
     "If relevant knowledge exists but one detail is missing, ask one short clarifying question before escalating.",
+    intents.length > 1
+      ? "The customer asked multiple related things in one message. Answer every asked part in the same reply before asking any follow-up question."
+      : "If the customer asks only one thing, stay focused on that exact ask.",
     name ? `You may use the customer's first name (${name}) naturally, but at most once.` : "Do not force the customer's name if it feels unnatural.",
   ];
   return {
     languageStyle,
     responseLength,
     intent,
+    intents,
     businessInfoQuestion,
+    requestedKnowledgeSections,
     maxOutputTokens: maxOutputTokensForLength(responseLength),
     instructions,
   };
@@ -468,4 +527,6 @@ module.exports = {
   buildReplyStyleGuide,
   buildKnowledgeMissClarifier,
   normalizeReplyForPolicy,
+  detectIntentSignals,
+  requestedKnowledgeSectionsForQuery,
 };

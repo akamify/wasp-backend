@@ -2,9 +2,7 @@ const { createQueue, createQueueEvents, createQueueScheduler } = require("@infra
 const { QUEUE_NAMES } = require("@infra/queues/queueNames");
 
 let _queue;
-
 let _events;
-
 let _scheduler;
 
 
