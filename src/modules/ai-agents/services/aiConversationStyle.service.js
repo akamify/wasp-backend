@@ -129,8 +129,8 @@ function detectIntentSignals(text) {
     pushIntent("service_discovery");
   }
   if (
-    /\b(price|pricing|cost|charge|charges|package|quote|budget)\b/.test(value) ||
-    /\b(kitna|price|pricing|budget|cost)\b/.test(value)
+    /\b(price|pricing|priceing|cost|charge|charges|package|quote|quotation|estimate|fee|fees|rate|rates|budget)\b/.test(value) ||
+    /\b(kitna|kitne|price|pricing|budget|cost|charge|charges|quotation|quote|fees)\b/.test(value)
   ) {
     pushIntent("pricing");
   }

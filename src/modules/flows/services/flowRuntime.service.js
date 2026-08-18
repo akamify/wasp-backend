@@ -1085,6 +1085,47 @@ async function handleFallback({
   return { status: "waiting", session: updated };
 }
 
+async function releaseInteractiveSessionForFreeText({
+  workspaceId,
+  session,
+  waiting,
+  inboundMessage,
+}) {
+  const releasedAt = new Date();
+  const released = await moveSession({
+    workspaceId,
+    session,
+    nodeId: waiting.nodeId || session.currentNodeId,
+    updates: {
+      status: "expired",
+      completedAt: releasedAt,
+      expiredAt: releasedAt,
+      expiryReason: "released_for_ai_text",
+      expiresAt: releasedAt,
+      waitingFor: { type: null, attributeKey: null, nodeId: null },
+      lockedUntil: null,
+      lockedBy: null,
+      error: null,
+      context: {
+        ...(session.context || {}),
+        releasedForAiText: {
+          at: releasedAt,
+          inboundType: inboundMessage?.type || null,
+          inboundText: String(inboundMessage?.text || "").slice(0, 160),
+        },
+      },
+    },
+  });
+  flowLog("[FLOW_SESSION_RELEASED_FOR_AI_TEXT]", {
+    sessionId: String(session._id),
+    waitingNodeId: waiting.nodeId || null,
+    waitingForType: waiting.type || null,
+    inboundType: inboundMessage?.type || null,
+    inboundText: String(inboundMessage?.text || "").slice(0, 160),
+  });
+  return { status: "released_for_ai_text", session: released };
+}
+
 async function continueSession({
   workspaceId,
   session,
@@ -1245,6 +1286,19 @@ async function continueSession({
           }),
           version,
           businessInitiated: false,
+          inboundMessage,
+        });
+      }
+      if (
+        inboundMessage?.type === "text" &&
+        incomingText &&
+        waitingNode &&
+        ["button_reply", "list_reply"].includes(waiting.type)
+      ) {
+        return releaseInteractiveSessionForFreeText({
+          workspaceId,
+          session,
+          waiting,
           inboundMessage,
         });
       }

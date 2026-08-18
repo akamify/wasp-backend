@@ -61,6 +61,18 @@ function sanitizeProviderText(value) {
     .trim();
 }
 
+function resolveThinkingConfig(model, style = null) {
+  const modelName = String(model || "").trim().toLowerCase();
+  if (!modelName.startsWith("gemini-3")) return null;
+  if (style?.responseLength === "greeting" || style?.responseLength === "very_short") {
+    return { thinkingLevel: "low" };
+  }
+  if (style?.businessInfoQuestion || (Array.isArray(style?.requestedKnowledgeSections) && style.requestedKnowledgeSections.length)) {
+    return { thinkingLevel: "low" };
+  }
+  return { thinkingLevel: "low" };
+}
+
 function getGeminiApiKey() {
   return String(
     process.env.GOOGLE_API_KEY ||
@@ -273,6 +285,7 @@ async function generateGeminiInteractionResponse({
   prompt,
   systemInstruction = "",
   managedFileSearch = null,
+  thinkingConfig = null,
 }) {
   const { model } = await aiProviderConfigService.resolveGeminiModel(
     agent.modelName || DEFAULT_GEMINI_MODEL,
@@ -295,6 +308,7 @@ async function generateGeminiInteractionResponse({
       workspaceId: workspaceId ? String(workspaceId) : null,
       agentId: agent?._id ? String(agent._id) : agent?.id ? String(agent.id) : null,
       fileSearchStore: managedFileSearch?.storeName || null,
+      thinkingLevel: thinkingConfig?.thinkingLevel || null,
     });
     const interaction = await Promise.race([
       client.interactions.create({
@@ -303,6 +317,13 @@ async function generateGeminiInteractionResponse({
         system_instruction: sanitizeProviderText(systemInstruction) || undefined,
         generation_config: {
           max_output_tokens: resolveMaxOutputTokens(agent, 600),
+          ...(thinkingConfig
+            ? {
+                thinking_config: {
+                  thinking_level: thinkingConfig.thinkingLevel,
+                },
+              }
+            : {}),
         },
         tools: managedFileSearch?.storeName
           ? [
@@ -361,6 +382,7 @@ async function generateGeminiResponse({
   prompt,
   systemInstruction = "",
   managedFileSearch = null,
+  thinkingConfig = null,
 }) {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
@@ -384,6 +406,7 @@ async function generateGeminiResponse({
           prompt,
           systemInstruction,
           managedFileSearch,
+          thinkingConfig,
         })
       : withRetry(async (attempt) => {
           const client = getGeminiClient();
@@ -402,6 +425,7 @@ async function generateGeminiResponse({
             reducedPrompt: retryPrompt.reduced,
             workspaceId: workspaceId ? String(workspaceId) : null,
             agentId: agent?._id ? String(agent._id) : agent?.id ? String(agent.id) : null,
+            thinkingLevel: thinkingConfig?.thinkingLevel || null,
           });
           const responseData = await Promise.race([
             client.models.generateContent({
@@ -410,6 +434,13 @@ async function generateGeminiResponse({
               config: {
                 systemInstruction: sanitizeProviderText(systemInstruction) || undefined,
                 maxOutputTokens: resolveMaxOutputTokens(agent, 600),
+                ...(thinkingConfig
+                  ? {
+                      thinkingConfig: {
+                        thinkingLevel: thinkingConfig.thinkingLevel,
+                      },
+                    }
+                  : {}),
               },
             }),
             new Promise((_, reject) =>
@@ -509,6 +540,7 @@ async function generateResponse({
   );
   const normalizedPrompt = clampPromptToTokenLimit(prompt, effectiveInputTokenLimit);
   const styleOutputTarget = Number(style?.maxOutputTokens || limits.maxTokensPerReply || 1024) || 1024;
+  const thinkingConfig = resolveThinkingConfig(agent?.modelName || DEFAULT_GEMINI_MODEL, style);
   const requestedSectionCount = Array.isArray(style?.requestedKnowledgeSections)
     ? style.requestedKnowledgeSections.length
     : 0;
@@ -538,6 +570,7 @@ async function generateResponse({
     prompt: normalizedPrompt.prompt,
     systemInstruction: system,
     managedFileSearch,
+    thinkingConfig,
   })
     .then(async (initialResult) => {
       const attachSharedRaw = (result, extraRaw = {}) => ({
@@ -547,6 +580,7 @@ async function generateResponse({
           promptTruncated: normalizedPrompt.truncated,
           promptLimitTokens: effectiveInputTokenLimit,
           replyStyle: style || null,
+          thinkingLevel: thinkingConfig?.thinkingLevel || null,
           ...extraRaw,
         },
       });
@@ -576,6 +610,7 @@ async function generateResponse({
           prompt: repairPrompt,
           systemInstruction: system,
           managedFileSearch,
+          thinkingConfig,
         });
         return attachSharedRaw(repairedResult, {
           repairedIncompleteReply: true,
