@@ -3,6 +3,7 @@ const { HttpError } = require("@shared/utils/httpError");
 const aiProviderConfigService = require("@modules/ai-agents/services/aiProviderConfig.service");
 const aiProviderCircuitBreakerService = require("@modules/ai-agents/services/aiProviderCircuitBreaker.service");
 const aiManagedFileSearchService = require("@modules/ai-agents/services/aiManagedFileSearch.service");
+const aiConversationStyleService = require("@modules/ai-agents/services/aiConversationStyle.service");
 const {
   normalizeProviderError,
   isRetryableRuntimeError,
@@ -128,6 +129,81 @@ function buildGeminiRequestBody({ systemInstruction, prompt, agent }) {
     };
   }
   return body;
+}
+
+function shouldUseStructuredReply(style) {
+  return Boolean(aiConversationStyleService.buildStructuredReplyPolicy(style).enabled);
+}
+
+function buildStructuredReplySchema(style) {
+  const policy = aiConversationStyleService.buildStructuredReplyPolicy(style);
+  return {
+    type: "object",
+    properties: {
+      intro: {
+        type: "string",
+        description: "The direct opening answer. Keep it complete and customer-facing.",
+      },
+      bullets: {
+        type: "array",
+        description: "Optional short bullet points for services, benefits, or options.",
+        items: {
+          type: "string",
+          description: "One short bullet point.",
+        },
+        maxItems: policy.maxBulletPoints,
+      },
+      pricingSummary: {
+        type: "string",
+        description: "Pricing guidance only when relevant. Use an empty string when pricing is not part of the answer.",
+      },
+      followUpQuestion: {
+        type: "string",
+        description: "At most one short follow-up question. Use an empty string when not needed.",
+      },
+    },
+    required: ["intro", "bullets", "pricingSummary", "followUpQuestion"],
+  };
+}
+
+function buildStructuredOutputInstruction(style) {
+  const policy = aiConversationStyleService.buildStructuredReplyPolicy(style);
+  const lines = [
+    "Return valid JSON only that matches the response schema.",
+    "The intro must be a complete customer-facing answer, not a fragment.",
+    "Do not return markdown, labels, internal notes, or unfinished text.",
+    policy.mixedBusinessQuestion
+      ? "Because the customer asked multiple related things, answer every asked part in the same JSON response."
+      : "Answer only the customer's asked need in the same JSON response.",
+    policy.pricingQuestion
+      ? "For pricing questions, keep the final rendered answer complete in about 2 to 4 short lines."
+      : policy.detailedServiceQuestion
+        ? "For service or business questions, the final rendered answer should feel like a short intro plus 2 or 3 helpful bullet points."
+        : "Keep the final rendered answer short and complete.",
+    "Use followUpQuestion only if it genuinely helps the next step; otherwise return an empty string.",
+  ];
+  return lines.join("\n");
+}
+
+function parseStructuredReplyText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return {
+      intro: String(parsed.intro || "").trim(),
+      bullets: Array.isArray(parsed.bullets)
+        ? parsed.bullets.map((item) => String(item || "").trim()).filter(Boolean)
+        : [],
+      pricingSummary: String(parsed.pricingSummary || "").trim(),
+      followUpQuestion: String(parsed.followUpQuestion || "").trim(),
+    };
+  } catch (error) {
+    return null;
+  }
 }
 
 function resolveMaxOutputTokens(agent, fallback = 600) {
@@ -394,6 +470,12 @@ async function generateGeminiResponse({
   }
   const { model } = await aiProviderConfigService.resolveGeminiModel(agent.modelName || DEFAULT_GEMINI_MODEL, { allowFallback: true });
   const effectiveThinkingConfig = thinkingConfig || resolveThinkingConfig(model, style);
+  const structuredReplyEnabled = shouldUseStructuredReply(style) && !managedFileSearch?.storeName;
+  const effectiveSystemInstruction = structuredReplyEnabled
+    ? [String(systemInstruction || "").trim(), buildStructuredOutputInstruction(style)]
+        .filter(Boolean)
+        .join("\n\n")
+    : systemInstruction;
   await aiProviderCircuitBreakerService.beforeProviderRequest({
     workspaceId: workspaceId ? String(workspaceId) : "global",
     provider: "gemini",
@@ -423,19 +505,26 @@ async function generateGeminiResponse({
             model,
             attempt,
             promptChars: String(retryPrompt.prompt || "").length,
-            systemChars: String(systemInstruction || "").length,
+            systemChars: String(effectiveSystemInstruction || "").length,
             reducedPrompt: retryPrompt.reduced,
             workspaceId: workspaceId ? String(workspaceId) : null,
             agentId: agent?._id ? String(agent._id) : agent?.id ? String(agent.id) : null,
             thinkingLevel: effectiveThinkingConfig?.thinkingLevel || null,
+            structuredReply: structuredReplyEnabled,
           });
           const responseData = await Promise.race([
             client.models.generateContent({
               model,
               contents: sanitizeProviderText(retryPrompt.prompt),
               config: {
-                systemInstruction: sanitizeProviderText(systemInstruction) || undefined,
+                systemInstruction: sanitizeProviderText(effectiveSystemInstruction) || undefined,
                 maxOutputTokens: resolveMaxOutputTokens(agent, 600),
+                ...(structuredReplyEnabled
+                  ? {
+                      responseMimeType: "application/json",
+                      responseSchema: buildStructuredReplySchema(style),
+                    }
+                  : {}),
                 ...(effectiveThinkingConfig
                   ? {
                       thinkingConfig: {
@@ -453,9 +542,30 @@ async function generateGeminiResponse({
             typeof responseData?.text === "function"
               ? responseData.text()
               : String(responseData?.text || "");
-          const reply = replyText.trim() || extractGeminiText(responseData) || "I could not generate a response.";
-          const usage = responseData?.usageMetadata || {};
+          const parsedStructuredReply = structuredReplyEnabled
+            ? parseStructuredReplyText(replyText)
+            : null;
+          const renderedStructuredReply = parsedStructuredReply
+            ? aiConversationStyleService.renderStructuredReply({
+                payload: parsedStructuredReply,
+                style,
+              })
+            : "";
           const finishMeta = extractGeminiFinishMeta(responseData);
+          const malformedStructuredReply =
+            structuredReplyEnabled &&
+            !parsedStructuredReply &&
+            Boolean(String(replyText || "").trim());
+          const reply = malformedStructuredReply
+            ? ""
+            : renderedStructuredReply ||
+              replyText.trim() ||
+              extractGeminiText(responseData) ||
+              "I could not generate a response.";
+          const usage = responseData?.usageMetadata || {};
+          const effectiveFinishReason = malformedStructuredReply
+            ? "MALFORMED_RESPONSE"
+            : finishMeta.finishReason;
           logGeminiDebug("Gemini generateContent success", {
             model,
             attempt,
@@ -464,7 +574,8 @@ async function generateGeminiResponse({
             outputTokens: Number(usage.candidatesTokenCount || 0),
             totalTokens: Number(usage.totalTokenCount || 0),
             replyChars: reply.length,
-            finishReason: finishMeta.finishReason,
+            finishReason: effectiveFinishReason,
+            structuredReply: structuredReplyEnabled,
           });
           return {
             reply,
@@ -473,8 +584,10 @@ async function generateGeminiResponse({
             raw: {
               latencyMs: Date.now() - startedAt,
               retryPromptReduced: retryPrompt.reduced,
-              finishReason: finishMeta.finishReason,
+              finishReason: effectiveFinishReason,
               finishMessage: finishMeta.finishMessage,
+              structuredReply: structuredReplyEnabled,
+              structuredReplyMalformed: malformedStructuredReply,
             },
             usage: {
               inputTokens: Number(usage.promptTokenCount || estimateTokens(retryPrompt.prompt)),
@@ -541,27 +654,38 @@ async function generateResponse({
     Math.max(1200, Number(process.env.AI_PROVIDER_EFFECTIVE_INPUT_TOKEN_LIMIT || 2200))
   );
   const normalizedPrompt = clampPromptToTokenLimit(prompt, effectiveInputTokenLimit);
-  const styleOutputTarget = Number(style?.maxOutputTokens || limits.maxTokensPerReply || 1024) || 1024;
+  const configuredOutputLimit = Math.max(
+    1,
+    Number(limits.maxTokensPerReply || agent?.runtimeLimits?.maxTokensPerReply || 1024) || 1024
+  );
+  const styleOutputTarget = Number(style?.maxOutputTokens || configuredOutputLimit || 1024) || 1024;
   const thinkingConfig = resolveThinkingConfig(agent?.modelName || DEFAULT_GEMINI_MODEL, style);
   const requestedSectionCount = Array.isArray(style?.requestedKnowledgeSections)
     ? style.requestedKnowledgeSections.length
     : 0;
+  const multiIntentFloor = style?.mixedBusinessQuestion
+    ? Math.max(900, Math.min(configuredOutputLimit, 1200))
+    : 0;
+  const pricingFloor = style?.pricingQuestion
+    ? Math.max(420, Math.min(configuredOutputLimit, 720))
+    : 0;
   const businessInfoFloor = style?.businessInfoQuestion
     ? requestedSectionCount > 1
-      ? Math.max(560, Math.min(styleOutputTarget, 900))
-      : Math.max(420, Math.min(styleOutputTarget, 720))
+      ? Math.max(760, Math.min(configuredOutputLimit, 1100))
+      : Math.max(620, Math.min(configuredOutputLimit, 920))
     : 0;
+  const safeReplyFloor = Math.max(multiIntentFloor, pricingFloor, businessInfoFloor);
   const normalizedAgent = {
     ...agent,
     runtimeLimits: {
       maxTokensPerReply: Math.max(
-        businessInfoFloor || 1,
+        safeReplyFloor || 1,
         Math.max(
           Math.min(
-            Number(limits.maxTokensPerReply || 1024) || 1024,
-            styleOutputTarget
+            configuredOutputLimit,
+            Math.max(styleOutputTarget, safeReplyFloor || styleOutputTarget)
           ),
-          businessInfoFloor
+          safeReplyFloor
         )
       ),
     },

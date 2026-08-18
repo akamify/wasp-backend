@@ -224,17 +224,17 @@ function shouldPreferClarificationOverHandover(text) {
 function maxOutputTokensForLength(length) {
   switch (length) {
     case "greeting":
-      return 80;
+      return 120;
     case "very_short":
-      return 180;
+      return 240;
     case "short":
-      return 280;
+      return 360;
     case "medium":
-      return 480;
+      return 560;
     case "detailed":
-      return 720;
+      return 920;
     default:
-      return 280;
+      return 360;
   }
 }
 
@@ -268,6 +268,13 @@ function buildReplyStyleGuide({ userMessage, contactName }) {
   const intent = intents[0] || "general";
   const businessInfoQuestion = isBusinessInfoQuestion(userMessage);
   const requestedKnowledgeSections = requestedKnowledgeSectionsForQuery(userMessage);
+  const pricingQuestion = intents.includes("pricing");
+  const mixedBusinessQuestion = intents.length > 1;
+  const detailedServiceQuestion =
+    intent === "service_discovery" ||
+    (businessInfoQuestion && !pricingQuestion) ||
+    intent === "benefit" ||
+    intent === "industry";
   const name = firstName(contactName);
   const instructions = [
     languageStyle === "hindi"
@@ -277,19 +284,25 @@ function buildReplyStyleGuide({ userMessage, contactName }) {
         : "Reply in clear English because the customer is typing in English.",
     responseLength === "greeting"
       ? "For a greeting, reply in 1 to 2 short lines and include only one useful next question."
-      : responseLength === "very_short"
-        ? "The customer message is short, so keep the reply very short: 1 to 2 compact lines with only one useful next question."
-        : responseLength === "short"
-          ? businessInfoQuestion
-            ? "Keep the reply concise but complete. For direct business or service questions, finish the answer first and add a follow-up only if it genuinely helps."
-            : "Keep the reply concise: 1 to 2 short lines with only one useful next question unless the customer asks for detail."
-          : responseLength === "medium"
-            ? businessInfoQuestion
-              ? "Give a concise but complete answer in 3 to 5 short lines. Do not cut the answer short just to force a follow-up question."
-              : "Give a concise explanation, keep it practical, and end with only one short useful follow-up question."
-            : businessInfoQuestion
-              ? "For business or service profile questions, give a complete answer first in 4 to 8 short lines or bullets. Add a follow-up only if it is genuinely useful."
-              : "For a detailed business query, give a concise explanation, then short bullet points, then only one useful follow-up question.",
+      : mixedBusinessQuestion
+        ? "The customer asked multiple related things. Give one complete reply that covers every asked part before asking one short follow-up question if needed."
+        : pricingQuestion
+          ? "For a pricing question, reply in 2 to 4 short lines. Give the available pricing guidance first, and only then ask one short follow-up if exact pricing depends on the selected service."
+          : detailedServiceQuestion
+            ? "For a service or business query, give a short intro, then 2 to 3 short bullets if helpful, then only one useful follow-up question."
+            : responseLength === "very_short"
+              ? "The customer message is short, so keep the reply very short: 1 to 2 compact lines with only one useful next question."
+              : responseLength === "short"
+                ? businessInfoQuestion
+                  ? "Keep the reply concise but complete. For direct business or service questions, finish the answer first and add a follow-up only if it genuinely helps."
+                  : "Keep the reply concise: 1 to 2 short lines with only one useful next question unless the customer asks for detail."
+                : responseLength === "medium"
+                  ? businessInfoQuestion
+                    ? "Give a concise but complete answer in 3 to 5 short lines. Do not cut the answer short just to force a follow-up question."
+                    : "Give a concise explanation, keep it practical, and end with only one short useful follow-up question."
+                  : businessInfoQuestion
+                    ? "For business or service profile questions, give a complete answer first in 4 to 8 short lines or bullets. Add a follow-up only if it is genuinely useful."
+                    : "For a detailed business query, give a concise explanation, then short bullet points, then only one useful follow-up question.",
     "Sound natural and conversational on WhatsApp, not robotic or overly formal.",
     "Never claim you are human, a person, or a team member. If the customer asks who you are, say you are the company's assistant or virtual assistant.",
     "Do not mention confidence scores, token limits, knowledge chunks, or internal retrieval.",
@@ -305,10 +318,74 @@ function buildReplyStyleGuide({ userMessage, contactName }) {
     intent,
     intents,
     businessInfoQuestion,
+    pricingQuestion,
+    mixedBusinessQuestion,
+    detailedServiceQuestion,
     requestedKnowledgeSections,
     maxOutputTokens: maxOutputTokensForLength(responseLength),
     instructions,
   };
+}
+
+function buildStructuredReplyPolicy(style = {}) {
+  const intents = Array.isArray(style?.intents) ? style.intents : [];
+  const pricingQuestion = Boolean(style?.pricingQuestion || intents.includes("pricing"));
+  const mixedBusinessQuestion = Boolean(style?.mixedBusinessQuestion || intents.length > 1);
+  const detailedServiceQuestion = Boolean(
+    style?.detailedServiceQuestion ||
+    style?.businessInfoQuestion ||
+    ["service_discovery", "benefit", "industry"].includes(style?.intent)
+  );
+
+  return {
+    enabled: style?.responseLength !== "greeting",
+    pricingQuestion,
+    mixedBusinessQuestion,
+    detailedServiceQuestion,
+    maxBulletPoints: pricingQuestion ? 2 : detailedServiceQuestion || mixedBusinessQuestion ? 3 : 2,
+    allowFollowUpQuestion: style?.responseLength !== "greeting",
+  };
+}
+
+function cleanDisplayLine(line) {
+  let value = String(line || "").trim();
+  if (!value) return "";
+  value = value
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/\*(.*?)\*/g, "$1")
+    .replace(/^[-*]\s+/, "• ")
+    .replace(/^\d+\.\s+/, "• ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return value;
+}
+
+function renderStructuredReply({ payload, style, userMessage = "" }) {
+  const effectiveStyle =
+    style ||
+    buildReplyStyleGuide({
+      userMessage,
+      contactName: "",
+    });
+  const policy = buildStructuredReplyPolicy(effectiveStyle);
+  const intro = cleanDisplayLine(payload?.intro || "");
+  const pricingSummary = cleanDisplayLine(payload?.pricingSummary || "");
+  const followUpQuestion = cleanDisplayLine(payload?.followUpQuestion || "");
+  const bullets = Array.isArray(payload?.bullets)
+    ? payload.bullets
+        .map((item) => cleanDisplayLine(item))
+        .filter(Boolean)
+        .slice(0, policy.maxBulletPoints)
+    : [];
+
+  const lines = [];
+  if (intro) lines.push(intro);
+  for (const bullet of bullets) {
+    lines.push(bullet.startsWith("• ") ? bullet : `• ${bullet}`);
+  }
+  if (pricingSummary) lines.push(pricingSummary);
+  if (policy.allowFollowUpQuestion && followUpQuestion) lines.push(followUpQuestion);
+  return lines.join("\n").trim();
 }
 
 function normalizeReplyForPolicy({ reply, userMessage, style }) {
@@ -385,7 +462,7 @@ function normalizeLines(text) {
   return String(text || "")
     .replace(/\r\n/g, "\n")
     .split("\n")
-    .map((line) => line.replace(/\s+/g, " ").trim())
+    .map((line) => cleanDisplayLine(line))
     .filter(Boolean);
 }
 
@@ -525,6 +602,8 @@ module.exports = {
   isServiceQuestion,
   buildGreetingReply,
   buildReplyStyleGuide,
+  buildStructuredReplyPolicy,
+  renderStructuredReply,
   buildKnowledgeMissClarifier,
   normalizeReplyForPolicy,
   detectIntentSignals,

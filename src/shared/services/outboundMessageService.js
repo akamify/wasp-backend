@@ -9,6 +9,7 @@ const {
   sendMediaMessage,
   sendTypingIndicator,
 } = require("@shared/utils/whatsappSender");
+const { formatWhatsAppText } = require("@shared/services/whatsapp/whatsappTextFormatter");
 const { touchConversation } = require("@shared/services/conversationService");
 const { touchContactFromMessage } = require("@shared/services/contactService");
 const { Campaign } = require("@infra/database/Campaign");
@@ -417,6 +418,10 @@ async function sendTextMessageForUser({
   flowId,
   nodeId,
 }) {
+  const formattedText = formatWhatsAppText(text);
+  if (!formattedText) {
+    throw new HttpError(400, "Outbound text message cannot be empty after WhatsApp formatting.");
+  }
   const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
   let reservedMessage = null;
   if (normalizedIdempotencyKey) {
@@ -478,11 +483,11 @@ async function sendTextMessageForUser({
         idempotencyKey: normalizedIdempotencyKey,
         status: "queued",
         sentBy: sentBy || { kind: "owner" },
-        text,
-        displayText: text,
-        previewText: text,
+        text: formattedText,
+        displayText: formattedText,
+        previewText: formattedText,
         type: "text",
-        payload: { to, text },
+        payload: { to, text: formattedText },
         messageKind: source === "automation" ? "automation" : "service",
         chargeAmount: 0,
         chargeCategory: null,
@@ -550,10 +555,10 @@ async function sendTextMessageForUser({
           nodeId: nodeId || null,
           status: String(reservedMessage.status || "").toLowerCase() === "failed" ? "queued" : reservedMessage.status || "queued",
           sentBy: sentBy || reservedMessage.sentBy || { kind: "owner" },
-          text,
-          displayText: text,
-          previewText: text,
-          payload: { to, text },
+          text: formattedText,
+          displayText: formattedText,
+          previewText: formattedText,
+          payload: { to, text: formattedText },
           error: null,
           ...(String(reservedMessage.status || "").toLowerCase() === "failed"
             ? { providerDispatchStartedAt: null, providerDispatchCompletedAt: null }
@@ -616,7 +621,7 @@ async function sendTextMessageForUser({
       accessToken: creds.accessToken,
       phoneNumberId: creds.phoneNumberId,
       to,
-      text,
+      text: formattedText,
       graphApiVersion: creds.graphApiVersion,
     });
   } catch (err) {
@@ -655,7 +660,7 @@ async function sendTextMessageForUser({
     { returnDocument: "after" }
   );
 
-  const conversation = await touchConversation({ userId, wabaId: creds.wabaId, phoneNumberId: creds.phoneNumberId, phone: resolvedPhone, lastMessageAt: now, lastMessagePreview: text, incrementUnread: false });
+  const conversation = await touchConversation({ userId, wabaId: creds.wabaId, phoneNumberId: creds.phoneNumberId, phone: resolvedPhone, lastMessageAt: now, lastMessagePreview: formattedText, incrementUnread: false });
   await WhatsAppCredentials.updateOne(
     { workspaceId: userId, isActive: { $ne: false } },
     { $set: { lastSuccessfulSendAt: now } }
@@ -665,7 +670,7 @@ async function sendTextMessageForUser({
     customerPhone: resolvedPhone,
     message: message.toObject ? message.toObject() : message,
   });
-  await touchContactFromMessage({ userId, wabaId: creds.wabaId, phoneNumberId: creds.phoneNumberId, phone: resolvedPhone, direction: "outbound", preview: text, occurredAt: now });
+  await touchContactFromMessage({ userId, wabaId: creds.wabaId, phoneNumberId: creds.phoneNumberId, phone: resolvedPhone, direction: "outbound", preview: formattedText, occurredAt: now });
   if (conversation) {
     const patch = { lastEmployeeReplyAt: now };
     if (!conversation.firstResponseAt && conversation.lastCustomerMessageAt) {
@@ -717,6 +722,10 @@ async function sendInteractiveListMessageForUser({
   aiConversationId,
   aiActionMetadata,
 }) {
+  const formattedText = formatWhatsAppText(text);
+  if (!formattedText) {
+    throw new HttpError(400, "Interactive list body cannot be empty after WhatsApp formatting.");
+  }
   const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
   if (normalizedIdempotencyKey) {
     const existing = await Message.findOne({
@@ -733,7 +742,7 @@ async function sendInteractiveListMessageForUser({
       accessToken: creds.accessToken,
       phoneNumberId: creds.phoneNumberId,
       to,
-      text,
+      text: formattedText,
       buttonText,
       sections,
       graphApiVersion: creds.graphApiVersion,
@@ -774,9 +783,9 @@ async function sendInteractiveListMessageForUser({
     sentAt: now,
     sortAt: now,
     sentBy: sentBy || { kind: "system" },
-    text,
-    displayText: text,
-    previewText: text,
+    text: formattedText,
+    displayText: formattedText,
+    previewText: formattedText,
     interactive: {
       type: "list",
       buttonText,
@@ -787,7 +796,7 @@ async function sendInteractiveListMessageForUser({
       type: "interactive",
       interactive: {
         type: "list",
-        body: { text },
+        body: { text: formattedText },
         action: { button: buttonText, sections },
       },
       ...(aiActionMetadata && typeof aiActionMetadata === "object" ? aiActionMetadata : {}),
@@ -800,7 +809,7 @@ async function sendInteractiveListMessageForUser({
     phoneNumberId: creds.phoneNumberId,
     phone: resolvedPhone,
     lastMessageAt: now,
-    lastMessagePreview: text,
+    lastMessagePreview: formattedText,
     incrementUnread: false,
   });
   await touchContactFromMessage({
@@ -809,7 +818,7 @@ async function sendInteractiveListMessageForUser({
     phoneNumberId: creds.phoneNumberId,
     phone: resolvedPhone,
     direction: "outbound",
-    preview: text,
+    preview: formattedText,
     occurredAt: now,
   });
   if (conversation) {
@@ -853,6 +862,10 @@ async function sendInteractiveButtonMessageForUser({
   aiConversationId,
   buttonActions,
 }) {
+  const formattedText = formatWhatsAppText(text);
+  if (!formattedText) {
+    throw new HttpError(400, "Interactive button body cannot be empty after WhatsApp formatting.");
+  }
   const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
   if (normalizedIdempotencyKey) {
     const existing = await Message.findOne({
@@ -878,7 +891,7 @@ async function sendInteractiveButtonMessageForUser({
     type: "interactive",
     interactive: {
       type: "button",
-      body: { text },
+      body: { text: formattedText },
       action: {
         buttons: normalizedButtons.map((button) => ({
           type: "reply",
@@ -911,9 +924,9 @@ async function sendInteractiveButtonMessageForUser({
     providerDispatchStartedAt: now,
     sentBy: sentBy || { kind: "system" },
     type: "interactive_buttons",
-    text,
-    displayText: text,
-    previewText: text,
+    text: formattedText,
+    displayText: formattedText,
+    previewText: formattedText,
     buttons: normalizedButtons,
     interactive: {
       type: "button",
@@ -948,7 +961,7 @@ async function sendInteractiveButtonMessageForUser({
       accessToken: creds.accessToken,
       phoneNumberId: creds.phoneNumberId,
       to,
-      text,
+      text: formattedText,
       buttons: normalizedButtons,
       graphApiVersion: creds.graphApiVersion,
     });
@@ -984,7 +997,7 @@ async function sendInteractiveButtonMessageForUser({
       phoneNumberId: creds.phoneNumberId,
       phone: resolvedPhone,
       lastMessageAt: now,
-      lastMessagePreview: text,
+      lastMessagePreview: formattedText,
       incrementUnread: false,
     });
     await touchContactFromMessage({
@@ -993,7 +1006,7 @@ async function sendInteractiveButtonMessageForUser({
       phoneNumberId: creds.phoneNumberId,
       phone: resolvedPhone,
       direction: "outbound",
-      preview: text,
+      preview: formattedText,
       occurredAt: now,
     });
     if (conversation) {
