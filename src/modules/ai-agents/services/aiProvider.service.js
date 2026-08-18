@@ -151,6 +151,84 @@ function extractGeminiText(response) {
   return parts.map((part) => part?.text || "").join("").trim();
 }
 
+function extractGeminiFinishMeta(response) {
+  const candidate = Array.isArray(response?.candidates) ? response.candidates[0] : null;
+  return {
+    finishReason: candidate?.finishReason || null,
+    finishMessage: candidate?.finishMessage || null,
+  };
+}
+
+function looksLikeDanglingReply(reply) {
+  const text = String(reply || "").trim();
+  if (!text) return true;
+  if (/[,:;*\-]\s*$/.test(text)) return true;
+  if (/[([{]$/.test(text)) return true;
+  if (/\b(and|or|for|with|about|including|such as|to|of|in|on|aur|or|ke|ki|ka|mein|ke liye)\s*$/i.test(text)) {
+    return true;
+  }
+  if (!/[.!?)]$/.test(text) && text.split(/\s+/).length >= 7) return true;
+  return false;
+}
+
+function hasPricingSignal(text) {
+  return /(price|pricing|cost|budget|quote|quotation|estimate|package|plan|starts?\s+at|depends|custom quote|₹|rs\.?|inr)/i.test(
+    String(text || "")
+  );
+}
+
+function shouldRepairBusinessReply({ reply, style, finishReason }) {
+  const requestedSections = Array.isArray(style?.requestedKnowledgeSections)
+    ? style.requestedKnowledgeSections
+    : [];
+  const multiSectionBusiness = Boolean(style?.businessInfoQuestion) && requestedSections.length > 1;
+
+  if (["MAX_TOKENS", "MALFORMED_RESPONSE"].includes(String(finishReason || ""))) {
+    return {
+      needed: true,
+      reason: String(finishReason || "").toLowerCase(),
+    };
+  }
+  if (!style?.businessInfoQuestion) {
+    return { needed: false, reason: null };
+  }
+  if (looksLikeDanglingReply(reply)) {
+    return { needed: true, reason: "dangling_reply" };
+  }
+  if (multiSectionBusiness && String(reply || "").trim().length < 180) {
+    return { needed: true, reason: "mixed_query_too_short" };
+  }
+  if (requestedSections.includes("pricing_policy") && !hasPricingSignal(reply)) {
+    return { needed: true, reason: "missing_pricing_guidance" };
+  }
+  return { needed: false, reason: null };
+}
+
+function buildBusinessReplyRepairPrompt({ originalPrompt, draftReply, style }) {
+  const reducedOriginalPrompt = shrinkPromptForRetry(originalPrompt, 1200).prompt;
+  const requestedSections = Array.isArray(style?.requestedKnowledgeSections)
+    ? style.requestedKnowledgeSections
+    : [];
+  const askedAreas = requestedSections.length ? requestedSections.join(", ") : "the customer's requested business details";
+  const needsPricing = requestedSections.includes("pricing_policy");
+  return [
+    reducedOriginalPrompt,
+    "",
+    "# Previous Draft",
+    String(draftReply || "").trim() || "No draft available.",
+    "",
+    "# Fix Required",
+    `- Rewrite the next reply from scratch and fully answer all asked areas: ${askedAreas}.`,
+    "- Complete the business answer before asking any follow-up question.",
+    needsPricing
+      ? "- Include the available pricing guidance now. If exact pricing depends on service or scope, say that clearly and then ask which service or project the customer wants pricing for."
+      : "- Do not skip any clearly asked part of the business question.",
+    "- Do not output labels like 'Question:*', 'Follow-up Question', 'Refine', numbered workflow steps, or internal notes.",
+    "- Do not end mid-sentence or leave a hanging fragment.",
+    "Return only the final customer-facing reply.",
+  ].join("\n");
+}
+
 function extractInteractionText(interaction) {
   const direct = String(interaction?.output_text || "").trim();
   if (direct) return direct;
@@ -261,6 +339,8 @@ async function generateGeminiInteractionResponse({
         retryPromptReduced: retryPrompt.reduced,
         interactionId: interaction?.id || null,
         interactionStatus: interaction?.status || null,
+        finishReason: interaction?.status || null,
+        finishMessage: null,
         managedFileSearch: {
           enabled: Boolean(managedFileSearch?.storeName),
           storeName: managedFileSearch?.storeName || null,
@@ -342,6 +422,7 @@ async function generateGeminiResponse({
               : String(responseData?.text || "");
           const reply = replyText.trim() || extractGeminiText(responseData) || "I could not generate a response.";
           const usage = responseData?.usageMetadata || {};
+          const finishMeta = extractGeminiFinishMeta(responseData);
           logGeminiDebug("Gemini generateContent success", {
             model,
             attempt,
@@ -350,6 +431,7 @@ async function generateGeminiResponse({
             outputTokens: Number(usage.candidatesTokenCount || 0),
             totalTokens: Number(usage.totalTokenCount || 0),
             replyChars: reply.length,
+            finishReason: finishMeta.finishReason,
           });
           return {
             reply,
@@ -358,6 +440,8 @@ async function generateGeminiResponse({
             raw: {
               latencyMs: Date.now() - startedAt,
               retryPromptReduced: retryPrompt.reduced,
+              finishReason: finishMeta.finishReason,
+              finishMessage: finishMeta.finishMessage,
             },
             usage: {
               inputTokens: Number(usage.promptTokenCount || estimateTokens(retryPrompt.prompt)),
@@ -425,8 +509,13 @@ async function generateResponse({
   );
   const normalizedPrompt = clampPromptToTokenLimit(prompt, effectiveInputTokenLimit);
   const styleOutputTarget = Number(style?.maxOutputTokens || limits.maxTokensPerReply || 1024) || 1024;
+  const requestedSectionCount = Array.isArray(style?.requestedKnowledgeSections)
+    ? style.requestedKnowledgeSections.length
+    : 0;
   const businessInfoFloor = style?.businessInfoQuestion
-    ? Math.max(420, Math.min(styleOutputTarget, 720))
+    ? requestedSectionCount > 1
+      ? Math.max(560, Math.min(styleOutputTarget, 900))
+      : Math.max(420, Math.min(styleOutputTarget, 720))
     : 0;
   const normalizedAgent = {
     ...agent,
@@ -450,15 +539,64 @@ async function generateResponse({
     systemInstruction: system,
     managedFileSearch,
   })
-    .then((result) => ({
-      ...result,
-      raw: {
-        ...(result.raw || {}),
-        promptTruncated: normalizedPrompt.truncated,
-        promptLimitTokens: effectiveInputTokenLimit,
-        replyStyle: style || null,
-      },
-    }));
+    .then(async (initialResult) => {
+      const attachSharedRaw = (result, extraRaw = {}) => ({
+        ...result,
+        raw: {
+          ...(result.raw || {}),
+          promptTruncated: normalizedPrompt.truncated,
+          promptLimitTokens: effectiveInputTokenLimit,
+          replyStyle: style || null,
+          ...extraRaw,
+        },
+      });
+      const repairDecision = shouldRepairBusinessReply({
+        reply: initialResult.reply,
+        style,
+        finishReason: initialResult?.raw?.finishReason,
+      });
+      if (!repairDecision.needed) {
+        return attachSharedRaw(initialResult);
+      }
+      const repairPrompt = buildBusinessReplyRepairPrompt({
+        originalPrompt: normalizedPrompt.prompt,
+        draftReply: initialResult.reply,
+        style,
+      });
+      logGeminiDebug("Gemini business-repair attempt", {
+        model: initialResult.model,
+        reason: repairDecision.reason,
+        originalReplyChars: String(initialResult.reply || "").length,
+        requestedSections: style?.requestedKnowledgeSections || [],
+      });
+      try {
+        const repairedResult = await generateGeminiResponse({
+          workspaceId,
+          agent: normalizedAgent,
+          prompt: repairPrompt,
+          systemInstruction: system,
+          managedFileSearch,
+        });
+        return attachSharedRaw(repairedResult, {
+          repairedIncompleteReply: true,
+          repairReason: repairDecision.reason,
+          originalFinishReason: initialResult?.raw?.finishReason || null,
+          originalReplyPreview: String(initialResult.reply || "").slice(0, 180),
+        });
+      } catch (repairError) {
+        logGeminiDebug("Gemini business-repair failure", {
+          model: initialResult.model,
+          reason: repairDecision.reason,
+          message: repairError?.message || "unknown",
+        });
+        return attachSharedRaw(initialResult, {
+          repairAttempted: true,
+          repairFailed: true,
+          repairReason: repairDecision.reason,
+          repairFailureMessage: repairError?.message || "unknown",
+        });
+      }
+    });
 }
 
 module.exports = {

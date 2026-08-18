@@ -2014,6 +2014,9 @@ async function processInboundJob({
       guardrailReason: guardrail.reason || null,
       knowledgeChunkCount: knowledgeChunks.length,
       managedFileSearchEnabled: Boolean(managedFileSearch?.storeName),
+      finishReason: providerResult?.raw?.finishReason || null,
+      repairedIncompleteReply: Boolean(providerResult?.raw?.repairedIncompleteReply),
+      repairReason: providerResult?.raw?.repairReason || null,
     });
 
     const conversationUpdates = {

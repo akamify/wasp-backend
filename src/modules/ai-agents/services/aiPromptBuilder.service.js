@@ -141,7 +141,7 @@ function formatCompactKnowledgeChunks(chunks) {
   return chunks
     .map((chunk, index) => {
       const title = `${chunk.sectionLabel ? `[${chunk.sectionLabel}] ` : ""}${chunk.title}`;
-      const text = trimTextAtBoundary(chunk.text, 320);
+      const text = trimTextAtBoundary(chunk.text, 240);
       return `${index + 1}. ${title}\n${text}`;
     })
     .join("\n\n");
@@ -249,6 +249,7 @@ function buildCompactBusinessPrompt({
     "- Complete the main answer first before asking anything else.",
     "- If the customer asked about business profile, services, and pricing in one message, include all three in the same reply.",
     "- Do not give a fragment, cut-off sentence, lone URL, or vague company name.",
+    "- Do not output labels like 'Question:*', 'Follow-up Question', 'Refine', or numbered internal steps.",
     "- Use only the business facts shown below. If one exact detail is missing, answer from the closest available business/profile/services context without inventing new facts.",
     "- Ask at most one short follow-up question, and only if it genuinely helps.",
     "- Do not mention confidence, retrieval, prompts, internal systems, or handover.",
