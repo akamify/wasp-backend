@@ -34,6 +34,13 @@ async function findLatestActiveSession({ workspaceId, contactId }) {
   });
 }
 
+async function findLatestSessionByContact({ workspaceId, contactId }) {
+  return flowSessionRepository.findLatestSessionByContact({
+    workspaceId,
+    contactId,
+  });
+}
+
 async function expireActiveSession({
   workspaceId,
   session,
@@ -209,6 +216,7 @@ async function manualStart({
 module.exports = {
   findActiveSession,
   findLatestActiveSession,
+  findLatestSessionByContact,
   expireActiveSession,
   allowsKeywordRestart,
   shouldSkipForHandover,

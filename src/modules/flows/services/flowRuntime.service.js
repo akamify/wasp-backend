@@ -1257,6 +1257,29 @@ async function continueSession({
         incomingText: inboundMessage?.text || "",
         incomingReplyId:
           inboundMessage?.buttonReply?.id || inboundMessage?.listReply?.id || null,
+        incomingReplyTitle:
+          inboundMessage?.buttonReply?.title ||
+          inboundMessage?.listReply?.title ||
+          null,
+        configuredHandles:
+          waiting.type === "button_reply"
+            ? Array.isArray(waitingNode?.config?.buttons)
+              ? waitingNode.config.buttons.map((button) => ({
+                  id: button?.id || null,
+                  title: button?.title || null,
+                }))
+              : []
+            : Array.isArray(waitingNode?.config?.sections)
+              ? waitingNode.config.sections.flatMap((section) =>
+                  Array.isArray(section?.rows)
+                    ? section.rows.map((row) => ({
+                        id: row?.id || null,
+                        title: row?.title || null,
+                      }))
+                    : []
+                )
+              : [],
+        lastPrompt: lastPrompt || null,
       });
     }
     return handleFallback({ workspaceId, session, version, contact, inboundMessage });

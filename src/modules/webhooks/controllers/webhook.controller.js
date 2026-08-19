@@ -1010,13 +1010,27 @@ async function receive(req, res) {
 
           // CRM lead detection/assignment is strictly async and must not affect webhook latency.
           try {
-            if (text.trim()) {
+            const isInteractiveReply = ["button_reply", "list_reply"].includes(
+              String(normalizedType || "")
+            );
+            if (text.trim() && !isInteractiveReply) {
               await enqueueAiInboundRuntime({
                 workspaceId: workspaceIdRaw,
                 conversationId: convo?._id ? String(convo._id) : null,
                 messageId: msgDoc?._id ? String(msgDoc._id) : null,
                 waId,
                 phone: from,
+              });
+            } else if (text.trim() && isInteractiveReply) {
+              console.info("[webhook] AI enqueue skipped for interactive reply", {
+                workspaceId: workspaceIdRaw,
+                conversationId: convo?._id ? String(convo._id) : null,
+                messageId: msgDoc?._id ? String(msgDoc._id) : null,
+                inboundType: normalizedType,
+                interactiveReplyId: buttonReply?.id || listReply?.id || null,
+                interactiveReplyTitle:
+                  buttonReply?.title || listReply?.title || null,
+                replyToMessageId: inboundReplyContext.replyToMessageId || null,
               });
             }
           } catch (enqueueErr) {
@@ -1071,21 +1085,35 @@ async function receive(req, res) {
               .catch(() => null);
             if (existingMessage?._id) {
               try {
-                await enqueueAiInboundRuntime({
-                  workspaceId: workspaceIdRaw,
-                  conversationId: existingConversation?._id || null,
-                  messageId: existingMessage._id,
-                  waId,
-                  phone: from,
-                });
-                console.info("[webhook] duplicate inbound recovered", {
-                  workspaceId: workspaceIdRaw,
-                  conversationId: existingConversation?._id
-                    ? String(existingConversation._id)
-                    : null,
-                  messageId: String(existingMessage._id),
-                  wamidMasked: maskWamid(waId),
-                });
+                const isInteractiveReply = ["button_reply", "list_reply"].includes(
+                  String(normalizedType || "")
+                );
+                if (!isInteractiveReply) {
+                  await enqueueAiInboundRuntime({
+                    workspaceId: workspaceIdRaw,
+                    conversationId: existingConversation?._id || null,
+                    messageId: existingMessage._id,
+                    waId,
+                    phone: from,
+                  });
+                  console.info("[webhook] duplicate inbound recovered", {
+                    workspaceId: workspaceIdRaw,
+                    conversationId: existingConversation?._id
+                      ? String(existingConversation._id)
+                      : null,
+                    messageId: String(existingMessage._id),
+                    wamidMasked: maskWamid(waId),
+                  });
+                } else {
+                  console.info("[webhook] duplicate AI enqueue skipped for interactive reply", {
+                    workspaceId: workspaceIdRaw,
+                    messageId: String(existingMessage._id),
+                    inboundType: normalizedType,
+                    interactiveReplyId: buttonReply?.id || listReply?.id || null,
+                    interactiveReplyTitle:
+                      buttonReply?.title || listReply?.title || null,
+                  });
+                }
               } catch (enqueueErr) {
                 console.error("[webhook] duplicate recovery enqueue failed", {
                   workspaceId: workspaceIdRaw,

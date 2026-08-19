@@ -29,6 +29,13 @@ async function findLatestActiveSession({ workspaceId, contactId }) {
   }).sort({ startedAt: -1 });
 }
 
+async function findLatestSessionByContact({ workspaceId, contactId }) {
+  return FlowSession.findOne({
+    workspaceId,
+    contactId,
+  }).sort({ startedAt: -1 });
+}
+
 async function createSession(data) {
   return FlowSession.create(data);
 }
@@ -292,6 +299,7 @@ module.exports = {
   findContactById,
   findActiveSession,
   findLatestActiveSession,
+  findLatestSessionByContact,
   createSession,
   createFlowStartedEvent,
   createFlowEvent,

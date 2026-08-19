@@ -20,6 +20,7 @@ const {
 } = require("@modules/flows/services/flowTrigger.service");
 const {
   findLatestActiveSession,
+  findLatestSessionByContact,
   expireActiveSession,
   allowsKeywordRestart,
   shouldSkipForHandover,
@@ -69,6 +70,24 @@ function serializeError(error) {
   return {
     name: String(error?.name || "Error"),
     message: String(error?.message || "Inbound message processing failed"),
+  };
+}
+
+function sessionSummary(session) {
+  if (!session) return null;
+  return {
+    sessionId: session?._id ? String(session._id) : null,
+    flowId: session?.flowId ? String(session.flowId) : null,
+    flowVersionId: session?.flowVersionId ? String(session.flowVersionId) : null,
+    status: session?.status || null,
+    currentNodeId: session?.currentNodeId || null,
+    waitingFor: session?.waitingFor || null,
+    fallbackCount: Number(session?.fallbackCount || 0),
+    lastPromptNodeId: session?.lastPromptNodeId || null,
+    lastPromptMessageStatus: session?.lastPromptMessageStatus || null,
+    expiresAt: session?.expiresAt || null,
+    completedAt: session?.completedAt || null,
+    expiryReason: session?.expiryReason || null,
   };
 }
 
@@ -595,6 +614,18 @@ async function processInboundMessage(normalizedMessage) {
             session: existingSession,
             inboundMessage: normalizedMessage,
           });
+          flowLog("[FLOW_SESSION_CONTINUE_RESULT]", {
+            workspaceId: String(workspaceId),
+            contactId: String(contact._id),
+            inboundType: normalizedMessage?.type || null,
+            inboundReplyId:
+              normalizedMessage.buttonReply?.id ||
+              normalizedMessage.listReply?.id ||
+              null,
+            runtimeStatus: runtimeResult.status,
+            sessionBefore: sessionSummary(existingSession),
+            sessionAfter: sessionSummary(runtimeResult.session || existingSession),
+          });
           automationResult = {
             status:
               runtimeResult.status === "handover"
@@ -658,6 +689,10 @@ async function processInboundMessage(normalizedMessage) {
             String(normalizedMessage.type || "")
           )
         ) {
+          const latestSession = await findLatestSessionByContact({
+            workspaceId,
+            contactId: contact._id,
+          });
           flowLog("[FLOW_STALE_REPLY_OR_WRONG_NODE]", {
             workspaceId: String(workspaceId),
             contactId: String(contact._id),
@@ -667,6 +702,13 @@ async function processInboundMessage(normalizedMessage) {
               normalizedMessage.buttonReply?.id ||
               normalizedMessage.listReply?.id ||
               null,
+            incomingReplyTitle:
+              normalizedMessage.buttonReply?.title ||
+              normalizedMessage.listReply?.title ||
+              null,
+            replyToMessageId:
+              String(normalizedMessage?.context?.id || "").trim() || null,
+            latestSession: sessionSummary(latestSession),
           });
         }
         const match = await findMatchingFlowVersion({
