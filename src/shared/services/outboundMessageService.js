@@ -142,6 +142,15 @@ function expectedOutboundFailure(error) {
   return { ...failure, reason: "send_failed" };
 }
 
+function logInteractiveButtonPostSend(label, data) {
+  process.stdout.write(
+    `[WHATSAPP_INTERACTIVE_BUTTON_POST_SEND] ${JSON.stringify({
+      step: label,
+      ...data,
+    })}\n`
+  );
+}
+
 async function sendTemplateMessageForUser({
   userId,
   campaignId,
@@ -991,35 +1000,81 @@ async function sendInteractiveButtonMessageForUser({
       { returnDocument: "after" }
     );
 
-    const conversation = await touchConversation({
-      userId,
-      wabaId: creds.wabaId,
-      phoneNumberId: creds.phoneNumberId,
-      phone: resolvedPhone,
-      lastMessageAt: now,
-      lastMessagePreview: formattedText,
-      incrementUnread: false,
-    });
-    await touchContactFromMessage({
-      userId,
-      wabaId: creds.wabaId,
-      phoneNumberId: creds.phoneNumberId,
-      phone: resolvedPhone,
-      direction: "outbound",
-      preview: formattedText,
-      occurredAt: now,
-    });
+    let conversation = null;
+    try {
+      conversation = await touchConversation({
+        userId,
+        wabaId: creds.wabaId,
+        phoneNumberId: creds.phoneNumberId,
+        phone: resolvedPhone,
+        lastMessageAt: now,
+        lastMessagePreview: formattedText,
+        incrementUnread: false,
+      });
+      logInteractiveButtonPostSend("conversation_touched", {
+        workspaceId: String(userId),
+        messageId: message?._id ? String(message._id) : null,
+        conversationId: conversation?._id ? String(conversation._id) : null,
+        resolvedPhone,
+      });
+    } catch (postSendError) {
+      logInteractiveButtonPostSend("conversation_touch_failed", {
+        workspaceId: String(userId),
+        messageId: message?._id ? String(message._id) : null,
+        resolvedPhone,
+        error: postSendError?.message || "unknown",
+      });
+    }
+
+    try {
+      await touchContactFromMessage({
+        userId,
+        wabaId: creds.wabaId,
+        phoneNumberId: creds.phoneNumberId,
+        phone: resolvedPhone,
+        direction: "outbound",
+        preview: formattedText,
+        occurredAt: now,
+      });
+      logInteractiveButtonPostSend("contact_touched", {
+        workspaceId: String(userId),
+        messageId: message?._id ? String(message._id) : null,
+        resolvedPhone,
+      });
+    } catch (postSendError) {
+      logInteractiveButtonPostSend("contact_touch_failed", {
+        workspaceId: String(userId),
+        messageId: message?._id ? String(message._id) : null,
+        resolvedPhone,
+        error: postSendError?.message || "unknown",
+      });
+    }
+
     if (conversation) {
-      await Message.updateOne(
-        { _id: message._id },
-        {
-          $set: {
-            lastAssignedEmployeeId: conversation.assignedEmployeeId || null,
-            lastAssignedAt: conversation.assignedAt || null,
-            leadStatusSnapshot: conversation.leadStatus || null,
-          },
-        }
-      ).catch(() => {});
+      try {
+        await Message.updateOne(
+          { _id: message._id },
+          {
+            $set: {
+              lastAssignedEmployeeId: conversation.assignedEmployeeId || null,
+              lastAssignedAt: conversation.assignedAt || null,
+              leadStatusSnapshot: conversation.leadStatus || null,
+            },
+          }
+        ).catch(() => {});
+        logInteractiveButtonPostSend("assignment_snapshot_updated", {
+          workspaceId: String(userId),
+          messageId: message?._id ? String(message._id) : null,
+          conversationId: conversation?._id ? String(conversation._id) : null,
+        });
+      } catch (postSendError) {
+        logInteractiveButtonPostSend("assignment_snapshot_failed", {
+          workspaceId: String(userId),
+          messageId: message?._id ? String(message._id) : null,
+          conversationId: conversation?._id ? String(conversation._id) : null,
+          error: postSendError?.message || "unknown",
+        });
+      }
     }
     return { message: sentMessage, apiResponse };
   } catch (error) {
