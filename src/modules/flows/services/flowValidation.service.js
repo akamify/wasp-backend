@@ -1316,6 +1316,29 @@ function validateFlowDraft(flow) {
     }
   }
 
+  const entryNodeIds = new Set(
+    startNodes
+      .map((node) => String(node?.id || "").trim())
+      .filter(Boolean)
+  );
+  if (isNonEmptyString(draft.fallbackNodeId)) entryNodeIds.add(draft.fallbackNodeId.trim());
+  if (isNonEmptyString(draft.handoverNodeId)) entryNodeIds.add(draft.handoverNodeId.trim());
+
+  const reachableNodeIds = new Set();
+  const stack = Array.from(entryNodeIds);
+  while (stack.length) {
+    const currentNodeId = String(stack.pop() || "").trim();
+    if (!currentNodeId || reachableNodeIds.has(currentNodeId)) continue;
+    reachableNodeIds.add(currentNodeId);
+    const outgoing = outgoingBySource.get(currentNodeId) || [];
+    for (const edge of outgoing) {
+      const targetNodeId = String(edge?.target || "").trim();
+      if (targetNodeId && !reachableNodeIds.has(targetNodeId)) {
+        stack.push(targetNodeId);
+      }
+    }
+  }
+
   for (const startNode of startNodes) {
     const outgoing = outgoingBySource.get(String(startNode.id || "").trim()) || [];
     if (outgoing.length !== 1) {
@@ -1329,6 +1352,15 @@ function validateFlowDraft(flow) {
   }
 
   for (const node of draft.nodes) {
+    const nodeId = String(node?.id || "").trim();
+    if (nodeId && !reachableNodeIds.has(nodeId)) {
+      addIssue(
+        errors,
+        "NODE_UNREACHABLE",
+        "This node is not reachable from any start or configured fallback/handover path",
+        { nodeId, field: "draft.nodes" }
+      );
+    }
     const outgoing = outgoingBySource.get(String(node?.id || "").trim()) || [];
     validateNode(
       node,
