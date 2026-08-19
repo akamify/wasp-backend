@@ -875,6 +875,7 @@ async function sendInteractiveButtonMessageForUser({
   if (!formattedText) {
     throw new HttpError(400, "Interactive button body cannot be empty after WhatsApp formatting.");
   }
+  let stage = "validate_input";
   const normalizedIdempotencyKey = String(idempotencyKey || "").trim() || null;
   if (normalizedIdempotencyKey) {
     const existing = await Message.findOne({
@@ -891,6 +892,7 @@ async function sendInteractiveButtonMessageForUser({
     }
   }
   await assertDailyOutboundMessageAllowed({ workspaceId: userId });
+  stage = "normalize_buttons";
   const normalizedButtons = (buttons || []).map((button) => ({
     id: String(button?.id || "").trim(),
     title: String(button?.title || "").trim(),
@@ -913,6 +915,7 @@ async function sendInteractiveButtonMessageForUser({
   const now = new Date();
   let message;
   try {
+    stage = "create_outbound_message";
     message = await Message.create({
     workspaceId: userId,
     wabaId: creds.wabaId,
@@ -966,6 +969,7 @@ async function sendInteractiveButtonMessageForUser({
   }
 
   try {
+    stage = "provider_send";
     const apiResponse = await sendInteractiveButtonMessage({
       accessToken: creds.accessToken,
       phoneNumberId: creds.phoneNumberId,
@@ -981,6 +985,7 @@ async function sendInteractiveButtonMessageForUser({
       ? apiResponse.contacts[0]?.wa_id
       : undefined;
     const resolvedPhone = waId ? String(waId) : to;
+    stage = "mark_message_sent";
     const sentMessage = await Message.findOneAndUpdate(
       { _id: message._id, workspaceId: userId },
       {
@@ -993,7 +998,6 @@ async function sendInteractiveButtonMessageForUser({
           sentAt: now,
           sortAt: now,
           providerDispatchCompletedAt: now,
-          error: null,
         },
         $unset: { error: 1 },
       },
@@ -1002,6 +1006,7 @@ async function sendInteractiveButtonMessageForUser({
 
     let conversation = null;
     try {
+      stage = "touch_conversation";
       conversation = await touchConversation({
         userId,
         wabaId: creds.wabaId,
@@ -1027,6 +1032,7 @@ async function sendInteractiveButtonMessageForUser({
     }
 
     try {
+      stage = "touch_contact";
       await touchContactFromMessage({
         userId,
         wabaId: creds.wabaId,
@@ -1052,6 +1058,7 @@ async function sendInteractiveButtonMessageForUser({
 
     if (conversation) {
       try {
+        stage = "assignment_snapshot";
         await Message.updateOne(
           { _id: message._id },
           {
@@ -1076,6 +1083,7 @@ async function sendInteractiveButtonMessageForUser({
         });
       }
     }
+    stage = "return_success";
     return { message: sentMessage, apiResponse };
   } catch (error) {
     const failure = outboundFailure(error);
@@ -1090,6 +1098,15 @@ async function sendInteractiveButtonMessageForUser({
         },
       }
     ).catch(() => {});
+    logInteractiveButtonPostSend("send_failed", {
+      workspaceId: String(userId),
+      messageId: message?._id ? String(message._id) : null,
+      stage,
+      error: error?.message || "unknown",
+      reason: failure?.reason || "send_failed",
+      metaCode: failure?.meta?.code || null,
+      metaSubcode: failure?.meta?.subcode || null,
+    });
     error.outboundMessageId = message._id;
     error.outboundFailure = failure;
     try {
