@@ -25,7 +25,11 @@ const {
 const { syncConnectionMetadata } = require("@modules/meta/services/metadataSync.service");
 const { syncTemplatesForWorkspace } = require("@modules/meta/services/templateSync.service");
 const { decryptPin, encryptPin } = require("@modules/meta/services/pinLifecycle.service");
-const { getToken, META_TOKEN_TYPES } = require("@modules/meta/services/tokenProvider.service");
+const {
+  getToken,
+  META_TOKEN_TYPES,
+  getSystemUserAccessTokenDiagnostics,
+} = require("@modules/meta/services/tokenProvider.service");
 const { ensureSystemUserProvisionedOnWaba } = require("@modules/meta/services/wabaProvisioning.service");
 const { findLatestConnectionDocument } = require("@shared/services/whatsappConnectionService");
 const { serializeWhatsAppConnection } = require("@shared/services/whatsappConnectionMetadataService");
@@ -253,13 +257,70 @@ async function exchangeCodeForToken(code) {
 async function debugBusinessToken({ token, graphApiVersion }) {
   const client = createMetaClient({ graphApiVersion, timeout: 20000 });
   const systemUserToken = await getToken({ tokenType: META_TOKEN_TYPES.SYSTEM_USER });
-  const response = await client.get("/debug_token", {
-    headers: { Authorization: `Bearer ${systemUserToken}` },
-    params: {
-      input_token: token,
-    },
-  });
-  return response?.data?.data || null;
+  const tokenDiagnostics = await getSystemUserAccessTokenDiagnostics().catch(() => ({
+    present: true,
+    source: "unknown",
+    length: String(systemUserToken || "").trim().length,
+    fingerprint: null,
+  }));
+  try {
+    const response = await client.get("/debug_token", {
+      headers: { Authorization: `Bearer ${systemUserToken}` },
+      params: {
+        input_token: token,
+      },
+    });
+    return response?.data?.data || null;
+  } catch (err) {
+    const meta = err?.response?.data?.error || {};
+    const message = String(meta?.message || err?.message || "").trim();
+    const code = Number(meta?.code || 0);
+    const subcode = Number(meta?.error_subcode || meta?.subcode || 0);
+    let verdict = "system_user_debug_failed";
+    let recommendedAction =
+      "Verify SYSTEM_USER_ACCESS_TOKEN, META_APP_ID, and META_APP_SECRET for the current active Meta app.";
+
+    if (/application has been deleted/i.test(message)) {
+      verdict = "system_user_token_linked_to_deleted_or_inactive_app";
+      recommendedAction =
+        "Generate a new system user token from the currently active Meta app and update the platform setting or environment.";
+    } else if (
+      /invalid oauth access token/i.test(message) ||
+      /session has expired/i.test(message) ||
+      code === 190
+    ) {
+      verdict = "system_user_token_invalid_or_expired";
+      recommendedAction =
+        "Regenerate SYSTEM_USER_ACCESS_TOKEN and ensure the token belongs to the same Meta app used for embedded signup.";
+    } else if (/must provide an app access token/i.test(message)) {
+      verdict = "wrong_token_type_or_missing_app_context";
+      recommendedAction =
+        "Check that the request is using a real system user access token and that META_APP_ID/META_APP_SECRET are correct.";
+    }
+
+    console.error("[meta-embedded-signup] system user debug diagnostics", {
+      graphApiVersion: getMetaGraphVersion(graphApiVersion),
+      appId: (() => {
+        try {
+          return maskId(getMetaAppConfig().metaAppId);
+        } catch {
+          return null;
+        }
+      })(),
+      systemUserToken: tokenDiagnostics,
+      embeddedCustomerTokenFingerprint: fingerprint(token),
+      metaError: {
+        message: message || null,
+        code: Number.isFinite(code) ? code : null,
+        subcode: Number.isFinite(subcode) && subcode > 0 ? subcode : null,
+        type: meta?.type || null,
+        fbtraceId: meta?.fbtrace_id || meta?.fbtraceId || null,
+      },
+      verdict,
+      recommendedAction,
+    });
+    throw err;
+  }
 }
 
 function validateTokenScopes(debugTokenData, wabaId, appId) {

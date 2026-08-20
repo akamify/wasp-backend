@@ -11,15 +11,41 @@ const META_TOKEN_TYPES = Object.freeze({
 });
 
 async function getSystemUserAccessToken() {
-  const token = await settingsResolver.getSettingSecret(
-    PLATFORM_SETTING_KEYS.SYSTEM_USER_ACCESS_TOKEN,
-    process.env.SYSTEM_USER_ACCESS_TOKEN || ""
+  const result = await settingsResolver.getSettingWithMeta(
+    PLATFORM_SETTING_KEYS.SYSTEM_USER_ACCESS_TOKEN
   );
-  const normalized = String(token || "").trim();
+  const fallback = String(process.env.SYSTEM_USER_ACCESS_TOKEN || "").trim();
+  const normalized = String(
+    result?.value == null || result.value === "" ? fallback : result.value
+  ).trim();
   if (!normalized) {
     throw new HttpError(500, "Missing Meta system user access token.");
   }
   return normalized;
+}
+
+async function getSystemUserAccessTokenDiagnostics() {
+  const result = await settingsResolver.getSettingWithMeta(
+    PLATFORM_SETTING_KEYS.SYSTEM_USER_ACCESS_TOKEN
+  );
+  const fallback = String(process.env.SYSTEM_USER_ACCESS_TOKEN || "").trim();
+  const normalized = String(
+    result?.value == null || result.value === "" ? fallback : result.value
+  ).trim();
+
+  return {
+    present: Boolean(normalized),
+    source:
+      result?.value == null || result.value === ""
+        ? fallback
+          ? "env"
+          : "missing"
+        : result?.source || "db",
+    length: normalized.length,
+    fingerprint: normalized
+      ? `${normalized.slice(0, 4)}...${normalized.slice(-4)}`
+      : null,
+  };
 }
 
 function getAppAccessToken() {
@@ -50,4 +76,5 @@ async function getToken({ tokenType, token, connectionDoc } = {}) {
 module.exports = {
   META_TOKEN_TYPES,
   getToken,
+  getSystemUserAccessTokenDiagnostics,
 };
