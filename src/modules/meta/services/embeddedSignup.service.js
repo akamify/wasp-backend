@@ -47,12 +47,10 @@ function fingerprint(value) {
   return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 12);
 }
 
-function buildExchangeCacheKey({ workspaceId, code, wabaId, phoneNumberId }) {
+function buildExchangeCacheKey({ workspaceId, code }) {
   return [
     String(workspaceId || "").trim(),
     fingerprint(code),
-    String(wabaId || "").trim(),
-    String(phoneNumberId || "").trim(),
   ].join(":");
 }
 
@@ -614,7 +612,7 @@ async function executeEmbeddedSignupExchange({
     wabaId: maskId(wabaId),
     phoneNumberId: maskId(phoneNumberId),
   };
-  const cacheKey = buildExchangeCacheKey({ workspaceId, code, wabaId, phoneNumberId });
+  const cacheKey = buildExchangeCacheKey({ workspaceId, code });
 
   console.info("[meta-embedded-signup] exchange requested", logContext);
 
@@ -625,6 +623,7 @@ async function executeEmbeddedSignupExchange({
       const exchanged = await exchangeCodeForToken(code);
       token = exchanged.token;
       appId = exchanged.appId;
+      console.info("[meta-embedded-signup] code exchange succeeded", logContext);
     } catch (err) {
       if (isUsedAuthorizationCodeError(err)) {
         const recovered = await recoverExistingEmbeddedSignupSession({
@@ -659,6 +658,8 @@ async function executeEmbeddedSignupExchange({
             restartRequired: true,
             recoveryAttempted: true,
             existingState,
+            debugHint:
+              "Search backend logs for this codeFingerprint to find the earlier step that consumed the Meta code.",
             flowId: flowId ? String(flowId) : null,
             codeFingerprint,
           },
@@ -694,6 +695,10 @@ async function executeEmbeddedSignupExchange({
       });
     });
     validateTokenScopes(debugTokenData, wabaId, appId);
+    console.info("[meta-embedded-signup] token validated", {
+      ...logContext,
+      appId: maskId(appId),
+    });
 
     const client = createMetaClient({ graphApiVersion, timeout: 20000 });
     const provisioning = await ensureSystemUserProvisionedOnWaba({
@@ -732,6 +737,11 @@ async function executeEmbeddedSignupExchange({
         workspaceId: workspace?.id,
         extraDetails: { wabaId, flowId: flowId ? String(flowId) : null, codeFingerprint },
       });
+    });
+    console.info("[meta-embedded-signup] phone discovery completed", {
+      ...logContext,
+      matchedPhoneId: matchedPhone?.id ? maskId(matchedPhone.id) : null,
+      availablePhones: Array.isArray(phones) ? phones.length : 0,
     });
 
     if (!matchedPhone) {
@@ -778,6 +788,7 @@ async function executeEmbeddedSignupExchange({
         extraDetails: { wabaId, flowId: flowId ? String(flowId) : null, codeFingerprint },
       });
     });
+    console.info("[meta-embedded-signup] webhook subscription confirmed", logContext);
 
     const registrationStatus = pin ? REGISTRATION_STATUSES.REGISTERING : REGISTRATION_STATUSES.PIN_REQUIRED;
     const onboardingStage = pin ? ONBOARDING_STAGES.REGISTERING : ONBOARDING_STAGES.PIN_REQUIRED;

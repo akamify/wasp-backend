@@ -28,6 +28,7 @@ router.post(
       code: Joi.string().allow("", null).optional(),
       waba_id: Joi.string().allow("", null).optional(),
       phone_number_id: Joi.string().allow("", null).optional(),
+      flow_id: Joi.string().trim().allow("", null).optional(),
       pin: Joi.string().trim().pattern(/^\d{6}$/).allow("", null).optional(),
     })
   ),
