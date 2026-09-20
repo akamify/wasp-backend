@@ -5,6 +5,13 @@ const { HttpError } = require("@shared/utils/httpError");
 const { writeAuditLog } = require("@shared/services/auditLog.service");
 const { uploadMediaAsset } = require("@modules/media/services/mediaAsset.service");
 const Joi = require("joi");
+const setup = require("../services/catalogSetup.service");
+async function catalogSetupStatus(req, res) { res.json({ success: true, setup: await setup.status(workspace(req)) }); }
+async function createCatalog(req, res) {
+  const catalog = await setup.create(workspace(req), body(schemas.catalogCreate, req));
+  await audit(req, "commerce_catalog_created_and_connected", catalog);
+  res.status(201).json({ success: true, catalog });
+}
 
 const workspace = (req) => req.workspace.id;
 const id = (req) => schemas.parse(schemas.objectId.required(), req.params.productId);
@@ -66,6 +73,5 @@ async function uploadImage(req, res) {
     throw new HttpError(502, "Product image upload failed. Retry shortly.");
   }
 }
-module.exports = { listCatalogs, getCatalog, bindCatalog, changeCatalog, listProducts, getProduct,
+module.exports = { catalogSetupStatus, createCatalog, listCatalogs, getCatalog, bindCatalog, changeCatalog, listProducts, getProduct,
   createProduct, editProduct, retryProduct, uploadImage };
-

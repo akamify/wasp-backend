@@ -31,6 +31,11 @@ test("Commerce HTTP routes enforce real authentication, membership, permissions 
     serviceCalls++; assert.equal(ws, workspaceId); assert.equal(data.price, "10.00");
     return { id: "product-test", revision: 1 };
   });
+  const setup = require("../services/catalogSetup.service");
+  t.mock.method(setup, "create", async (ws, data) => {
+    assert.equal(ws, workspaceId); assert.equal(data.name, "Menu");
+    return { id: "catalog-test", revision: 1 };
+  });
   const router = require("../routes/catalog.routes");
   const app = express();
   app.use(express.json({ limit: "64kb" }));
@@ -46,9 +51,12 @@ test("Commerce HTTP routes enforce real authentication, membership, permissions 
   assert.equal(serviceCalls, 1);
   assert.equal((await fetch(`${base}/products?limit=10000`, { headers })).status, 400);
   assert.equal((await fetch(`${base}/products`, { method: "POST", headers, body: "{}" })).status, 403);
+  assert.equal((await fetch(`${base}/catalog/create`, { method: "POST", headers, body: "{}" })).status, 403);
   member = false;
   assert.equal((await fetch(`${base}/products?limit=2`, { headers })).status, 404);
   member = true; role = "manager";
+  assert.equal((await fetch(`${base}/catalog/create`, { method: "POST", headers, body: JSON.stringify({ name: "Menu", confirmOwnership: true, workspaceId: "other" }) })).status, 400);
+  assert.equal((await fetch(`${base}/catalog/create`, { method: "POST", headers, body: JSON.stringify({ name: "Menu", confirmOwnership: true }) })).status, 201);
   const body = { sku: "tea", name: "Tea", description: "Tea", imageUrl: "https://example.com/a.jpg",
     productUrl: "https://example.com/a", price: "10.00", condition: "new", taxRateBps: null, taxConfirmed: true };
   assert.equal((await fetch(`${base}/products`, { method: "POST", headers, body: JSON.stringify({ ...body, workspaceId: "other" }) })).status, 400);
@@ -56,4 +64,3 @@ test("Commerce HTTP routes enforce real authentication, membership, permissions 
   assert.equal(serviceCalls, 2);
   assert.equal((await fetch(`${base}/products?limit=2`, { headers: { ...headers, "x-workspace-id": "100000000000000000000002" } })).status, 404);
 });
-

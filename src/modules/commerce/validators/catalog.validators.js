@@ -48,6 +48,8 @@ const createProduct = Joi.object({
 });
 const updateProduct = Joi.object({ ...productFields, revision: revision.required() }).min(2);
 const catalogBind = Joi.object({ catalogId: graphId.required(), confirmDedicatedCatalog: Joi.boolean().valid(true).required() });
+const catalogCreate = Joi.object({ name: Joi.string().min(1).max(150).pattern(/\S/).required(),
+  confirmOwnership: Joi.boolean().valid(true).required(), recoveryCatalogId: graphId });
 const commerceSettings = Joi.object({ revision: revision.required(), catalogVisible: Joi.boolean().required(), cartEnabled: Joi.boolean().required() });
 const revisionBody = Joi.object({ revision: revision.required() });
 const listQuery = Joi.object({
@@ -59,4 +61,4 @@ function parse(schema, input, convert = false) {
   if (error) throw new HttpError(400, "Invalid Commerce request", { fields: error.details.map((entry) => entry.path.join(".")) });
   return value;
 }
-module.exports = { parse, objectId, createProduct, updateProduct, catalogBind, commerceSettings, revisionBody, listQuery };
+module.exports = { parse, objectId, createProduct, updateProduct, catalogBind, catalogCreate, commerceSettings, revisionBody, listQuery };

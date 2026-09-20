@@ -43,6 +43,45 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
     return { catalogs: data.data.map((item) => ({ id: graphId(item.id), name: String(item.name || "").slice(0, 150) })),
       cursor: data.paging?.next ? data.paging?.cursors?.after || null : null };
   }
+  async function ownerBusiness() {
+    const data = await get(`/${graphId(credentials.wabaId)}`, { fields: "id,owner_business_info" });
+    const id = data?.owner_business_info?.id;
+    if (data?.id !== credentials.wabaId || typeof id !== "string" || !/^\d{1,30}$/.test(id)) {
+      throw new HttpError(409, "Cannot verify the WhatsApp business owner. Reconnect with business and catalog management access.");
+    }
+    return { id, name: String(data.owner_business_info.name || "").slice(0, 150) };
+  }
+  async function createOwnedCatalog(businessId, name) {
+    const result = await post(`/${graphId(businessId)}/owned_product_catalogs`, new URLSearchParams({ name, vertical: "commerce" }));
+    if (typeof result?.id !== "string" || !/^\d{1,30}$/.test(result.id)) {
+      const error = new HttpError(502, "Meta did not return a catalog ID. Check Commerce Manager before retrying.");
+      error.ambiguous = true;
+      throw error;
+    }
+    return result.id;
+  }
+  async function verifyOwner(catalogId, businessId) {
+    const result = await get(`/${graphId(catalogId)}`, { fields: "id,business,vertical" });
+    if (result?.id !== catalogId || result.business?.id !== businessId || result.vertical !== "commerce") {
+      throw new HttpError(409, "The catalog must belong to this WhatsApp business and contain physical products.");
+    }
+  }
+  async function linkCatalog(catalogId) {
+    // Never replace an existing remote binding, including bindings made outside AIWizChat.
+    const linked = await linkedCatalogs();
+    if (linked.cursor || linked.catalogs.some((item) => item.id !== catalogId)) {
+      throw new HttpError(409, "WhatsApp already has another linked catalog. Manage that connection before continuing.");
+    }
+    if (!linked.catalogs.some((item) => item.id === catalogId)) {
+      await post(`/${graphId(credentials.wabaId)}/product_catalogs`, new URLSearchParams({ catalog_id: graphId(catalogId) }));
+    }
+    await verifyBinding(catalogId);
+  }
+  async function verifyEmptyCatalog(catalogId) {
+    const products = await get(`/${graphId(catalogId)}/products`, { fields: "id", limit: 1, return_only_approved_products: false });
+    if (!Array.isArray(products?.data)) throw new HttpError(502, "Meta returned an invalid product list. Recovery was not saved.");
+    if (products.data.length) throw new HttpError(409, "Recover a dedicated empty catalog. Existing products will not be imported or overwritten.");
+  }
   async function verifyBinding(catalogId) {
     graphId(catalogId);
     let cursor;
@@ -127,6 +166,7 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
         body: new URLSearchParams(Object.entries(data).map(([key, value]) => [key, String(value)])).toString() };
     }));
   }
-  return { version, linkedCatalogs, verifyBinding, inspectCatalog, readSettings, updateSettings, lookupProducts, writeProducts };
+  return { version, linkedCatalogs, verifyBinding, inspectCatalog, readSettings, updateSettings, lookupProducts, writeProducts,
+    ownerBusiness, createOwnedCatalog, verifyOwner, verifyEmptyCatalog, linkCatalog };
 }
 module.exports = { createCatalogClient, providerError };
