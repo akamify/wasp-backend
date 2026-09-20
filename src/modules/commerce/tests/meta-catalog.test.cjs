@@ -71,3 +71,21 @@ test("phone commerce settings are read back after successful update", async () =
   assert.equal(calls[0].options.params.is_catalog_visible, true);
 });
 
+test("code 100 diagnostics identify the failed operation without exposing provider text or secrets", async () => {
+  const error = { response: { status: 400, data: { error: { code: 100, error_subcode: 33,
+    fbtrace_id: "trace_123", message: "Unsupported post request. Object secret-token cannot be loaded" } } } };
+  const client = createCatalogClient(credentials, { client: { post: async () => { throw error; } } });
+  await assert.rejects(client.createOwnedCatalog("333", "Menu"), (failure) => {
+    assert.equal(failure.statusCode, 422);
+    assert.equal(failure.details.operation, "create_catalog");
+    assert.equal(failure.details.providerSubcode, 33);
+    assert.equal(failure.details.providerTraceId, "trace_123");
+    assert.equal(failure.details.providerReason, "object_unavailable_or_operation_unsupported");
+    assert.equal(JSON.stringify(failure).includes("secret-token"), false);
+    return true;
+  });
+  const safe = providerError({ response: { status: 400, data: { error: { code: 100,
+    message: "Tried accessing nonexisting field (owner_business_info) on node secret-token" } } } });
+  assert.equal(safe.details.providerField, "owner_business_info");
+  assert.equal(safe.details.providerReason, "unsupported_field");
+});

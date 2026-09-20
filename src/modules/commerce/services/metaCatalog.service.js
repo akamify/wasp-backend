@@ -7,7 +7,7 @@ function graphId(value) {
   if (typeof value !== "string" || !/^\d{1,30}$/.test(value)) throw new HttpError(400, "Invalid Meta asset identifier.");
   return value;
 }
-function providerError(error, ambiguous = false) {
+function providerError(error, ambiguous = false, context = {}) {
   if (error instanceof HttpError) return error;
   const code = Number(error?.response?.data?.error?.code || error?.error?.code || 0);
   const status = Number(error?.response?.status || error?.status || 0);
@@ -15,7 +15,23 @@ function providerError(error, ambiguous = false) {
   const message = code === 190 ? "WhatsApp authorization expired. Reconnect WhatsApp."
     : retryable ? "Meta is temporarily unavailable. Catalog sync will retry."
     : "Meta rejected the catalog operation. Check asset permissions and product requirements.";
-  const safe = new HttpError(retryable ? 503 : 422, message, { providerCode: code || undefined });
+  const remote = error?.response?.data?.error || error?.error || {};
+  const details = { providerCode: code || undefined };
+  if (Number.isSafeInteger(remote.error_subcode)) details.providerSubcode = remote.error_subcode;
+  if (typeof remote.fbtrace_id === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(remote.fbtrace_id)) details.providerTraceId = remote.fbtrace_id;
+  if (context.operation) details.operation = context.operation;
+  // Never echo the raw provider response, headers or arbitrary message text.
+  // Classify recognized diagnostics into fixed, non-sensitive explanations.
+  const reason = String(remote.message || "");
+  const fields = ["name", "vertical", "catalog_id", "owner_business_info", "business", "fields", "access_token"];
+  const field = fields.find((value) => new RegExp(`\\b${value}\\b`, "i").test(reason));
+  if (/nonexisting field|non-existing field|unknown field/i.test(reason)) details.providerReason = "unsupported_field";
+  else if (/unsupported (get|post|delete) request|does not exist|cannot be loaded/i.test(reason)) details.providerReason = "object_unavailable_or_operation_unsupported";
+  else if (/permission|not authorized|access denied/i.test(reason)) details.providerReason = "permission_denied";
+  else if (/required|missing/i.test(reason)) details.providerReason = "missing_parameter";
+  else if (/invalid parameter|must be|invalid value/i.test(reason)) details.providerReason = "invalid_parameter";
+  if (field) details.providerField = field;
+  const safe = new HttpError(retryable ? 503 : 422, message, details);
   safe.retryable = retryable;
   safe.ambiguous = ambiguous && (!status || status >= 500);
   const retryAfter = Number(error?.response?.headers?.["retry-after"] || 0);
@@ -28,13 +44,21 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
   if (!credentials.accessToken) throw new HttpError(409, "WhatsApp authorization is missing.");
   const http = client || createMetaClient({ graphApiVersion: version, timeout: 15000 });
   const options = { headers: authHeaders(credentials.accessToken), signal, maxRedirects: 0, maxContentLength: 2 * 1024 * 1024 };
+  function operation(path, method, params) {
+    if (path.endsWith("/owned_product_catalogs")) return "create_catalog";
+    if (path.endsWith("/product_catalogs")) return method === "POST" ? "link_catalog" : "read_linked_catalogs";
+    if (params?.fields === "id,owner_business_info") return "read_business_owner";
+    if (path.endsWith("/whatsapp_commerce_settings")) return "commerce_settings";
+    if (path.endsWith("/products")) return "read_catalog_products";
+    return "catalog_details_or_products";
+  }
   async function get(path, params = {}) {
     try { return (await http.get(path, { ...options, params })).data; }
-    catch (error) { throw providerError(error); }
+    catch (error) { throw providerError(error, false, { operation: operation(path, "GET", params) }); }
   }
   async function post(path, body, params) {
     try { return (await http.post(path, body, { ...options, params })).data; }
-    catch (error) { throw providerError(error, true); }
+    catch (error) { throw providerError(error, true, { operation: operation(path, "POST", params) }); }
   }
   async function linkedCatalogs(after) {
     const data = await get(`/${graphId(credentials.wabaId)}/product_catalogs`,
