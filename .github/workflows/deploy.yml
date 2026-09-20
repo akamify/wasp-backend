@@ -1,12 +1,34 @@
 name: Deploy Wasp Backend
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches:
       - main
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.14.0'
+          cache: npm
+      - run: npm ci
+      - name: Commerce regression tests
+        run: node --test --test-concurrency=1 src/modules/commerce/tests/*.test.cjs
+      - name: Offline Commerce index plan
+        run: npm run commerce:indexes -- --plan
+      - run: npm run build
   deploy:
+    if: github.event_name == 'push'
+    needs: verify
     runs-on: ubuntu-latest
 
     steps:
@@ -20,4 +42,3 @@ jobs:
 
           script: |
             /root/wasp-backend/deploy.sh
-            

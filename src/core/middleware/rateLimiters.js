@@ -122,11 +122,11 @@ const metaFlowOps = rateLimit({
   },
 });
 
-function externalChatLimiter(windowMs, limit) {
+function externalChatLimiter(windowMs, limit, keyGenerator = externalApiKeyBucket) {
   return rateLimit({
     windowMs,
     limit,
-    keyGenerator: externalApiKeyBucket,
+    keyGenerator,
     standardHeaders: true,
     legacyHeaders: false,
     message: {
@@ -143,6 +143,11 @@ const externalChatRealtimeToken = externalChatLimiter(externalChatTokenWindowMs,
 const ecommerceRead = externalChatLimiter(ecommerceReadWindowMs, ecommerceReadLimit);
 const ecommerceConnect = externalChatLimiter(ecommerceConnectWindowMs, ecommerceConnectLimit);
 const ecommerceWebhook = externalChatLimiter(ecommerceWebhookWindowMs, ecommerceWebhookLimit);
+// Riders may share restaurant Wi-Fi. Bind authenticated delivery budgets to the
+// verified account, not a supplied token/header or a shared restaurant IP.
+const deliveryBucket = (req) => req.user?.id ? `delivery:${req.user.id}` : ipKeyGenerator(req.ip);
+const ecommerceDeliveryRead = externalChatLimiter(60000, 120, deliveryBucket);
+const ecommerceDeliveryAction = externalChatLimiter(60000, 60, deliveryBucket);
 
 module.exports = {
   general,
@@ -158,4 +163,6 @@ module.exports = {
   ecommerceRead,
   ecommerceConnect,
   ecommerceWebhook,
+  ecommerceDeliveryRead,
+  ecommerceDeliveryAction,
 };

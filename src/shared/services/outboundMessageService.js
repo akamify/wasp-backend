@@ -426,7 +426,11 @@ async function sendTextMessageForUser({
   flowSessionId,
   flowId,
   nodeId,
+  expectedCommerceBinding,
+  commerceContent,
 }) {
+  const persistedInteractive = commerceContent?.interactive
+    ? require("@modules/commerce/domain/nativePayments").storedInteractive(commerceContent.interactive) : undefined;
   const formattedText = formatWhatsAppText(text);
   if (!formattedText) {
     throw new HttpError(400, "Outbound text message cannot be empty after WhatsApp formatting.");
@@ -439,6 +443,8 @@ async function sendTextMessageForUser({
       idempotencyKey: normalizedIdempotencyKey,
     });
     if (existing) {
+      if (commerceContent && existing.payload?.commerce?.requestHash !== commerceContent.requestHash)
+        throw new HttpError(409, "Message request changed. Use the original request or a new idempotency key.");
       if (
         existing.whatsappMessageId ||
         ["sent", "accepted", "delivered", "read"].includes(String(existing.status || "").toLowerCase())
@@ -473,6 +479,11 @@ async function sendTextMessageForUser({
   await assertDailyOutboundMessageAllowed({ workspaceId: userId });
 
   const creds = await getCredentialsForUser(userId);
+  if (expectedCommerceBinding) {
+    await require("@modules/commerce/services/commerceMessagePolicy.service").assertCommerceMessageAllowed({
+      workspaceId: userId, to, credentials: creds, expected: expectedCommerceBinding,
+    });
+  }
   const now = new Date();
   if (!reservedMessage) {
     try {
@@ -495,8 +506,9 @@ async function sendTextMessageForUser({
         text: formattedText,
         displayText: formattedText,
         previewText: formattedText,
-        type: "text",
-        payload: { to, text: formattedText },
+        type: commerceContent?.interactive ? "interactive" : "text",
+        ...(persistedInteractive ? { interactive: persistedInteractive } : {}),
+        payload: { to, text: formattedText, ...(commerceContent ? { commerce: { ...commerceContent.metadata, requestHash: commerceContent.requestHash }, interactive: persistedInteractive } : {}) },
         messageKind: source === "automation" ? "automation" : "service",
         chargeAmount: 0,
         chargeCategory: null,
@@ -511,6 +523,8 @@ async function sendTextMessageForUser({
           workspaceId: userId,
           idempotencyKey: normalizedIdempotencyKey,
         });
+        if (commerceContent && reservedMessage?.payload?.commerce?.requestHash !== commerceContent.requestHash)
+          throw new HttpError(409, "Message request changed. Use the original request or a new idempotency key.");
         if (
           reservedMessage &&
           (reservedMessage.whatsappMessageId ||
@@ -567,7 +581,7 @@ async function sendTextMessageForUser({
           text: formattedText,
           displayText: formattedText,
           previewText: formattedText,
-          payload: { to, text: formattedText },
+          payload: { to, text: formattedText, ...(commerceContent ? { commerce: { ...commerceContent.metadata, requestHash: commerceContent.requestHash }, interactive: persistedInteractive } : {}) },
           error: null,
           ...(String(reservedMessage.status || "").toLowerCase() === "failed"
             ? { providerDispatchStartedAt: null, providerDispatchCompletedAt: null }
@@ -626,7 +640,11 @@ async function sendTextMessageForUser({
 
   let apiResponse;
   try {
-    apiResponse = await sendTextMessage({
+    apiResponse = commerceContent?.interactive
+      ? await require("@modules/commerce/services/metaCommerceMessages.service").send({
+        accessToken: creds.accessToken, phoneNumberId: creds.phoneNumberId, graphApiVersion: creds.graphApiVersion,
+        to, interactive: commerceContent.interactive,
+      }) : await sendTextMessage({
       accessToken: creds.accessToken,
       phoneNumberId: creds.phoneNumberId,
       to,

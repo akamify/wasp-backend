@@ -274,6 +274,19 @@ async function receive(req, res) {
   }
   if (!body) return res.sendStatus(400);
 
+  // Persist signed, exactly scoped Commerce carts before legacy processing or inbox deduplication.
+  // A storage failure must reach Meta as a retryable failure, never be swallowed as an inbox error.
+  try {
+    await require("@modules/commerce/services/orderIntake.service").receiveOrders({
+      body, rawBody, signature: req.headers["x-hub-signature-256"],
+    });
+    await require("@modules/commerce/services/nativePaymentWebhooks.service").receive({
+      body, rawBody, signature: req.headers["x-hub-signature-256"],
+    });
+  } catch (error) {
+    return res.sendStatus(error?.statusCode === 401 ? 401 : 503);
+  }
+
   const debug =
     String(process.env.META_WEBHOOK_DEBUG || "").toLowerCase() === "true";
   if (debug) {
@@ -483,7 +496,7 @@ async function receive(req, res) {
         );
       } catch {}
 
-      const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
+      const statuses = Array.isArray(value?.statuses) ? value.statuses.filter((s) => s?.type !== "payment") : [];
       if (statuses.length) {
         await WhatsAppCredentials.updateOne(
           { workspaceId: workspaceIdRaw, isActive: { $ne: false } },

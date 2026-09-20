@@ -41,6 +41,7 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/admin`, require("@core/routes/adminRoutes"));
   app.use(`${basePath}/super-admin`, require("@modules/super-admin/routes/superAdmin.routes"));
   app.use(`${basePath}/workspaces`, require("@core/routes/workspaceRoutes"));
+  app.use(`${basePath}/business-groups`, require("@modules/business-groups/routes"));
   app.use(`${basePath}/credentials`, require("@core/routes/credentialRoutes"));
   app.use(`${basePath}/templates`, require("@core/routes/templateRoutes"));
   app.use(`${basePath}/messages`, require("@core/routes/messageRoutes"));
@@ -65,6 +66,12 @@ function registerRoutes(app, basePath = "") {
   app.use(`${basePath}/realtime`, require("@core/routes/realtimeRoutes"));
   app.use(`${basePath}/external/chat`, require("@modules/external-chat/routes/externalChat.routes"));
   app.use(`${basePath}/ecommerce`, require("@modules/ecommerce/routes/ecommerce.routes"));
+  app.use(`${basePath}/commerce/gateways`, require("@modules/commerce/routes/gateway.routes"));
+  app.use(`${basePath}/commerce`, require("@modules/commerce/delivery/routes"));
+  app.use(`${basePath}/commerce`, require("@modules/commerce/routes/operations.routes"));
+  app.use(`${basePath}/commerce`, require("@modules/commerce/routes/payments.routes"));
+  app.use(`${basePath}/commerce`, require("@modules/commerce/routes/orders.routes"));
+  app.use(`${basePath}/commerce`, require("@modules/commerce/routes/catalog.routes"));
   app.use(`${basePath}/crm`, require("@core/routes/crmRoutes"));
   app.use(`${basePath}`, require("@core/routes/automationRoutes"));
 }

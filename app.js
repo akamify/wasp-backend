@@ -6,6 +6,9 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
+const { isGatewayOAuthCallback, isGatewayOAuthWebhook, gatewayErrorBoundary } = require("@modules/commerce/routes/gatewayHttp");
+const { orderErrorBoundary } = require("@modules/commerce/routes/ordersHttp");
+const { isPaymentWebhook, registerPaymentRawBody, paymentErrorBoundary } = require("@modules/commerce/routes/paymentsHttp");
 const rateLimiters = require("@core/middleware/rateLimiters");
 const { notFound, errorHandler } = require("@core/middleware/errorHandler");
 const { appBrandName, corsOrigins } = require("@core/config/env");
@@ -74,6 +77,9 @@ app.use(
 const isProd =
   String(process.env.NODE_ENV || "").toLowerCase() === "production";
 
+app.use(["/commerce/gateways/oauth/webhooks", "/api/commerce/gateways/oauth/webhooks"],
+  express.raw({ type: "application/json", limit: "64kb", inflate: false }));
+
 const {
   metaAppId: startupMetaAppId,
   metaAppSecret: startupMetaAppSecret,
@@ -91,6 +97,7 @@ if (!startupMetaAppSecret || startupMetaAppSecret.length < 12) {
   );
 }
 
+registerPaymentRawBody(app);
 const jsonParser = express.json({
   limit: "10mb",
   verify: (req, res, buf) => {
@@ -101,7 +108,8 @@ const jsonParser = express.json({
 });
 
 app.use((req, res, next) => {
-  if (isMetaWebhookPath(req.originalUrl || req.url) || isEcommerceWebhookPath(req.originalUrl || req.url)) return next();
+  if (isMetaWebhookPath(req.originalUrl || req.url) || isEcommerceWebhookPath(req.originalUrl || req.url)
+      || isGatewayOAuthWebhook(req.originalUrl || req.url) || isPaymentWebhook(req.originalUrl || req.url)) return next();
   return jsonParser(req, res, next);
 });
 
@@ -162,7 +170,8 @@ app.use(
 );
 
 
-app.use(morgan("dev"));
+// Authorization codes/state must never enter application access logs.
+app.use(morgan("dev", { skip: (req) => isGatewayOAuthCallback(req.originalUrl || req.url) }));
 
 // Disable caching for API JSON responses (prevents stale UI + 304 with empty body on some clients).
 app.use((req, res, next) => {
@@ -191,6 +200,9 @@ app.get("/api/health", (req, res) => res.json({ ok: true }));
 registerRoutes(app, "/api");
 
 app.use(notFound);
+app.use(gatewayErrorBoundary);
+app.use(orderErrorBoundary);
+app.use(paymentErrorBoundary);
 app.use(errorHandler);
 
 module.exports = app;

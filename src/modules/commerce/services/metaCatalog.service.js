@@ -1,0 +1,132 @@
+const { HttpError } = require("@shared/utils/httpError");
+const { createMetaClient, authHeaders, getMetaGraphVersion } = require("@modules/meta/services/metaGraph.service");
+const { MAX_BATCH, remoteProductData } = require("../domain/catalog");
+
+const REMOTE_FIELDS = "id,retailer_id,custom_label_3,custom_label_4,review_status,visibility";
+function graphId(value) {
+  if (typeof value !== "string" || !/^\d{1,30}$/.test(value)) throw new HttpError(400, "Invalid Meta asset identifier.");
+  return value;
+}
+function providerError(error, ambiguous = false) {
+  if (error instanceof HttpError) return error;
+  const code = Number(error?.response?.data?.error?.code || error?.error?.code || 0);
+  const status = Number(error?.response?.status || error?.status || 0);
+  const retryable = !status || status === 429 || status >= 500 || [1, 2, 4, 17, 32, 613].includes(code);
+  const message = code === 190 ? "WhatsApp authorization expired. Reconnect WhatsApp."
+    : retryable ? "Meta is temporarily unavailable. Catalog sync will retry."
+    : "Meta rejected the catalog operation. Check asset permissions and product requirements.";
+  const safe = new HttpError(retryable ? 503 : 422, message, { providerCode: code || undefined });
+  safe.retryable = retryable;
+  safe.ambiguous = ambiguous && (!status || status >= 500);
+  const retryAfter = Number(error?.response?.headers?.["retry-after"] || 0);
+  safe.retryAfterMs = Number.isFinite(retryAfter) ? Math.max(0, Math.min(retryAfter * 1000, 3600000)) : 0;
+  return safe;
+}
+function createCatalogClient(credentials, { client, signal = AbortSignal.timeout(90000) } = {}) {
+  const version = getMetaGraphVersion(credentials.graphApiVersion);
+  if (!/^v\d+\.\d+$/.test(version)) throw new HttpError(409, "WhatsApp Graph API version is invalid.");
+  if (!credentials.accessToken) throw new HttpError(409, "WhatsApp authorization is missing.");
+  const http = client || createMetaClient({ graphApiVersion: version, timeout: 15000 });
+  const options = { headers: authHeaders(credentials.accessToken), signal, maxRedirects: 0, maxContentLength: 2 * 1024 * 1024 };
+  async function get(path, params = {}) {
+    try { return (await http.get(path, { ...options, params })).data; }
+    catch (error) { throw providerError(error); }
+  }
+  async function post(path, body, params) {
+    try { return (await http.post(path, body, { ...options, params })).data; }
+    catch (error) { throw providerError(error, true); }
+  }
+  async function linkedCatalogs(after) {
+    const data = await get(`/${graphId(credentials.wabaId)}/product_catalogs`,
+      { fields: "id,name", limit: 50, ...(after ? { after } : {}) });
+    if (!Array.isArray(data?.data)) throw new HttpError(502, "Meta returned an invalid catalog list.");
+    return { catalogs: data.data.map((item) => ({ id: graphId(item.id), name: String(item.name || "").slice(0, 150) })),
+      cursor: data.paging?.next ? data.paging?.cursors?.after || null : null };
+  }
+  async function verifyBinding(catalogId) {
+    graphId(catalogId);
+    let cursor;
+    for (let page = 0; page < 5; page++) {
+      const result = await linkedCatalogs(cursor);
+      if (result.catalogs.some((catalog) => catalog.id === catalogId)) return;
+      if (!result.cursor) break;
+      if (result.cursor === cursor) break;
+      cursor = result.cursor;
+    }
+    throw new HttpError(409, "Catalog is not linked to the active WhatsApp account. Link it in Commerce Manager first.");
+  }
+  async function inspectCatalog(catalogId) {
+    await verifyBinding(catalogId);
+    const [catalog, products, settings] = await Promise.all([
+      get(`/${graphId(catalogId)}`, { fields: "id,name,business,vertical" }),
+      get(`/${graphId(catalogId)}/products`, { fields: "id", limit: 1, return_only_approved_products: false }),
+      readSettings(),
+    ]);
+    if (catalog.id !== catalogId || !Array.isArray(products?.data)) throw new HttpError(502, "Meta returned an invalid catalog.");
+    if (catalog.vertical && catalog.vertical !== "commerce") throw new HttpError(409, "Select a physical-products catalog.");
+    return { businessId: String(catalog.business?.id || ""), empty: products.data.length === 0, ...settings };
+  }
+  async function readSettings() {
+    const result = await get(`/${graphId(credentials.phoneNumberId)}/whatsapp_commerce_settings`);
+    const data = Array.isArray(result?.data) ? result.data[0] : result;
+    if (typeof data?.is_catalog_visible !== "boolean" || typeof data?.is_cart_enabled !== "boolean") throw new HttpError(502, "Meta returned invalid commerce settings.");
+    return { catalogVisible: data.is_catalog_visible, cartEnabled: data.is_cart_enabled };
+  }
+  async function updateSettings(settings) {
+    const result = await post(`/${graphId(credentials.phoneNumberId)}/whatsapp_commerce_settings`, null, {
+      is_catalog_visible: settings.catalogVisible, is_cart_enabled: settings.cartEnabled,
+    });
+    if (result?.success !== true) throw new HttpError(502, "Meta did not confirm the commerce settings update.");
+    return readSettings();
+  }
+  async function batch(requests) {
+    if (!requests.length || requests.length > MAX_BATCH) throw new RangeError("Invalid catalog batch size.");
+    const raw = await post("/", new URLSearchParams({ batch: JSON.stringify(requests), include_headers: "false" }));
+    if (!Array.isArray(raw) || raw.length !== requests.length) {
+      const error = new HttpError(502, "Meta returned an incomplete batch response.");
+      error.retryable = true; error.ambiguous = true;
+      throw error;
+    }
+    return raw.map((entry) => {
+      let body;
+      try { body = JSON.parse(entry?.body || "null"); } catch { body = null; }
+      if (!entry || !body) {
+        const error = new HttpError(502, "Meta returned an unreadable batch result. Verify before retrying.");
+        error.retryable = true; error.ambiguous = true;
+        return { error };
+      }
+      if (!entry || !body || entry.code < 200 || entry.code >= 300 || body.error) {
+        return { error: providerError({ status: entry?.code, error: body?.error }, true) };
+      }
+      return { data: body };
+    });
+  }
+  async function lookupProducts(catalogId, products) {
+    const requests = products.map((product) => ({
+      method: "GET", relative_url: `${graphId(catalogId)}/products?${new URLSearchParams({
+        fields: REMOTE_FIELDS, limit: "2", return_only_approved_products: "false",
+        filter: JSON.stringify({ retailer_id: { eq: product.sku } }),
+      })}`,
+    }));
+    const results = await batch(requests);
+    return results.map((result, index) => {
+      if (result.error) return result;
+      const rows = result.data.data;
+      if (!Array.isArray(rows) || rows.length > 1 || (rows.length === 1 && rows[0].retailer_id !== products[index].sku)) {
+        return { error: new HttpError(409, "Catalog SKU lookup is ambiguous. No remote product was changed.") };
+      }
+      return { remote: rows[0] || null };
+    });
+  }
+  async function writeProducts(catalogId, products) {
+    return batch(products.map((product) => {
+      const data = remoteProductData(product);
+      if (product.metaProductId) delete data.retailer_id;
+      else data.allow_upsert = false;
+      return { method: "POST", relative_url: product.metaProductId ? graphId(product.metaProductId) : `${graphId(catalogId)}/products`,
+        body: new URLSearchParams(Object.entries(data).map(([key, value]) => [key, String(value)])).toString() };
+    }));
+  }
+  return { version, linkedCatalogs, verifyBinding, inspectCatalog, readSettings, updateSettings, lookupProducts, writeProducts };
+}
+module.exports = { createCatalogClient, providerError };

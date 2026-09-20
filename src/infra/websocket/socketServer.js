@@ -19,6 +19,8 @@ function createSocketServer(httpServer) {
         });
     });
 
+    if (process.env.COMMERCE_DELIVERY_ENABLED === "true") require("@modules/commerce/delivery/socket").attach(io);
+
     return io;
 }
 

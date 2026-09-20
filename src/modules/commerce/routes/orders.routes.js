@@ -1,0 +1,32 @@
+const express = require("express");
+const { auth } = require("@core/middleware/auth");
+const { requireWorkspace } = require("@core/middleware/requireWorkspace");
+const { requireWorkspacePermission } = require("@modules/workspaces/middleware/requireWorkspacePermission");
+const { HttpError } = require("@shared/utils/httpError");
+const limits = require("@core/middleware/rateLimiters");
+const readiness = require("../services/ordersReadiness.service");
+const controller = require("../controllers/orders.controller");
+const router = express.Router();
+const safe = (handler) => (req, res, next) => Promise.resolve().then(() => handler(req, res, next)).catch((error) =>
+  next(error instanceof HttpError ? error : new HttpError(503, "Commerce order operation failed. Check status before retrying.")));
+const ready = safe(async (_req, _res, next) => { await readiness.assertOrdersReady(); next(); });
+router.use((_req, res, next) => { res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" }); next(); });
+const json = (req, _res, next) => req.is("application/json") ? next() : next(new HttpError(415, "Order changes require application/json."));
+// These bearer-session APIs precede workspace middleware. They never accept a workspace from the customer.
+router.get("/fulfillment", limits.ecommerceWebhook, ready, safe(controller.getFulfillment));
+router.post("/fulfillment", limits.ecommerceWebhook, ready, json, safe(controller.submitFulfillment));
+router.use("/orders", auth, requireWorkspace);
+const view = [requireWorkspacePermission("commerce.orders.view"), ready, limits.ecommerceRead];
+const manage = [requireWorkspacePermission("commerce.orders.manage"), ready, limits.ecommerceConnect, json];
+router.get("/orders/settings", ...view, safe(controller.getSettings));
+router.patch("/orders/settings", ...manage, safe(controller.changeSettings));
+router.get("/orders/events", ...view, safe(controller.listEvents));
+router.post("/orders/events/:eventId/retry", ...manage, safe(controller.retryEvent));
+router.get("/orders", ...view, safe(controller.list));
+router.get("/orders/:orderId", ...view, safe(controller.get));
+router.get("/orders/:orderId/quote", ...view, safe(controller.quote));
+router.patch("/orders/:orderId", ...manage, safe(controller.change("edit")));
+router.post("/orders/:orderId/review", ...manage, safe(controller.change("review")));
+router.post("/orders/:orderId/cancel", ...manage, safe(controller.change("cancel")));
+router.post("/orders/:orderId/fulfillment-session", ...manage, safe(controller.createSession));
+module.exports = router;

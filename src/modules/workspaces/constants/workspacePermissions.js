@@ -1,4 +1,8 @@
+const { COMMERCE_PERMISSIONS, COMMERCE_READ_PERMISSIONS, COMMERCE_MANAGER_PERMISSIONS, COMMERCE_AGENT_PERMISSIONS } = require("@modules/commerce/constants/permissions");
+
 const WORKSPACE_PERMISSIONS = [
+  "commerce.delivery.view", "commerce.delivery.manage", "commerce.delivery.override",
+  ...COMMERCE_PERMISSIONS,
   "workspace.view",
   "workspace.update",
   "members.view",
@@ -41,6 +45,8 @@ const ROLE_PERMISSIONS = {
   owner: WORKSPACE_PERMISSIONS,
   admin: WORKSPACE_PERMISSIONS.filter((key) => key !== "plan.manage"),
   manager: [
+    "commerce.delivery.view", "commerce.delivery.manage",
+    ...COMMERCE_MANAGER_PERMISSIONS,
     "workspace.view",
     "members.view",
     "whatsapp.view",
@@ -68,8 +74,8 @@ const ROLE_PERMISSIONS = {
     "aiBilling.budget",
     "aiBilling.reports",
   ],
-  agent: ["workspace.view", "templates.view", "inbox.view", "inbox.reply", "contacts.view", "contacts.create", "contacts.update"],
-  viewer: ["workspace.view", "templates.view", "inbox.view", "contacts.view", "campaigns.view", "automation.view", "analytics.view", "ecommerce.view"],
+  agent: [...COMMERCE_AGENT_PERMISSIONS, "workspace.view", "templates.view", "inbox.view", "inbox.reply", "contacts.view", "contacts.create", "contacts.update"],
+  viewer: [...COMMERCE_READ_PERMISSIONS, "workspace.view", "templates.view", "inbox.view", "contacts.view", "campaigns.view", "automation.view", "analytics.view", "ecommerce.view"],
 };
 
 module.exports = { ROLE_PERMISSIONS, WORKSPACE_PERMISSIONS };

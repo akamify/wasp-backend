@@ -4,6 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "test:commerce": "node --test src/modules/commerce/tests/*.test.cjs",
+    "commerce:indexes": "node scripts/commerce-indexes.cjs",
+    "commerce:hosting": "node scripts/commerce-hosting-check.cjs",
     "build": "node -e \"console.log('Backend build step: not required')\"",
     "start": "node index.js",
     "dev": "node index.js",
