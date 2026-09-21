@@ -19,7 +19,7 @@ const current = {
 const debug = {
   is_valid: true,
   app_id: "app-1",
-  scopes: ["whatsapp_business_management", "whatsapp_business_messaging", "catalog_management"],
+  scopes: ["whatsapp_business_management", "whatsapp_business_messaging", "catalog_management", "business_management"],
   granular_scopes: [{ scope: "whatsapp_business_management", target_ids: ["111"] }],
 };
 
@@ -48,6 +48,7 @@ test("catalog reauthorization replaces only the same active connection after eve
   const { service, calls } = fixture();
   const result = await service(request);
   assert.ok(result.grantedScopes.includes("catalog_management"));
+  assert.ok(result.grantedScopes.includes("business_management"));
   assert.equal(calls.exchanged, 1);
   assert.equal(calls.discovered, 1);
   assert.equal(calls.subscribed, 1);
@@ -56,6 +57,7 @@ test("catalog reauthorization replaces only the same active connection after eve
   assert.deepEqual(filter, { _id: current._id, workspaceId, isActive: true, status: "active", wabaId: "111", phoneNumberId: "222" });
   assert.equal(update.$set.accessTokenEnc, "encrypted:new-token");
   assert.equal(update.$set.businessTokenEnc, "business:new-token");
+  assert.ok(update.$set.tokenDebugSummary.scopes.includes("business_management"));
   assert.equal(update.$set.lastEditedReason, "catalog_permissions_reauthorized");
   assert.equal(update.$set.status, undefined);
   assert.equal(update.$set.onboardingStage, undefined);
@@ -75,7 +77,9 @@ test("different WABA or phone is rejected before exchanging or changing credenti
 test("missing catalog scope and provider verification failures preserve the old token", async () => {
   const missing = fixture({ debugToken: async () => ({ ...debug, scopes: debug.scopes.filter((scope) => scope !== "catalog_management") }) });
   await assert.rejects(missing.service(request), (error) => {
+    assert.equal(error.message, "Meta did not grant the permissions required to manage catalogs.");
     assert.deepEqual(error.details.missingScopes, ["catalog_management"]);
+    assert.deepEqual(error.details.requiredAssets, ["WhatsApp accounts", "Catalogs"]);
     return true;
   });
   assert.equal(missing.calls.updates.length, 0);

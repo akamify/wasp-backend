@@ -6,7 +6,7 @@ const { writeAuditLog } = require("@shared/services/auditLog.service");
 const { uploadMediaAsset } = require("@modules/media/services/mediaAsset.service");
 const Joi = require("joi");
 const setup = require("../services/catalogSetup.service");
-async function catalogSetupStatus(req, res) { res.json({ success: true, setup: await setup.status(workspace(req)) }); }
+async function catalogSetupStatus(req, res) { res.json({ success: true, ...await setup.status(workspace(req)) }); }
 async function createCatalog(req, res) {
   const catalog = await setup.create(workspace(req), body(schemas.catalogCreate, req));
   await audit(req, "commerce_catalog_created_and_connected", catalog);

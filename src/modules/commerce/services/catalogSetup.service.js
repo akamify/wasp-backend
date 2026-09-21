@@ -5,13 +5,37 @@ const { createCatalogClient } = require("./metaCatalog.service");
 const catalogs = require("./catalog.service");
 const repository = require("../repositories/catalogSetup.repository");
 
+function catalogCapabilities(credentials) {
+  const scopes = new Set(Array.isArray(credentials?.grantedScopes) ? credentials.grantedScopes : []);
+  return {
+    connectExistingCatalog: scopes.has("catalog_management"),
+    createCatalog: scopes.has("catalog_management") && scopes.has("business_management"),
+  };
+}
+
+function requireCatalogCreationPermission(credentials) {
+  const capabilities = catalogCapabilities(credentials);
+  if (!capabilities.createCatalog) {
+    const scopes = new Set(Array.isArray(credentials?.grantedScopes) ? credentials.grantedScopes : []);
+    const missingScopes = ["catalog_management", "business_management"].filter((scope) => !scopes.has(scope));
+    throw new HttpError(403,
+      "Creating a Meta catalog in AIWizChat requires catalog and business management permissions.", {
+        missingScopes,
+        alternative: "Create an empty catalog in Meta Commerce Manager, link it to this WhatsApp account, then use Find linked catalogs.",
+      });
+  }
+}
+
 function createSetupService({ repo = repository, getCredentials = getCredentialsForUser,
   createClient = createCatalogClient, catalogService = catalogs } = {}) {
   async function status(workspaceId) {
     const credentials = await getCredentials(workspaceId);
     const setup = await repo.read(workspaceId, credentials.wabaId);
-    return setup ? { name: setup.name, catalogId: setup.catalogId, state: setup.state,
-      activePhoneMatches: setup.phoneNumberId === credentials.phoneNumberId } : null;
+    return {
+      setup: setup ? { name: setup.name, catalogId: setup.catalogId, state: setup.state,
+        activePhoneMatches: setup.phoneNumberId === credentials.phoneNumberId } : null,
+      capabilities: catalogCapabilities(credentials),
+    };
   }
   async function create(workspaceId, input) {
     const credentials = await getCredentials(workspaceId);
@@ -23,6 +47,9 @@ function createSetupService({ repo = repository, getCredentials = getCredentials
       if (setup?.catalogId === existing.catalogId && setup.phoneNumberId === credentials.phoneNumberId
           && existing.activePhoneMatches !== false) return existing;
       throw new HttpError(409, "A catalog is already connected. Open its settings to manage it.");
+    }
+    if (!setup || (!setup.catalogId && setup.state === "ready")) {
+      requireCatalogCreationPermission(credentials);
     }
     const business = await client.ownerBusiness();
     if (!setup) {
@@ -58,6 +85,7 @@ function createSetupService({ repo = repository, getCredentials = getCredentials
       if (!setup.catalogId) {
         if (setup.state !== "ready") throw new HttpError(409,
           "Creation result is uncertain. Find the catalog in Meta Commerce Manager and enter its ID below. A duplicate will not be created.");
+        requireCatalogCreationPermission(credentials);
         const linked = await client.linkedCatalogs();
         if (linked.catalogs.length || linked.cursor) throw new HttpError(409, "WhatsApp already has a catalog. Use Connect existing catalog.");
         // Persist intent BEFORE the external write. A crash/timeout never blindly repeats creation.

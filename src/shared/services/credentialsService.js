@@ -12,6 +12,13 @@ async function getCredentialsForUser(userId) {
     throw new HttpError(409, "WhatsApp onboarding is not ready yet. Complete phone registration and sync before sending messages.");
   }
 
+  const tokenDebug = connection.tokenDebug || {};
+  const grantedScopes = [...new Set([
+    ...(Array.isArray(tokenDebug.scopes) ? tokenDebug.scopes : []),
+    ...(Array.isArray(tokenDebug.granularScopes)
+      ? tokenDebug.granularScopes.map((entry) => String(entry?.scope || "").trim()).filter(Boolean)
+      : []),
+  ])];
   return {
     accessToken: connection.accessToken,
     phoneNumberId: connection.phoneNumberId,
@@ -21,6 +28,7 @@ async function getCredentialsForUser(userId) {
     wabaName: connection.wabaName,
     connectedAt: connection.connectedAt,
     graphApiVersion: connection.graphApiVersion,
+    grantedScopes,
   };
 }
 

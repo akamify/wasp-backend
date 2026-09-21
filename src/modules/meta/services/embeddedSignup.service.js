@@ -384,12 +384,25 @@ function createCatalogReauthorizationService({
     const exchanged = await exchange(code);
     const graphApiVersion = getMetaGraphVersion(doc.graphApiVersion);
     const debugTokenData = await debugToken({ token: exchanged.token, graphApiVersion });
-    const grantedScopes = validateScopes(
-      debugTokenData,
-      currentWabaId,
-      exchanged.appId,
-      REQUIRED_CATALOG_REAUTHORIZATION_SCOPES
-    );
+    let grantedScopes;
+    try {
+      grantedScopes = validateScopes(
+        debugTokenData,
+        currentWabaId,
+        exchanged.appId,
+        REQUIRED_CATALOG_REAUTHORIZATION_SCOPES
+      );
+    } catch (error) {
+      const missingScopes = Array.isArray(error?.details?.missingScopes) ? error.details.missingScopes : [];
+      if (missingScopes.includes("catalog_management")) {
+        throw new HttpError(400, "Meta did not grant the permissions required to manage catalogs.", {
+          ...error.details,
+          requiredAssets: ["WhatsApp accounts", "Catalogs"],
+          requiredPermissions: REQUIRED_CATALOG_REAUTHORIZATION_SCOPES,
+        });
+      }
+      throw error;
+    }
     await discoverPhone({
       wabaId: currentWabaId,
       phoneNumberId: currentPhoneNumberId,

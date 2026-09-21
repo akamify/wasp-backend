@@ -7,7 +7,11 @@ const { parse, catalogCreate } = require("../validators/catalog.validators");
 const input = { name: "Menu", confirmOwnership: true };
 function fixture() {
   let row, creates = 0, locked = false;
-  const credentials = { wabaId: "111", phoneNumberId: "222" };
+  const credentials = {
+    wabaId: "111",
+    phoneNumberId: "222",
+    grantedScopes: ["whatsapp_business_management", "whatsapp_business_messaging", "catalog_management", "business_management"],
+  };
   const repo = {
     read: async () => row,
     ensure: async (ws, fields) => row ||= { ...fields, workspaceId: ws, state: "ready", catalogId: "" },
@@ -119,7 +123,28 @@ test("lease loss before creation prevents a remote write and status hides intern
   f.repo.save = async () => null;
   await assert.rejects(f.service.create("ws", input), /setup changed/);
   assert.equal(f.creates(), 0);
-  assert.deepEqual(await f.service.status("ws"), { name: "Menu", catalogId: "", state: "ready", activePhoneMatches: true });
+  assert.deepEqual(await f.service.status("ws"), {
+    setup: { name: "Menu", catalogId: "", state: "ready", activePhoneMatches: true },
+    capabilities: { connectExistingCatalog: true, createCatalog: true },
+  });
+});
+
+test("catalog creation is gated while existing catalog connection remains available", async () => {
+  const f = fixture();
+  f.credentials.grantedScopes = ["whatsapp_business_management", "whatsapp_business_messaging", "catalog_management"];
+  f.client.ownerBusiness = async () => assert.fail("missing creation permission must fail before Meta calls");
+  assert.deepEqual(await f.service.status("ws"), {
+    setup: null,
+    capabilities: { connectExistingCatalog: true, createCatalog: false },
+  });
+  await assert.rejects(f.service.create("ws", input), (error) => {
+    assert.equal(error.statusCode, 403);
+    assert.deepEqual(error.details.missingScopes, ["business_management"]);
+    assert.match(error.details.alternative, /Find linked catalogs/);
+    return true;
+  });
+  assert.equal(f.row(), undefined);
+  assert.equal(f.creates(), 0);
 });
 
 test("a completed setup replay returns the connected catalog without another provider write", async () => {
