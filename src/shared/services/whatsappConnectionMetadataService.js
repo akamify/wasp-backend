@@ -95,6 +95,14 @@ function serializeWhatsAppConnection(doc) {
   const wabaId = String(doc.wabaId || doc.businessAccountIdPlain || "").trim();
   const phoneNumberId = String(doc.phoneNumberId || doc.phoneNumberIdPlain || "").trim();
   const tokenDebug = doc.tokenDebugSummary || null;
+  const tokenScopes = tokenDebug
+    ? [...new Set([
+        ...(Array.isArray(tokenDebug.scopes) ? tokenDebug.scopes : []),
+        ...(Array.isArray(tokenDebug.granularScopes)
+          ? tokenDebug.granularScopes.map((scope) => String(scope?.scope || "").trim()).filter(Boolean)
+          : []),
+      ])]
+    : [];
   const metadataWarnings = Array.isArray(doc.metadataWarnings) ? doc.metadataWarnings : [];
   const manualOrLegacyConnection = !isEmbeddedSignupConnection(doc);
   const registrationStatus = inferRegistrationStatus(doc);
@@ -124,6 +132,10 @@ function serializeWhatsAppConnection(doc) {
           granularScopes: Array.isArray(tokenDebug.granularScopes) ? tokenDebug.granularScopes : [],
         }
       : null,
+    catalogPermission: {
+      granted: tokenScopes.includes("catalog_management"),
+      authorizationRequired: !tokenScopes.includes("catalog_management"),
+    },
     warning: manualOrLegacyConnection
       ? "This workspace is using a manual/system-user token. Reconnect with Embedded Signup to use customer self-connect."
       : null,

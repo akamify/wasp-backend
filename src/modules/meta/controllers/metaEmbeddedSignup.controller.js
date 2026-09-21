@@ -12,6 +12,7 @@ const templatesService = require("@modules/templates/services/templates.service"
 const {
   changeEmbeddedSignupPin,
   executeEmbeddedSignupExchange,
+  reauthorizeCatalogPermissions,
   retryPhoneRegistration,
 } = require("@modules/meta/services/embeddedSignup.service");
 const { graphBaseUrl } = require("@modules/meta/services/metaGraph.service");
@@ -67,6 +68,26 @@ async function completePhoneRegistration(req, res) {
   return res.json({
     success: true,
     connection: serializeWhatsAppConnection(latest),
+  });
+}
+
+async function reauthorizeCatalogConnection(req, res) {
+  const code = String(req.body?.code || "").trim();
+  const wabaId = String(req.body?.waba_id || "").trim();
+  const phoneNumberId = String(req.body?.phone_number_id || "").trim();
+  const result = await reauthorizeCatalogPermissions({
+    workspace: req.workspace,
+    user: req.user,
+    code,
+    wabaId,
+    phoneNumberId,
+  });
+  return res.json({
+    success: true,
+    catalogPermission: {
+      granted: result.grantedScopes.includes("catalog_management"),
+      scopes: result.grantedScopes,
+    },
   });
 }
 
@@ -178,4 +199,5 @@ module.exports = {
   exchangeEmbeddedSignupCode,
   forceEmbeddedActiveConnection,
   getWhatsAppConnection,
+  reauthorizeCatalogConnection,
 };

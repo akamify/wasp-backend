@@ -7,6 +7,7 @@ Ecommerce Management > Settings > WhatsApp catalog now offers **Create new catal
 - Deploy the backend and frontend together; keep `COMMERCE_CATALOG_ENABLED=true` and the existing Commerce indexes ready.
 - The selected workspace must have a ready WhatsApp connection. The caller needs `commerce.catalog.manage`.
 - Meta must authorize the token to read the WABA owner business, create a business-owned catalog, and link it to that WABA. Check business/catalog/WhatsApp management permissions and asset access for the app's supported Graph version. Enabling an environment flag does not grant Meta permissions. No new platform API key is required.
+- Connected merchants can use WhatsApp Setup > **Authorize catalog access**. This runs Embedded Signup again for permission consent while preserving the active connection. The backend accepts the new token only when `catalog_management`, both WhatsApp scopes, the existing WABA and the existing phone all match; a cancelled, rejected or mismatched flow leaves the old token active.
 - The database account needs insert/update/read access to the new `commercecatalogsetups` collection. Its deterministic string `_id` is the uniqueness constraint; no custom index migration or changes to existing document schemas are needed. No live database is modified by deploying the source alone.
 
 ## API and safety

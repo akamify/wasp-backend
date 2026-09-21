@@ -11,6 +11,7 @@ const {
   ONBOARDING_STAGES,
   REGISTRATION_STATUSES,
   REGISTRATION_VERSION,
+  REQUIRED_CATALOG_REAUTHORIZATION_SCOPES,
   REQUIRED_EMBEDDED_SIGNUP_SCOPES,
   TEMPLATE_SYNC_STATUSES,
 } = require("@modules/meta/constants/embeddedSignup.constants");
@@ -323,7 +324,7 @@ async function debugBusinessToken({ token, graphApiVersion }) {
   }
 }
 
-function validateTokenScopes(debugTokenData, wabaId, appId) {
+function validateTokenScopes(debugTokenData, wabaId, appId, requiredScopes = REQUIRED_EMBEDDED_SIGNUP_SCOPES) {
   if (debugTokenData?.is_valid !== true) {
     throw new HttpError(400, "Meta returned an invalid business token. Please reconnect WhatsApp.");
   }
@@ -334,7 +335,7 @@ function validateTokenScopes(debugTokenData, wabaId, appId) {
   const granularScopes = Array.isArray(debugTokenData?.granular_scopes) ? debugTokenData.granular_scopes : [];
   const granularScopeNames = granularScopes.map((scope) => String(scope?.scope || "").trim()).filter(Boolean);
   const grantedScopes = [...new Set([...scopes, ...granularScopeNames])];
-  const missingScopes = REQUIRED_EMBEDDED_SIGNUP_SCOPES.filter((scope) => !grantedScopes.includes(scope));
+  const missingScopes = requiredScopes.filter((scope) => !grantedScopes.includes(scope));
   if (missingScopes.length) {
     throw new HttpError(400, "Meta token is missing required WhatsApp permissions.", {
       missingScopes,
@@ -349,6 +350,94 @@ function validateTokenScopes(debugTokenData, wabaId, appId) {
   }
   return grantedScopes;
 }
+
+function createCatalogReauthorizationService({
+  findActiveConnection = async (workspaceId) => WhatsAppCredentials.findOne({
+    workspaceId,
+    isActive: true,
+    status: "active",
+  }).select("wabaId phoneNumberId businessAccountIdPlain phoneNumberIdPlain connectionMode status isActive graphApiVersion"),
+  exchange = exchangeCodeForToken,
+  debugToken = debugBusinessToken,
+  validateScopes = validateTokenScopes,
+  discoverPhone = discoverPhoneNumber,
+  subscribe = ensureWebhookSubscription,
+  encryptAccessToken = encryptString,
+  encryptBusinessToken = encryptSecret,
+  updateConnection = (filter, update) => WhatsAppCredentials.updateOne(filter, update),
+  recordActivity = logWorkspaceActivity,
+} = {}) {
+  return async function reauthorizeCatalogPermissions({ workspace, user, code, wabaId, phoneNumberId }) {
+    const workspaceId = String(workspace?.id || "").trim();
+    const selectedWabaId = String(wabaId || "").trim();
+    const selectedPhoneNumberId = String(phoneNumberId || "").trim();
+    const doc = await findActiveConnection(workspaceId);
+    if (!doc) throw new HttpError(409, "An active WhatsApp connection is required before permissions can be updated.");
+
+    const currentWabaId = String(doc.wabaId || doc.businessAccountIdPlain || "").trim();
+    const currentPhoneNumberId = String(doc.phoneNumberId || doc.phoneNumberIdPlain || "").trim();
+    if (!selectedWabaId || !selectedPhoneNumberId
+        || selectedWabaId !== currentWabaId || selectedPhoneNumberId !== currentPhoneNumberId) {
+      throw new HttpError(409, "Select the same WhatsApp Business Account and phone number that are already connected.");
+    }
+
+    const exchanged = await exchange(code);
+    const graphApiVersion = getMetaGraphVersion(doc.graphApiVersion);
+    const debugTokenData = await debugToken({ token: exchanged.token, graphApiVersion });
+    const grantedScopes = validateScopes(
+      debugTokenData,
+      currentWabaId,
+      exchanged.appId,
+      REQUIRED_CATALOG_REAUTHORIZATION_SCOPES
+    );
+    await discoverPhone({
+      wabaId: currentWabaId,
+      phoneNumberId: currentPhoneNumberId,
+      graphApiVersion,
+      accessToken: exchanged.token,
+    });
+    const client = createMetaClient({ graphApiVersion, timeout: 20000 });
+    await subscribe({ client, accessToken: exchanged.token, wabaId: currentWabaId });
+
+    const now = new Date();
+    const result = await updateConnection({
+      _id: doc._id,
+      workspaceId,
+      isActive: true,
+      status: "active",
+      wabaId: currentWabaId,
+      phoneNumberId: currentPhoneNumberId,
+    }, {
+      $set: {
+        accessTokenEnc: encryptAccessToken(exchanged.token),
+        businessTokenEnc: encryptBusinessToken(exchanged.token),
+        tokenDebugSummary: buildTokenDebugSummary(debugTokenData),
+        tokenType: "embedded_signup_customer_token",
+        connectionMode: "customer_embedded_signup",
+        isValid: true,
+        webhookSubscribed: true,
+        lastValidatedAt: now,
+        lastEditedAt: now,
+        lastEditedBy: user?.id || null,
+        lastEditedReason: "catalog_permissions_reauthorized",
+      },
+    });
+    if (!result?.acknowledged || Number(result.modifiedCount || 0) !== 1) {
+      throw new HttpError(409, "WhatsApp connection changed while permissions were being updated. Refresh and retry.");
+    }
+    await recordActivity({
+      workspaceId,
+      actorUserId: user?.id || null,
+      action: "whatsapp.catalog_permissions_reauthorized",
+      entityType: "whatsapp_connection",
+      entityId: currentWabaId,
+      metadata: { maskedWabaId: maskId(currentWabaId), maskedPhoneNumberId: maskId(currentPhoneNumberId) },
+    });
+    return { grantedScopes };
+  };
+}
+
+const reauthorizeCatalogPermissions = createCatalogReauthorizationService();
 
 async function discoverPhoneNumber({ wabaId, phoneNumberId, graphApiVersion, accessToken }) {
   const client = createMetaClient({ graphApiVersion, timeout: 20000 });
@@ -985,6 +1074,9 @@ async function changeEmbeddedSignupPin({
 
 module.exports = {
   changeEmbeddedSignupPin,
+  createCatalogReauthorizationService,
   executeEmbeddedSignupExchange,
+  reauthorizeCatalogPermissions,
   retryPhoneRegistration,
+  validateTokenScopes,
 };

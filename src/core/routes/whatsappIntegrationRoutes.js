@@ -10,6 +10,7 @@ const {
   disconnectWhatsAppConnection,
   completePhoneRegistration,
   changePhonePin,
+  reauthorizeCatalogConnection,
 } = require("@modules/meta/controllers/metaEmbeddedSignup.controller");
 const { refreshConnectionMetadata, forceEmbeddedActiveConnection: forceEmbeddedActiveFromMeta } = require("@modules/meta/controllers/metaConnectionMetadata.controller");
 const { syncMetaTemplates } = require("@modules/templates/controllers/templates.controller");
@@ -45,6 +46,20 @@ router.post(
     })
   ),
   asyncHandler(completePhoneRegistration)
+);
+router.post(
+  "/connection/reauthorize-catalog",
+  auth,
+  requireWorkspace,
+  requireWorkspacePermission("whatsapp.connect"),
+  validate(
+    Joi.object({
+      code: Joi.string().trim().min(1).max(4096).required(),
+      waba_id: Joi.string().trim().pattern(/^\d{1,30}$/).required(),
+      phone_number_id: Joi.string().trim().pattern(/^\d{1,30}$/).required(),
+    })
+  ),
+  asyncHandler(reauthorizeCatalogConnection)
 );
 router.post(
   "/connection/change-pin",
