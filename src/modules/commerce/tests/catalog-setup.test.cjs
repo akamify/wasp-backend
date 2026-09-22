@@ -82,7 +82,8 @@ test("Meta create and link use verified business/WABA endpoints and form encodin
   const calls = []; let linked = false;
   const client = createCatalogClient({ accessToken: "test", wabaId: "111", phoneNumberId: "222" }, { client: {
     get: async (path) => ({ data: path === "/111" ? { id: "111", owner_business_info: { id: "333" } }
-      : path === "/444" ? { id: "444", business: { id: "333" }, vertical: "commerce" }
+      : path === "/333/owned_product_catalogs" ? { data: [{ id: "444", vertical: "commerce" }] }
+      : path === "/999/owned_product_catalogs" ? { data: [] }
       : { data: linked ? [{ id: "444", name: "Menu" }] : [] } }),
     post: async (path, body) => { calls.push([path, Object.fromEntries(body)]); if (path === "/111/product_catalogs") linked = true; return { data: { id: "444" } }; },
   } });

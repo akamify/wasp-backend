@@ -72,7 +72,7 @@ test("new binding rechecks WhatsApp account after external verification", async 
     getCredentials: async () => ++calls === 1 ? credentials : { ...credentials, wabaId: "other" },
     createClient: () => ({ ownerBusiness: async () => ({ id: "444" }), verifyOwner: async () => {},
       verifyEmptyCatalog: async () => {}, linkCatalog: async () => {},
-      inspectCatalog: async () => ({ empty: true, businessId: "444" }), version: "v22.0" }),
+      inspectCatalog: async (_id, businessId) => ({ empty: true, businessId }), version: "v22.0" }),
   });
   await assert.rejects(service.bindCatalog(workspaceId, { catalogId: "333" }), { statusCode: 409 });
 });
@@ -88,12 +88,12 @@ test("new binding verifies ownership and emptiness before linking the catalog to
       verifyOwner: async (id, businessId) => { calls.push(`owner:${id}:${businessId}`); },
       verifyEmptyCatalog: async (id) => { calls.push(`empty:${id}`); },
       linkCatalog: async (id) => { calls.push(`link:${id}`); },
-      inspectCatalog: async (id) => { calls.push(`inspect:${id}`); return { businessId: "444", empty: true,
+      inspectCatalog: async (id, businessId) => { calls.push(`inspect:${id}:${businessId}`); return { businessId, empty: true,
         catalogVisible: true, cartEnabled: true }; },
     }),
   });
   const result = await service.bindCatalog(workspaceId, { catalogId: "333" });
-  assert.deepEqual(calls, ["business", "owner:333:444", "empty:333", "link:333", "inspect:333"]);
+  assert.deepEqual(calls, ["business", "owner:333:444", "empty:333", "link:333", "inspect:333:444"]);
   assert.equal(result.catalogId, "333");
 });
 test("old phone binding blocks product changes but permits local disconnect", async () => {

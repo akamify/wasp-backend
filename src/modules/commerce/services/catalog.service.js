@@ -37,7 +37,7 @@ function createCatalogService({ repo = repository, getCredentials = getCredentia
     // The explicit ownership confirmation authorizes AIWizChat to create the missing
     // WABA association. linkCatalog is idempotent and refuses to replace another binding.
     await client.linkCatalog(input.catalogId);
-    const inspected = await client.inspectCatalog(input.catalogId);
+    const inspected = await client.inspectCatalog(input.catalogId, business.id);
     const fields = { businessId: inspected.businessId, graphApiVersion: client.version,
       status: "connected", catalogVisible: inspected.catalogVisible, cartEnabled: inspected.cartEnabled,
       lastCheckedAt: new Date(), lastError: "" };

@@ -45,7 +45,7 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
   const http = client || createMetaClient({ graphApiVersion: version, timeout: 15000 });
   const options = { headers: authHeaders(credentials.accessToken), signal, maxRedirects: 0, maxContentLength: 2 * 1024 * 1024 };
   function operation(path, method, params) {
-    if (path.endsWith("/owned_product_catalogs")) return "create_catalog";
+    if (path.endsWith("/owned_product_catalogs")) return method === "POST" ? "create_catalog" : "read_owned_catalogs";
     if (path.endsWith("/product_catalogs")) return method === "POST" ? "link_catalog" : "read_linked_catalogs";
     if (params?.fields === "id,owner_business_info") return "read_business_owner";
     if (path.endsWith("/whatsapp_commerce_settings")) return "commerce_settings";
@@ -85,10 +85,25 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
     return result.id;
   }
   async function verifyOwner(catalogId, businessId) {
-    const result = await get(`/${graphId(catalogId)}`, { fields: "id,business,vertical" });
-    if (result?.id !== catalogId || result.business?.id !== businessId || result.vertical !== "commerce") {
-      throw new HttpError(409, "The catalog must belong to this WhatsApp business and contain physical products.");
+    const expectedCatalogId = graphId(catalogId);
+    const ownerId = graphId(businessId);
+    let after;
+    for (let page = 0; page < 10; page++) {
+      const result = await get(`/${ownerId}/owned_product_catalogs`,
+        { fields: "id,vertical", limit: 50, ...(after ? { after } : {}) });
+      if (!Array.isArray(result?.data)) throw new HttpError(502, "Meta returned an invalid owned catalog list.");
+      const catalog = result.data.find((item) => String(item?.id || "") === expectedCatalogId);
+      if (catalog) {
+        if (catalog.vertical && catalog.vertical !== "commerce") {
+          throw new HttpError(409, "The catalog must contain physical products.");
+        }
+        return;
+      }
+      const next = result.paging?.next ? String(result.paging?.cursors?.after || "") : "";
+      if (!next || next === after) break;
+      after = next;
     }
+    throw new HttpError(409, "The catalog must belong to this WhatsApp business and be accessible to the connected Meta user.");
   }
   async function linkCatalog(catalogId) {
     // Never replace an existing remote binding, including bindings made outside AIWizChat.
@@ -118,16 +133,15 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
     }
     throw new HttpError(409, "Catalog is not linked to the active WhatsApp account. Link it in Commerce Manager first.");
   }
-  async function inspectCatalog(catalogId) {
-    await verifyBinding(catalogId);
-    const [catalog, products, settings] = await Promise.all([
-      get(`/${graphId(catalogId)}`, { fields: "id,name,business,vertical" }),
+  async function inspectCatalog(catalogId, businessId) {
+    const id = graphId(catalogId);
+    await verifyBinding(id);
+    const [products, settings] = await Promise.all([
       get(`/${graphId(catalogId)}/products`, { fields: "id", limit: 1, return_only_approved_products: false }),
       readSettings(),
     ]);
-    if (catalog.id !== catalogId || !Array.isArray(products?.data)) throw new HttpError(502, "Meta returned an invalid catalog.");
-    if (catalog.vertical && catalog.vertical !== "commerce") throw new HttpError(409, "Select a physical-products catalog.");
-    return { businessId: String(catalog.business?.id || ""), empty: products.data.length === 0, ...settings };
+    if (!Array.isArray(products?.data)) throw new HttpError(502, "Meta returned an invalid catalog.");
+    return { businessId: graphId(businessId), empty: products.data.length === 0, ...settings };
   }
   async function readSettings() {
     const result = await get(`/${graphId(credentials.phoneNumberId)}/whatsapp_commerce_settings`);
