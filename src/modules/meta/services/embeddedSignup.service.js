@@ -324,6 +324,15 @@ async function debugBusinessToken({ token, graphApiVersion }) {
   }
 }
 
+function granularScopeTargetIds(debugTokenData, scopeName) {
+  const granularScopes = Array.isArray(debugTokenData?.granular_scopes) ? debugTokenData.granular_scopes : [];
+  return [...new Set(granularScopes
+    .filter((entry) => String(entry?.scope || "").trim() === scopeName)
+    .flatMap((entry) => Array.isArray(entry?.target_ids) ? entry.target_ids : [])
+    .map((targetId) => String(targetId || "").trim())
+    .filter((targetId) => /^\d{1,30}$/.test(targetId)))];
+}
+
 function validateTokenScopes(debugTokenData, wabaId, appId, requiredScopes = REQUIRED_EMBEDDED_SIGNUP_SCOPES) {
   if (debugTokenData?.is_valid !== true) {
     throw new HttpError(400, "Meta returned an invalid business token. Please reconnect WhatsApp.");
@@ -342,10 +351,8 @@ function validateTokenScopes(debugTokenData, wabaId, appId, requiredScopes = REQ
       grantedScopes,
     });
   }
-  const targetIds = granularScopes.flatMap((scope) =>
-    Array.isArray(scope?.target_ids) ? scope.target_ids.map((targetId) => String(targetId).trim()).filter(Boolean) : []
-  );
-  if (targetIds.length && !targetIds.includes(String(wabaId))) {
+  const whatsappTargetIds = granularScopeTargetIds(debugTokenData, "whatsapp_business_management");
+  if (whatsappTargetIds.length && !whatsappTargetIds.includes(String(wabaId))) {
     throw new HttpError(400, "Meta token is not scoped to the selected WhatsApp Business Account.");
   }
   return grantedScopes;
@@ -403,6 +410,14 @@ function createCatalogReauthorizationService({
       }
       throw error;
     }
+    const catalogIds = granularScopeTargetIds(debugTokenData, "catalog_management");
+    if (!catalogIds.length) {
+      throw new HttpError(400, "Meta did not grant access to a catalog asset. Authorize catalog access again and select at least one catalog.", {
+        grantedScopes,
+        requiredAssets: ["WhatsApp accounts", "Catalogs"],
+        requiredPermissions: REQUIRED_CATALOG_REAUTHORIZATION_SCOPES,
+      });
+    }
     await discoverPhone({
       wabaId: currentWabaId,
       phoneNumberId: currentPhoneNumberId,
@@ -446,7 +461,7 @@ function createCatalogReauthorizationService({
       entityId: currentWabaId,
       metadata: { maskedWabaId: maskId(currentWabaId), maskedPhoneNumberId: maskId(currentPhoneNumberId) },
     });
-    return { grantedScopes };
+    return { grantedScopes, catalogIds };
   };
 }
 

@@ -103,8 +103,17 @@ function serializeWhatsAppConnection(doc) {
           : []),
       ])]
     : [];
+  const catalogIds = tokenDebug && Array.isArray(tokenDebug.granularScopes)
+    ? [...new Set(tokenDebug.granularScopes
+        .filter((scope) => String(scope?.scope || "").trim() === "catalog_management")
+        .flatMap((scope) => Array.isArray(scope?.target_ids) ? scope.target_ids : [])
+        .map((targetId) => String(targetId || "").trim())
+        .filter((targetId) => /^\d{1,30}$/.test(targetId)))]
+    : [];
   const metadataWarnings = Array.isArray(doc.metadataWarnings) ? doc.metadataWarnings : [];
   const manualOrLegacyConnection = !isEmbeddedSignupConnection(doc);
+  const catalogPermissionGranted = tokenScopes.includes("catalog_management")
+    && (manualOrLegacyConnection || catalogIds.length > 0);
   const registrationStatus = inferRegistrationStatus(doc);
   const onboardingStage = inferOnboardingStage(doc);
   const registrationProgress = computeRegistrationProgress(doc);
@@ -133,8 +142,9 @@ function serializeWhatsAppConnection(doc) {
         }
       : null,
     catalogPermission: {
-      granted: tokenScopes.includes("catalog_management"),
-      authorizationRequired: !tokenScopes.includes("catalog_management"),
+      granted: catalogPermissionGranted,
+      authorizationRequired: !catalogPermissionGranted,
+      catalogIds,
     },
     warning: manualOrLegacyConnection
       ? "This workspace is using a manual/system-user token. Reconnect with Embedded Signup to use customer self-connect."

@@ -22,7 +22,10 @@ const debug = {
   is_valid: true,
   app_id: "app-1",
   scopes: ["whatsapp_business_management", "whatsapp_business_messaging", "catalog_management", "business_management"],
-  granular_scopes: [{ scope: "whatsapp_business_management", target_ids: ["111"] }],
+  granular_scopes: [
+    { scope: "whatsapp_business_management", target_ids: ["111"] },
+    { scope: "catalog_management", target_ids: ["4351882411734068"] },
+  ],
 };
 
 function fixture(overrides = {}) {
@@ -51,6 +54,7 @@ test("catalog reauthorization replaces only the same active connection after eve
   const result = await service(request);
   assert.ok(result.grantedScopes.includes("catalog_management"));
   assert.ok(result.grantedScopes.includes("business_management"));
+  assert.deepEqual(result.catalogIds, ["4351882411734068"]);
   assert.equal(calls.exchanged, 1);
   assert.equal(calls.discovered, 1);
   assert.equal(calls.subscribed, 1);
@@ -76,8 +80,22 @@ test("different WABA or phone is rejected before exchanging or changing credenti
   }
 });
 
+test("a catalog target cannot satisfy the selected WABA target check", () => {
+  assert.throws(() => validateTokenScopes({
+    ...debug,
+    granular_scopes: [
+      { scope: "whatsapp_business_management", target_ids: ["999"] },
+      { scope: "catalog_management", target_ids: ["111"] },
+    ],
+  }, "111", "app-1"), /not scoped to the selected WhatsApp Business Account/);
+});
+
 test("missing catalog scope and provider verification failures preserve the old token", async () => {
-  const missing = fixture({ debugToken: async () => ({ ...debug, scopes: debug.scopes.filter((scope) => scope !== "catalog_management") }) });
+  const missing = fixture({ debugToken: async () => ({
+    ...debug,
+    scopes: debug.scopes.filter((scope) => scope !== "catalog_management"),
+    granular_scopes: debug.granular_scopes.filter((scope) => scope.scope !== "catalog_management"),
+  }) });
   await assert.rejects(missing.service(request), (error) => {
     assert.equal(error.message, "Meta did not grant the permissions required to manage catalogs.");
     assert.deepEqual(error.details.missingScopes, ["catalog_management"]);
@@ -91,20 +109,42 @@ test("missing catalog scope and provider verification failures preserve the old 
   assert.equal(subscriptionFailure.calls.updates.length, 0);
 });
 
+test("catalog scope without a selected catalog asset is rejected before replacing the token", async () => {
+  const missingAsset = fixture({ debugToken: async () => ({
+    ...debug,
+    granular_scopes: debug.granular_scopes.filter((scope) => scope.scope !== "catalog_management"),
+  }) });
+  await assert.rejects(missingAsset.service(request), (error) => {
+    assert.equal(error.statusCode, 400);
+    assert.match(error.message, /select at least one catalog/i);
+    assert.deepEqual(error.details.requiredAssets, ["WhatsApp accounts", "Catalogs"]);
+    return true;
+  });
+  assert.equal(missingAsset.calls.discovered, 0);
+  assert.equal(missingAsset.calls.updates.length, 0);
+});
+
 test("an active-connection race fails closed instead of reporting permission success", async () => {
   const { service, calls } = fixture({ updateConnection: async () => ({ acknowledged: true, modifiedCount: 0 }) });
   await assert.rejects(service(request), { statusCode: 409 });
   assert.equal(calls.updates.length, 0);
 });
 
-test("connection response exposes catalog permission state without tokens", () => {
-  const base = { ...current, isValid: true, onboardingStage: "READY", registrationStatus: "COMPLETED",
+test("connection response requires an embedded-signup catalog asset target", () => {
+  const base = { ...current, isValid: true, connectionMode: "customer_embedded_signup", onboardingStage: "READY", registrationStatus: "COMPLETED",
     tokenDebugSummary: { scopes: ["whatsapp_business_management"], granularScopes: [] } };
   const missing = serializeWhatsAppConnection(base);
-  assert.deepEqual(missing.catalogPermission, { granted: false, authorizationRequired: true });
-  const granted = serializeWhatsAppConnection({ ...base,
+  assert.deepEqual(missing.catalogPermission, { granted: false, authorizationRequired: true, catalogIds: [] });
+  const scopeOnly = serializeWhatsAppConnection({ ...base,
     tokenDebugSummary: { scopes: [], granularScopes: [{ scope: "catalog_management", target_ids: [] }] } });
-  assert.deepEqual(granted.catalogPermission, { granted: true, authorizationRequired: false });
+  assert.deepEqual(scopeOnly.catalogPermission, { granted: false, authorizationRequired: true, catalogIds: [] });
+  const granted = serializeWhatsAppConnection({ ...base,
+    tokenDebugSummary: { scopes: [], granularScopes: [{ scope: "catalog_management", target_ids: ["4351882411734068"] }] } });
+  assert.deepEqual(granted.catalogPermission, {
+    granted: true,
+    authorizationRequired: false,
+    catalogIds: ["4351882411734068"],
+  });
   assert.equal(JSON.stringify(granted).includes("accessToken"), false);
 });
 
@@ -142,7 +182,7 @@ test("reauthorization HTTP route requires auth, workspace access, permission and
     calls++;
     assert.equal(String(workspace.id), workspaceId);
     assert.equal(code, "code"); assert.equal(wabaId, "111"); assert.equal(phoneNumberId, "222");
-    return { grantedScopes: ["catalog_management"] };
+    return { grantedScopes: ["catalog_management"], catalogIds: ["4351882411734068"] };
   });
   const router = require("@core/routes/whatsappIntegrationRoutes");
   const app = express();
@@ -162,6 +202,8 @@ test("reauthorization HTTP route requires auth, workspace access, permission and
   assert.equal((await fetch(url, { method: "POST", headers, body: JSON.stringify({ code: "code", waba_id: "invalid", phone_number_id: "222" }) })).status, 400);
   const response = await fetch(url, { method: "POST", headers, body: valid });
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).catalogPermission.granted, true);
+  const responseBody = await response.json();
+  assert.equal(responseBody.catalogPermission.granted, true);
+  assert.deepEqual(responseBody.catalogPermission.catalogIds, ["4351882411734068"]);
   assert.equal(calls, 1);
 });
