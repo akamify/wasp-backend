@@ -29,10 +29,15 @@ function createCatalogService({ repo = repository, getCredentials = getCredentia
       await client.verifyBinding(catalog.catalogId);
       return catalogDto(catalog);
     }
-    const inspected = await client.inspectCatalog(input.catalogId);
     const scope = { catalogId: input.catalogId, wabaId: credentials.wabaId, phoneNumberId: credentials.phoneNumberId };
     const historical = await repo.historicalCatalog(workspaceId, scope);
-    if (!historical && !inspected.empty) throw new HttpError(409, "Use a dedicated empty catalog. Existing products will not be imported or overwritten.");
+    const business = await client.ownerBusiness();
+    await client.verifyOwner(input.catalogId, business.id);
+    if (!historical) await client.verifyEmptyCatalog(input.catalogId);
+    // The explicit ownership confirmation authorizes AIWizChat to create the missing
+    // WABA association. linkCatalog is idempotent and refuses to replace another binding.
+    await client.linkCatalog(input.catalogId);
+    const inspected = await client.inspectCatalog(input.catalogId);
     const fields = { businessId: inspected.businessId, graphApiVersion: client.version,
       status: "connected", catalogVisible: inspected.catalogVisible, cartEnabled: inspected.cartEnabled,
       lastCheckedAt: new Date(), lastError: "" };
