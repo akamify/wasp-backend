@@ -12,9 +12,17 @@ function providerError(error, ambiguous = false, context = {}) {
   const code = Number(error?.response?.data?.error?.code || error?.error?.code || 0);
   const status = Number(error?.response?.status || error?.status || 0);
   const retryable = !status || status === 429 || status >= 500 || [1, 2, 4, 17, 32, 613].includes(code);
-  const message = code === 190 ? "WhatsApp authorization expired. Reconnect WhatsApp."
+  let statusCode = retryable ? 503 : 422;
+  let message = code === 190 ? "WhatsApp authorization expired. Reconnect WhatsApp."
     : retryable ? "Meta is temporarily unavailable. Catalog sync will retry."
     : "Meta rejected the catalog operation. Check asset permissions and product requirements.";
+  if (code !== 190 && !retryable && context.operation === "read_catalog_products") {
+    statusCode = 403;
+    message = "Meta cannot access this catalog with the current authorization. Authorize catalog access again and select this exact catalog.";
+  } else if (code !== 190 && !retryable && context.operation === "link_catalog") {
+    statusCode = 409;
+    message = "Meta could not link this catalog to the active WhatsApp account. Confirm that both assets belong to the same Business Portfolio and the connected Meta user has full control of both.";
+  }
   const remote = error?.response?.data?.error || error?.error || {};
   const details = { providerCode: code || undefined };
   if (Number.isSafeInteger(remote.error_subcode)) details.providerSubcode = remote.error_subcode;
@@ -31,7 +39,7 @@ function providerError(error, ambiguous = false, context = {}) {
   else if (/required|missing/i.test(reason)) details.providerReason = "missing_parameter";
   else if (/invalid parameter|must be|invalid value/i.test(reason)) details.providerReason = "invalid_parameter";
   if (field) details.providerField = field;
-  const safe = new HttpError(retryable ? 503 : 422, message, details);
+  const safe = new HttpError(statusCode, message, details);
   safe.retryable = retryable;
   safe.ambiguous = ambiguous && (!status || status >= 500);
   const retryAfter = Number(error?.response?.headers?.["retry-after"] || 0);

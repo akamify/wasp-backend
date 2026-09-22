@@ -89,3 +89,26 @@ test("code 100 diagnostics identify the failed operation without exposing provid
   assert.equal(safe.details.providerField, "owner_business_info");
   assert.equal(safe.details.providerReason, "unsupported_field");
 });
+
+test("catalog access and WABA link failures return actionable bounded errors", async () => {
+  const providerFailure = { response: { status: 400, data: { error: { code: 100, error_subcode: 33,
+    message: "Unsupported request for object secret-token" } } } };
+  const reads = createCatalogClient(credentials, { client: { get: async () => { throw providerFailure; } } });
+  await assert.rejects(reads.verifyEmptyCatalog("333"), (error) => {
+    assert.equal(error.statusCode, 403);
+    assert.equal(error.details.operation, "read_catalog_products");
+    assert.match(error.message, /select this exact catalog/);
+    assert.equal(JSON.stringify(error).includes("secret-token"), false);
+    return true;
+  });
+  const links = createCatalogClient(credentials, { client: {
+    get: async () => ({ data: { data: [] } }),
+    post: async () => { throw providerFailure; },
+  } });
+  await assert.rejects(links.linkCatalog("333"), (error) => {
+    assert.equal(error.statusCode, 409);
+    assert.equal(error.details.operation, "link_catalog");
+    assert.match(error.message, /same Business Portfolio/);
+    return true;
+  });
+});

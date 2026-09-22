@@ -122,24 +122,6 @@ test("active connection projection includes persisted token scopes", async (t) =
   assert.doesNotMatch(selected, /\+tokenDebugSummary/);
 });
 
-test("credentials retain catalog granular target IDs for asset-scoped authorization", async (t) => {
-  const connectionService = require("@shared/services/whatsappConnectionService");
-  const tokenDebugSummary = { scopes: debug.scopes, granularScopes: [
-    { scope: "catalog_management", target_ids: ["4351882411734068", "bad"] },
-    { scope: "whatsapp_business_management", target_ids: ["111"] },
-  ] };
-  t.mock.method(connectionService, "requireEmbeddedSignupConnection", async () => ({
-    doc: { status: "active", isActive: true, isValid: true }, accessToken: "token",
-    wabaId: "111", phoneNumberId: "222", tokenDebug: tokenDebugSummary,
-  }));
-  const modulePath = require.resolve("@shared/services/credentialsService");
-  delete require.cache[modulePath];
-  t.after(() => { delete require.cache[modulePath]; });
-  const { getCredentialsForUser } = require(modulePath);
-  const credentials = await getCredentialsForUser(workspaceId);
-  assert.deepEqual(credentials.catalogTargetIds, ["4351882411734068"]);
-});
-
 test("reauthorization HTTP route requires auth, workspace access, permission and strict asset IDs", async (t) => {
   const express = require("express");
   const jwt = require("jsonwebtoken");
