@@ -6,6 +6,8 @@ const {
   validateTokenScopes,
 } = require("./services/embeddedSignup.service");
 const { serializeWhatsAppConnection } = require("@shared/services/whatsappConnectionMetadataService");
+const { resolveActiveConnection } = require("@shared/services/whatsappConnectionService");
+const { WhatsAppCredentials } = require("@infra/database/WhatsAppCredentials");
 
 const workspaceId = "100000000000000000000001";
 const current = {
@@ -104,6 +106,20 @@ test("connection response exposes catalog permission state without tokens", () =
     tokenDebugSummary: { scopes: [], granularScopes: [{ scope: "catalog_management", target_ids: [] }] } });
   assert.deepEqual(granted.catalogPermission, { granted: true, authorizationRequired: false });
   assert.equal(JSON.stringify(granted).includes("accessToken"), false);
+});
+
+test("active connection projection includes persisted token scopes", async (t) => {
+  let selected = "";
+  const row = { connectionMode: "customer_embedded_signup", tokenDebugSummary: debug,
+    wabaId: "111", phoneNumberId: "222", accessTokenEnc: "" };
+  t.mock.method(WhatsAppCredentials, "find", () => ({
+    sort() { return this; },
+    select(fields) { selected = fields; return Promise.resolve([row]); },
+  }));
+  const result = await resolveActiveConnection(workspaceId);
+  assert.equal(result.tokenDebug, debug);
+  assert.match(selected, /(?:^|\s)tokenDebugSummary(?:\s|$)/);
+  assert.doesNotMatch(selected, /\+tokenDebugSummary/);
 });
 
 test("reauthorization HTTP route requires auth, workspace access, permission and strict asset IDs", async (t) => {

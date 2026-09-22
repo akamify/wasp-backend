@@ -53,7 +53,7 @@ async function findActiveConnectionDocument(workspaceId, select = "", options = 
 async function resolveActiveConnection(workspaceId, options = {}) {
   const doc = await findActiveConnectionDocument(
     workspaceId,
-    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc +tokenDebugSummary phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain graphApiVersion displayPhoneNumber wabaName connectedAt connectionMode tokenType onboardingStage registrationStatus templateSyncStatus isValid isActive status",
+    "+accessTokenEnc +phoneNumberIdEnc +businessAccountIdEnc tokenDebugSummary phoneNumberId phoneNumberIdPlain wabaId businessAccountIdPlain graphApiVersion displayPhoneNumber wabaName connectedAt connectionMode tokenType onboardingStage registrationStatus templateSyncStatus isValid isActive status",
     options
   );
   if (!doc) return null;
