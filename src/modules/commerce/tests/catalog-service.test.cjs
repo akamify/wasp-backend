@@ -96,6 +96,27 @@ test("new binding verifies ownership and emptiness before linking the catalog to
   assert.deepEqual(calls, ["business", "owner:333:444", "empty:333", "link:333", "inspect:333:444"]);
   assert.equal(result.catalogId, "333");
 });
+test("asset-scoped catalog access accepts only the exact selected Meta catalog", async () => {
+  let ownerChecks = 0, links = 0;
+  const create = (catalogTargetIds) => createCatalogService({
+    repo: { activeCatalog: async () => null, historicalCatalog: async () => null,
+      createCatalog: async (fields) => ({ ...catalog, ...fields }) },
+    getCredentials: async () => ({ ...credentials, catalogTargetIds }),
+    createClient: () => ({ version: "v22.0", ownerBusiness: async () => ({ id: "444" }),
+      verifyOwner: async () => { ownerChecks++; }, verifyEmptyCatalog: async () => {},
+      linkCatalog: async () => { links++; }, inspectCatalog: async (_id, businessId) => ({ businessId,
+        empty: true, catalogVisible: true, cartEnabled: true }) }),
+  });
+  await create(["333"]).bindCatalog(workspaceId, { catalogId: "333" });
+  assert.equal(ownerChecks, 0);
+  assert.equal(links, 1);
+  await assert.rejects(create(["999"]).bindCatalog(workspaceId, { catalogId: "333" }), (error) => {
+    assert.equal(error.statusCode, 403);
+    assert.match(error.message, /select this exact catalog/);
+    return true;
+  });
+  assert.equal(links, 1);
+});
 test("old phone binding blocks product changes but permits local disconnect", async () => {
   let disconnected = false, released = false;
   const service = createCatalogService({

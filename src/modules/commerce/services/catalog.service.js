@@ -32,7 +32,15 @@ function createCatalogService({ repo = repository, getCredentials = getCredentia
     const scope = { catalogId: input.catalogId, wabaId: credentials.wabaId, phoneNumberId: credentials.phoneNumberId };
     const historical = await repo.historicalCatalog(workspaceId, scope);
     const business = await client.ownerBusiness();
-    await client.verifyOwner(input.catalogId, business.id);
+    const catalogTargets = Array.isArray(credentials.catalogTargetIds) ? credentials.catalogTargetIds : [];
+    if (catalogTargets.length && !catalogTargets.includes(input.catalogId)) {
+      throw new HttpError(403, "Meta access is not authorized for this catalog. Authorize catalog access again and select this exact catalog.", {
+        catalogId: input.catalogId,
+      });
+    }
+    // An asset-scoped Facebook Login token is authoritative for explicitly selected catalogs.
+    // Broad tokens still require the Business-owned catalog edge ownership check.
+    if (!catalogTargets.length) await client.verifyOwner(input.catalogId, business.id);
     if (!historical) await client.verifyEmptyCatalog(input.catalogId);
     // The explicit ownership confirmation authorizes AIWizChat to create the missing
     // WABA association. linkCatalog is idempotent and refuses to replace another binding.
