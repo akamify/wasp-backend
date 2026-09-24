@@ -66,26 +66,29 @@ test("first connection refuses a populated catalog and does not create local rec
   });
   await assert.rejects(service.bindCatalog(workspaceId, { catalogId: "333" }), { statusCode: 409 });
 });
-test("binding rejects missing or different catalog asset targets before calling Meta", async () => {
-  for (const [patch, diagnosticCode] of [
-    [{ grantedScopes: [], catalogTargetIds: [] }, "catalog_management_scope_missing"],
-    [{ catalogTargetIds: [] }, "catalog_asset_target_missing"],
-    [{ catalogTargetIds: ["999"] }, "requested_catalog_not_authorized"],
-  ]) {
-    let providerCalls = 0;
-    const service = createCatalogService({
-      repo: { activeCatalog: async () => null },
-      getCredentials: async () => ({ ...credentials, ...patch }),
-      createClient: () => { providerCalls++; return {}; },
-    });
-    await assert.rejects(service.bindCatalog(workspaceId, { catalogId: "333" }), (error) => {
-      assert.equal(error.statusCode, 403);
-      assert.equal(error.details.diagnosticCode, diagnosticCode);
-      assert.equal(error.details.requestedCatalogId, "333");
-      return true;
-    });
-    assert.equal(providerCalls, 1);
-  }
+test("binding rejects a missing catalog scope but treats granular catalog targets as informational", async () => {
+  const missingScope = createCatalogService({
+    repo: { activeCatalog: async () => null },
+    getCredentials: async () => ({ ...credentials, grantedScopes: [], catalogTargetIds: [] }),
+    createClient: () => ({}),
+  });
+  await assert.rejects(missingScope.bindCatalog(workspaceId, { catalogId: "333" }), (error) => {
+    assert.equal(error.statusCode, 403);
+    assert.equal(error.details.diagnosticCode, "catalog_management_scope_missing");
+    return true;
+  });
+
+  const calls = [];
+  const targetless = createCatalogService({
+    repo: { activeCatalog: async () => null, historicalCatalog: async () => null,
+      createCatalog: async (fields) => ({ ...catalog, ...fields, businessId: "444", status: "connected" }) },
+    getCredentials: async () => ({ ...credentials, catalogTargetIds: [] }),
+    createClient: () => ({ version: "v22.0", verifyCatalogObject: async () => calls.push("object"),
+      ownerBusiness: async () => ({ id: "444" }), verifyEmptyCatalog: async () => {}, linkCatalog: async () => {},
+      inspectCatalog: async (_id, businessId) => ({ businessId, empty: true, catalogVisible: true, cartEnabled: true }) }),
+  });
+  await targetless.bindCatalog(workspaceId, { catalogId: "333" });
+  assert.deepEqual(calls, ["object"]);
 });
 test("new binding rechecks WhatsApp account after external verification", async () => {
   let calls = 0;

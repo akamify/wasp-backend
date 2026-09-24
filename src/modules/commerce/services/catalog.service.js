@@ -5,7 +5,7 @@ const repository = require("../repositories/catalog.repository");
 const { createCatalogClient } = require("./metaCatalog.service");
 const { productPatch, productDto, catalogDto } = require("../domain/catalog");
 
-function assertCatalogTargetAuthorization(credentials, catalogId) {
+function assertCatalogScopeAuthorization(credentials, catalogId) {
   const grantedScopes = new Set(Array.isArray(credentials?.grantedScopes) ? credentials.grantedScopes : []);
   const authorizedCatalogIds = [...new Set(
     (Array.isArray(credentials?.catalogTargetIds) ? credentials.catalogTargetIds : [])
@@ -17,18 +17,6 @@ function assertCatalogTargetAuthorization(credentials, catalogId) {
     throw new HttpError(403, "The current Meta token does not include catalog management permission. Authorize catalog access again.", {
       ...details,
       diagnosticCode: "catalog_management_scope_missing",
-    });
-  }
-  if (!authorizedCatalogIds.length) {
-    throw new HttpError(403, "Meta granted catalog management permission without sharing a catalog asset. Authorize again and select the exact catalog checkbox.", {
-      ...details,
-      diagnosticCode: "catalog_asset_target_missing",
-    });
-  }
-  if (!authorizedCatalogIds.includes(catalogId)) {
-    throw new HttpError(403, "The current Meta token is authorized for a different catalog. Authorize again and select this exact catalog.", {
-      ...details,
-      diagnosticCode: "requested_catalog_not_authorized",
     });
   }
 }
@@ -57,7 +45,7 @@ function createCatalogService({ repo = repository, getCredentials = getCredentia
       await client.verifyBinding(catalog.catalogId);
       return catalogDto(catalog);
     }
-    if (requireCatalogTarget) assertCatalogTargetAuthorization(credentials, input.catalogId);
+    if (requireCatalogTarget) assertCatalogScopeAuthorization(credentials, input.catalogId);
     const scope = { catalogId: input.catalogId, wabaId: credentials.wabaId, phoneNumberId: credentials.phoneNumberId };
     const historical = await repo.historicalCatalog(workspaceId, scope);
     await client.verifyCatalogObject(input.catalogId);

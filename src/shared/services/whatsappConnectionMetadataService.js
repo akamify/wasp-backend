@@ -112,8 +112,7 @@ function serializeWhatsAppConnection(doc) {
     : [];
   const metadataWarnings = Array.isArray(doc.metadataWarnings) ? doc.metadataWarnings : [];
   const manualOrLegacyConnection = !isEmbeddedSignupConnection(doc);
-  const catalogPermissionGranted = tokenScopes.includes("catalog_management")
-    && (manualOrLegacyConnection || catalogIds.length > 0);
+  const catalogPermissionGranted = tokenScopes.includes("catalog_management");
   const registrationStatus = inferRegistrationStatus(doc);
   const onboardingStage = inferOnboardingStage(doc);
   const registrationProgress = computeRegistrationProgress(doc);

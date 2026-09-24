@@ -152,12 +152,12 @@ test("catalog creation is gated while existing catalog connection remains availa
   assert.equal(f.creates(), 0);
 });
 
-test("existing catalog connection remains gated until Meta shares a catalog asset target", async () => {
+test("existing catalog connection uses catalog scope when Meta omits granular catalog targets", async () => {
   const f = fixture();
   f.credentials.catalogTargetIds = [];
   assert.deepEqual(await f.service.status("ws"), {
     setup: null,
-    capabilities: { connectExistingCatalog: false, createCatalog: true },
+    capabilities: { connectExistingCatalog: true, createCatalog: true },
   });
 });
 

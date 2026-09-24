@@ -109,19 +109,15 @@ test("missing catalog scope and provider verification failures preserve the old 
   assert.equal(subscriptionFailure.calls.updates.length, 0);
 });
 
-test("catalog scope without a selected catalog asset is rejected before replacing the token", async () => {
+test("catalog scope without granular catalog targets still replaces the token", async () => {
   const missingAsset = fixture({ debugToken: async () => ({
     ...debug,
     granular_scopes: debug.granular_scopes.filter((scope) => scope.scope !== "catalog_management"),
   }) });
-  await assert.rejects(missingAsset.service(request), (error) => {
-    assert.equal(error.statusCode, 400);
-    assert.match(error.message, /select at least one catalog/i);
-    assert.deepEqual(error.details.requiredAssets, ["WhatsApp accounts", "Catalogs"]);
-    return true;
-  });
-  assert.equal(missingAsset.calls.discovered, 0);
-  assert.equal(missingAsset.calls.updates.length, 0);
+  const result = await missingAsset.service(request);
+  assert.deepEqual(result.catalogIds, []);
+  assert.equal(missingAsset.calls.discovered, 1);
+  assert.equal(missingAsset.calls.updates.length, 1);
 });
 
 test("an active-connection race fails closed instead of reporting permission success", async () => {
@@ -130,14 +126,14 @@ test("an active-connection race fails closed instead of reporting permission suc
   assert.equal(calls.updates.length, 0);
 });
 
-test("connection response requires an embedded-signup catalog asset target", () => {
+test("connection response treats granular catalog targets as informational", () => {
   const base = { ...current, isValid: true, connectionMode: "customer_embedded_signup", onboardingStage: "READY", registrationStatus: "COMPLETED",
     tokenDebugSummary: { scopes: ["whatsapp_business_management"], granularScopes: [] } };
   const missing = serializeWhatsAppConnection(base);
   assert.deepEqual(missing.catalogPermission, { granted: false, authorizationRequired: true, catalogIds: [] });
   const scopeOnly = serializeWhatsAppConnection({ ...base,
     tokenDebugSummary: { scopes: [], granularScopes: [{ scope: "catalog_management", target_ids: [] }] } });
-  assert.deepEqual(scopeOnly.catalogPermission, { granted: false, authorizationRequired: true, catalogIds: [] });
+  assert.deepEqual(scopeOnly.catalogPermission, { granted: true, authorizationRequired: false, catalogIds: [] });
   const granted = serializeWhatsAppConnection({ ...base,
     tokenDebugSummary: { scopes: [], granularScopes: [{ scope: "catalog_management", target_ids: ["4351882411734068"] }] } });
   assert.deepEqual(granted.catalogPermission, {

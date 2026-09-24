@@ -411,13 +411,6 @@ function createCatalogReauthorizationService({
       throw error;
     }
     const catalogIds = granularScopeTargetIds(debugTokenData, "catalog_management");
-    if (!catalogIds.length) {
-      throw new HttpError(400, "Meta did not grant access to a catalog asset. Authorize catalog access again and select at least one catalog.", {
-        grantedScopes,
-        requiredAssets: ["WhatsApp accounts", "Catalogs"],
-        requiredPermissions: REQUIRED_CATALOG_REAUTHORIZATION_SCOPES,
-      });
-    }
     await discoverPhone({
       wabaId: currentWabaId,
       phoneNumberId: currentPhoneNumberId,

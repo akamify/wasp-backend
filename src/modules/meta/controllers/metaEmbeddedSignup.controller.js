@@ -85,7 +85,7 @@ async function reauthorizeCatalogConnection(req, res) {
   return res.json({
     success: true,
     catalogPermission: {
-      granted: result.grantedScopes.includes("catalog_management") && result.catalogIds.length > 0,
+      granted: result.grantedScopes.includes("catalog_management"),
       scopes: result.grantedScopes,
       catalogIds: result.catalogIds,
     },
