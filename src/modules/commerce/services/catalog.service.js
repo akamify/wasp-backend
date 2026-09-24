@@ -5,6 +5,34 @@ const repository = require("../repositories/catalog.repository");
 const { createCatalogClient } = require("./metaCatalog.service");
 const { productPatch, productDto, catalogDto } = require("../domain/catalog");
 
+function assertCatalogTargetAuthorization(credentials, catalogId) {
+  const grantedScopes = new Set(Array.isArray(credentials?.grantedScopes) ? credentials.grantedScopes : []);
+  const authorizedCatalogIds = [...new Set(
+    (Array.isArray(credentials?.catalogTargetIds) ? credentials.catalogTargetIds : [])
+      .map((targetId) => String(targetId || "").trim())
+      .filter((targetId) => /^\d{1,30}$/.test(targetId))
+  )];
+  const details = { requestedCatalogId: catalogId, authorizedCatalogIds };
+  if (!grantedScopes.has("catalog_management")) {
+    throw new HttpError(403, "The current Meta token does not include catalog management permission. Authorize catalog access again.", {
+      ...details,
+      diagnosticCode: "catalog_management_scope_missing",
+    });
+  }
+  if (!authorizedCatalogIds.length) {
+    throw new HttpError(403, "Meta granted catalog management permission without sharing a catalog asset. Authorize again and select the exact catalog checkbox.", {
+      ...details,
+      diagnosticCode: "catalog_asset_target_missing",
+    });
+  }
+  if (!authorizedCatalogIds.includes(catalogId)) {
+    throw new HttpError(403, "The current Meta token is authorized for a different catalog. Authorize again and select this exact catalog.", {
+      ...details,
+      diagnosticCode: "requested_catalog_not_authorized",
+    });
+  }
+}
+
 function createCatalogService({ repo = repository, getCredentials = getCredentialsForUser, createClient = createCatalogClient } = {}) {
   async function context(workspaceId, requireCatalog = true, allowOldPhone = false) {
     const credentials = await getCredentials(workspaceId);
@@ -21,7 +49,7 @@ function createCatalogService({ repo = repository, getCredentials = getCredentia
     const { catalog, credentials } = await context(workspaceId, false, true);
     return catalog ? { ...catalogDto(catalog), activePhoneMatches: catalog.phoneNumberId === credentials.phoneNumberId } : null;
   }
-  async function bindCatalog(workspaceId, input) {
+  async function bindCatalog(workspaceId, input, { requireCatalogTarget = true } = {}) {
     const { credentials, catalog } = await context(workspaceId, false);
     const client = createClient(credentials);
     if (catalog) {
@@ -29,8 +57,10 @@ function createCatalogService({ repo = repository, getCredentials = getCredentia
       await client.verifyBinding(catalog.catalogId);
       return catalogDto(catalog);
     }
+    if (requireCatalogTarget) assertCatalogTargetAuthorization(credentials, input.catalogId);
     const scope = { catalogId: input.catalogId, wabaId: credentials.wabaId, phoneNumberId: credentials.phoneNumberId };
     const historical = await repo.historicalCatalog(workspaceId, scope);
+    await client.verifyCatalogObject(input.catalogId);
     const business = await client.ownerBusiness();
     // Direct catalog access proves that the connected Meta user can manage this
     // asset. The WABA link and read-back below are the authoritative same-business

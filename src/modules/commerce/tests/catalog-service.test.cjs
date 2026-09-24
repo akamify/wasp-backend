@@ -4,7 +4,8 @@ const assert = require("node:assert/strict");
 const { createCatalogService } = require("../services/catalog.service");
 const workspaceId = "100000000000000000000001";
 const catalog = { _id: "200000000000000000000001", workspaceId, catalogId: "333", wabaId: "111", phoneNumberId: "222", revision: 1, active: true };
-const credentials = { wabaId: "111", phoneNumberId: "222", accessToken: "test-token" };
+const credentials = { wabaId: "111", phoneNumberId: "222", accessToken: "test-token",
+  grantedScopes: ["catalog_management"], catalogTargetIds: ["333"] };
 const product = { _id: "300000000000000000000001", workspaceId, catalogConnectionId: catalog._id, revision: 2,
   sku: "a", name: "A", condition: "new", taxConfirmed: true, stockReserved: 0, stockOnHand: 1, trackInventory: false,
   syncSubmittedRevision: 0, syncedRevision: 0, archivedAt: null };
@@ -58,19 +59,40 @@ test("first connection refuses a populated catalog and does not create local rec
   const service = createCatalogService({
     repo: { activeCatalog: async () => null, historicalCatalog: async () => null, createCatalog: async () => assert.fail("must not bind") },
     getCredentials: async () => credentials, createClient: () => ({
-      ownerBusiness: async () => ({ id: "444" }), verifyOwner: async () => {},
+      verifyCatalogObject: async () => {}, ownerBusiness: async () => ({ id: "444" }), verifyOwner: async () => {},
       verifyEmptyCatalog: async () => { throw Object.assign(new Error("populated"), { statusCode: 409 }); },
       linkCatalog: async () => assert.fail("populated catalog must not be linked"),
     }),
   });
   await assert.rejects(service.bindCatalog(workspaceId, { catalogId: "333" }), { statusCode: 409 });
 });
+test("binding rejects missing or different catalog asset targets before calling Meta", async () => {
+  for (const [patch, diagnosticCode] of [
+    [{ grantedScopes: [], catalogTargetIds: [] }, "catalog_management_scope_missing"],
+    [{ catalogTargetIds: [] }, "catalog_asset_target_missing"],
+    [{ catalogTargetIds: ["999"] }, "requested_catalog_not_authorized"],
+  ]) {
+    let providerCalls = 0;
+    const service = createCatalogService({
+      repo: { activeCatalog: async () => null },
+      getCredentials: async () => ({ ...credentials, ...patch }),
+      createClient: () => { providerCalls++; return {}; },
+    });
+    await assert.rejects(service.bindCatalog(workspaceId, { catalogId: "333" }), (error) => {
+      assert.equal(error.statusCode, 403);
+      assert.equal(error.details.diagnosticCode, diagnosticCode);
+      assert.equal(error.details.requestedCatalogId, "333");
+      return true;
+    });
+    assert.equal(providerCalls, 1);
+  }
+});
 test("new binding rechecks WhatsApp account after external verification", async () => {
   let calls = 0;
   const service = createCatalogService({
     repo: { activeCatalog: async () => null, historicalCatalog: async () => null, createCatalog: async () => assert.fail("must not bind") },
     getCredentials: async () => ++calls === 1 ? credentials : { ...credentials, wabaId: "other" },
-    createClient: () => ({ ownerBusiness: async () => ({ id: "444" }), verifyOwner: async () => {},
+    createClient: () => ({ verifyCatalogObject: async () => {}, ownerBusiness: async () => ({ id: "444" }), verifyOwner: async () => {},
       verifyEmptyCatalog: async () => {}, linkCatalog: async () => {},
       inspectCatalog: async (_id, businessId) => ({ empty: true, businessId }), version: "v22.0" }),
   });
@@ -84,6 +106,7 @@ test("new binding verifies direct catalog access before linking and reading back
       createCatalog: async (fields) => ({ ...created, ...fields }) },
     getCredentials: async () => credentials,
     createClient: () => ({ version: "v22.0",
+      verifyCatalogObject: async (id) => { calls.push(`object:${id}`); },
       ownerBusiness: async () => { calls.push("business"); return { id: "444" }; },
       verifyEmptyCatalog: async (id) => { calls.push(`empty:${id}`); },
       linkCatalog: async (id) => { calls.push(`link:${id}`); },
@@ -92,7 +115,7 @@ test("new binding verifies direct catalog access before linking and reading back
     }),
   });
   const result = await service.bindCatalog(workspaceId, { catalogId: "333" });
-  assert.deepEqual(calls, ["business", "empty:333", "link:333", "inspect:333:444"]);
+  assert.deepEqual(calls, ["object:333", "business", "empty:333", "link:333", "inspect:333:444"]);
   assert.equal(result.catalogId, "333");
 });
 test("old phone binding blocks product changes but permits local disconnect", async () => {

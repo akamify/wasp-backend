@@ -11,6 +11,7 @@ function fixture() {
     wabaId: "111",
     phoneNumberId: "222",
     grantedScopes: ["whatsapp_business_management", "whatsapp_business_messaging", "catalog_management", "business_management"],
+    catalogTargetIds: ["444"],
   };
   const repo = {
     read: async () => row,
@@ -21,7 +22,10 @@ function fixture() {
   };
   const client = { ownerBusiness: async () => ({ id: "333" }), linkedCatalogs: async () => ({ catalogs: [] }),
     createOwnedCatalog: async () => { creates++; return "444"; }, verifyOwner: async () => {}, verifyEmptyCatalog: async () => {}, linkCatalog: async () => {} };
-  const catalogService = { getCatalog: async () => null, bindCatalog: async (_ws, data) => ({ id: "local", ...data }) };
+  const catalogService = { getCatalog: async () => null, bindCatalog: async (_ws, data, options) => {
+    assert.deepEqual(options, { requireCatalogTarget: false });
+    return { id: "local", ...data };
+  } };
   const service = createSetupService({ repo, createClient: () => client, getCredentials: async () => ({ ...credentials }), catalogService });
   return { service, client, repo, credentials, catalogService, creates: () => creates, row: () => row };
 }
@@ -146,6 +150,15 @@ test("catalog creation is gated while existing catalog connection remains availa
   });
   assert.equal(f.row(), undefined);
   assert.equal(f.creates(), 0);
+});
+
+test("existing catalog connection remains gated until Meta shares a catalog asset target", async () => {
+  const f = fixture();
+  f.credentials.catalogTargetIds = [];
+  assert.deepEqual(await f.service.status("ws"), {
+    setup: null,
+    capabilities: { connectExistingCatalog: false, createCatalog: true },
+  });
 });
 
 test("a completed setup replay returns the connected catalog without another provider write", async () => {

@@ -94,10 +94,20 @@ test("catalog access and WABA link failures return actionable bounded errors", a
   const providerFailure = { response: { status: 400, data: { error: { code: 100, error_subcode: 33,
     message: "Unsupported request for object secret-token" } } } };
   const reads = createCatalogClient(credentials, { client: { get: async () => { throw providerFailure; } } });
+  await assert.rejects(reads.verifyCatalogObject("333"), (error) => {
+    assert.equal(error.statusCode, 403);
+    assert.equal(error.details.operation, "read_catalog_object");
+    assert.equal(error.details.diagnosticCode, "catalog_object_unavailable");
+    assert.equal(error.details.requestedCatalogId, "333");
+    assert.match(error.message, /cannot load this catalog object/);
+    return true;
+  });
   await assert.rejects(reads.verifyEmptyCatalog("333"), (error) => {
     assert.equal(error.statusCode, 403);
     assert.equal(error.details.operation, "read_catalog_products");
-    assert.match(error.message, /select this exact catalog/);
+    assert.equal(error.details.diagnosticCode, "catalog_products_edge_unavailable");
+    assert.equal(error.details.requestedCatalogId, "333");
+    assert.match(error.message, /cannot read its products/);
     assert.equal(JSON.stringify(error).includes("secret-token"), false);
     return true;
   });
@@ -109,6 +119,16 @@ test("catalog access and WABA link failures return actionable bounded errors", a
     assert.equal(error.statusCode, 409);
     assert.equal(error.details.operation, "link_catalog");
     assert.match(error.message, /same Business Portfolio/);
+    return true;
+  });
+});
+
+test("catalog object probe requires Meta to echo the requested catalog identity", async () => {
+  const client = createCatalogClient(credentials, { client: { get: async () => ({ data: { id: "999" } }) } });
+  await assert.rejects(client.verifyCatalogObject("333"), (error) => {
+    assert.equal(error.statusCode, 502);
+    assert.equal(error.details.diagnosticCode, "catalog_identity_mismatch");
+    assert.equal(error.details.requestedCatalogId, "333");
     return true;
   });
 });

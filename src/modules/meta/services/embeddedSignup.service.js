@@ -453,6 +453,12 @@ function createCatalogReauthorizationService({
     if (!result?.acknowledged || Number(result.modifiedCount || 0) !== 1) {
       throw new HttpError(409, "WhatsApp connection changed while permissions were being updated. Refresh and retry.");
     }
+    console.info("[meta-embedded-signup] catalog authorization saved", {
+      workspaceId,
+      wabaId: currentWabaId,
+      catalogIds,
+      grantedScopes,
+    });
     await recordActivity({
       workspaceId,
       actorUserId: user?.id || null,

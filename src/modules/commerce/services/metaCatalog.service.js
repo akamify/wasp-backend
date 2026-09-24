@@ -18,7 +18,10 @@ function providerError(error, ambiguous = false, context = {}) {
     : "Meta rejected the catalog operation. Check asset permissions and product requirements.";
   if (code !== 190 && !retryable && context.operation === "read_catalog_products") {
     statusCode = 403;
-    message = "Meta cannot access this catalog with the current authorization. Authorize catalog access again and select this exact catalog.";
+    message = "Meta can load the selected catalog but cannot read its products. Confirm catalog management access and the catalog's Meta product type.";
+  } else if (code !== 190 && !retryable && context.operation === "read_catalog_object") {
+    statusCode = 403;
+    message = "Meta cannot load this catalog object with the current authorization. Confirm the Catalog ID and authorize this exact catalog.";
   } else if (code !== 190 && !retryable && context.operation === "link_catalog") {
     statusCode = 409;
     message = "Meta could not link this catalog to the active WhatsApp account. Confirm that both assets belong to the same Business Portfolio and the connected Meta user has full control of both.";
@@ -56,6 +59,7 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
     if (path.endsWith("/owned_product_catalogs")) return method === "POST" ? "create_catalog" : "read_owned_catalogs";
     if (path.endsWith("/product_catalogs")) return method === "POST" ? "link_catalog" : "read_linked_catalogs";
     if (params?.fields === "id,owner_business_info") return "read_business_owner";
+    if (/^\/\d{1,30}$/.test(path) && params?.fields === "id") return "read_catalog_object";
     if (path.endsWith("/whatsapp_commerce_settings")) return "commerce_settings";
     if (path.endsWith("/products")) return "read_catalog_products";
     return "catalog_details_or_products";
@@ -125,9 +129,45 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
     await verifyBinding(catalogId);
   }
   async function verifyEmptyCatalog(catalogId) {
-    const products = await get(`/${graphId(catalogId)}/products`, { fields: "id", limit: 1, return_only_approved_products: false });
+    const id = graphId(catalogId);
+    let products;
+    try {
+      products = await get(`/${id}/products`, { fields: "id", limit: 1, return_only_approved_products: false });
+    } catch (error) {
+      if (error instanceof HttpError) {
+        error.details = {
+          ...(error.details || {}),
+          diagnosticCode: "catalog_products_edge_unavailable",
+          requestedCatalogId: id,
+        };
+      }
+      throw error;
+    }
     if (!Array.isArray(products?.data)) throw new HttpError(502, "Meta returned an invalid product list. Recovery was not saved.");
     if (products.data.length) throw new HttpError(409, "Recover a dedicated empty catalog. Existing products will not be imported or overwritten.");
+  }
+  async function verifyCatalogObject(catalogId) {
+    const id = graphId(catalogId);
+    let catalog;
+    try {
+      catalog = await get(`/${id}`, { fields: "id" });
+    } catch (error) {
+      if (error instanceof HttpError) {
+        error.details = {
+          ...(error.details || {}),
+          diagnosticCode: "catalog_object_unavailable",
+          requestedCatalogId: id,
+        };
+      }
+      throw error;
+    }
+    if (String(catalog?.id || "") !== id) {
+      throw new HttpError(502, "Meta returned an invalid catalog identity.", {
+        diagnosticCode: "catalog_identity_mismatch",
+        requestedCatalogId: id,
+      });
+    }
+    return { id };
   }
   async function verifyBinding(catalogId) {
     graphId(catalogId);
@@ -213,6 +253,6 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
     }));
   }
   return { version, linkedCatalogs, verifyBinding, inspectCatalog, readSettings, updateSettings, lookupProducts, writeProducts,
-    ownerBusiness, createOwnedCatalog, verifyOwner, verifyEmptyCatalog, linkCatalog };
+    ownerBusiness, createOwnedCatalog, verifyOwner, verifyCatalogObject, verifyEmptyCatalog, linkCatalog };
 }
 module.exports = { createCatalogClient, providerError };

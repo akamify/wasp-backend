@@ -19,6 +19,13 @@ async function getCredentialsForUser(userId) {
       ? tokenDebug.granularScopes.map((entry) => String(entry?.scope || "").trim()).filter(Boolean)
       : []),
   ])];
+  const catalogTargetIds = [...new Set(
+    (Array.isArray(tokenDebug.granularScopes) ? tokenDebug.granularScopes : [])
+      .filter((entry) => String(entry?.scope || "").trim() === "catalog_management")
+      .flatMap((entry) => Array.isArray(entry?.target_ids) ? entry.target_ids : [])
+      .map((targetId) => String(targetId || "").trim())
+      .filter((targetId) => /^\d{1,30}$/.test(targetId))
+  )];
   return {
     accessToken: connection.accessToken,
     phoneNumberId: connection.phoneNumberId,
@@ -29,6 +36,7 @@ async function getCredentialsForUser(userId) {
     connectedAt: connection.connectedAt,
     graphApiVersion: connection.graphApiVersion,
     grantedScopes,
+    catalogTargetIds,
   };
 }
 

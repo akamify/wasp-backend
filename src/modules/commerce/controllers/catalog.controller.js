@@ -26,9 +26,26 @@ async function listCatalogs(req, res) {
 }
 async function getCatalog(req, res) { res.json({ success: true, catalog: await service.getCatalog(workspace(req)) }); }
 async function bindCatalog(req, res) {
-  const catalog = await service.bindCatalog(workspace(req), body(schemas.catalogBind, req));
-  await audit(req, "commerce_catalog_connected", catalog);
-  res.json({ success: true, catalog });
+  const input = body(schemas.catalogBind, req);
+  try {
+    const catalog = await service.bindCatalog(workspace(req), input);
+    await audit(req, "commerce_catalog_connected", catalog);
+    res.json({ success: true, catalog });
+  } catch (error) {
+    const details = error?.details || {};
+    console.warn("[commerce-catalog] bind failed", {
+      workspaceId: String(workspace(req)),
+      requestedCatalogId: input.catalogId,
+      authorizedCatalogIds: Array.isArray(details.authorizedCatalogIds) ? details.authorizedCatalogIds : undefined,
+      diagnosticCode: details.diagnosticCode || "catalog_bind_failed",
+      statusCode: Number(error?.statusCode || 500),
+      providerCode: details.providerCode,
+      providerSubcode: details.providerSubcode,
+      providerTraceId: details.providerTraceId,
+      operation: details.operation,
+    });
+    throw error;
+  }
 }
 function changeCatalog(action) {
   return async (req, res) => {

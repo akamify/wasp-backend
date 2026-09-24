@@ -7,8 +7,9 @@ const repository = require("../repositories/catalogSetup.repository");
 
 function catalogCapabilities(credentials) {
   const scopes = new Set(Array.isArray(credentials?.grantedScopes) ? credentials.grantedScopes : []);
+  const catalogTargets = new Set(Array.isArray(credentials?.catalogTargetIds) ? credentials.catalogTargetIds : []);
   return {
-    connectExistingCatalog: scopes.has("catalog_management"),
+    connectExistingCatalog: scopes.has("catalog_management") && catalogTargets.size > 0,
     createCatalog: scopes.has("catalog_management") && scopes.has("business_management"),
   };
 }
@@ -102,7 +103,14 @@ function createSetupService({ repo = repository, getCredentials = getCredentials
       await client.verifyOwner(setup.catalogId, business.id);
       await client.linkCatalog(setup.catalogId);
       await assertCurrent();
-      const catalog = await catalogService.bindCatalog(workspaceId, { catalogId: setup.catalogId, confirmDedicatedCatalog: true });
+      // The catalog was created or ownership-verified through the Business-owned
+      // catalog edge immediately above, so it may not be present in the older
+      // Facebook Login asset targets. Direct catalog/WABA read-back still applies.
+      const catalog = await catalogService.bindCatalog(
+        workspaceId,
+        { catalogId: setup.catalogId, confirmDedicatedCatalog: true },
+        { requireCatalogTarget: false }
+      );
       await save({ state: "connected" });
       return catalog;
     } finally { await repo.release(workspaceId, credentials.wabaId, owner); }
