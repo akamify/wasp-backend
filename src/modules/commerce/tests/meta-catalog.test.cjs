@@ -76,6 +76,52 @@ test("phone commerce settings are read back after successful update", async () =
   assert.equal(reads[0].options.params.fields, "is_catalog_visible,is_cart_enabled");
 });
 
+test("uninitialized commerce settings use Meta's documented defaults", async () => {
+  for (const response of [{ data: [] }, { data: [{}] }, { data: [{ is_catalog_visible: true }] }]) {
+    const client = createCatalogClient(credentials, { client: {
+      get: async () => ({ data: response }),
+    } });
+    assert.deepEqual(await client.readSettings(), {
+      catalogVisible: response.data[0]?.is_catalog_visible ?? false,
+      cartEnabled: true,
+    });
+  }
+});
+
+test("malformed commerce setting values remain a bounded provider error", async () => {
+  const client = createCatalogClient(credentials, { client: {
+    get: async () => ({ data: { data: [{ is_catalog_visible: "false", access_token: "secret-token" }] } }),
+  } });
+  await assert.rejects(client.readSettings(), (error) => {
+    assert.equal(error.statusCode, 502);
+    assert.equal(error.details.diagnosticCode, "invalid_commerce_settings_response");
+    assert.equal(error.details.responseShape, "data_array");
+    assert.equal(error.details.rowCount, 1);
+    assert.deepEqual(error.details.fieldNames, ["is_catalog_visible", "access_token"]);
+    assert.equal(JSON.stringify(error).includes("secret-token"), false);
+    return true;
+  });
+});
+
+test("catalog inspection does not let malformed optional settings block a verified binding", async () => {
+  const client = createCatalogClient(credentials, { client: {
+    get: async (path) => {
+      if (path === "/111/product_catalogs") return { data: { data: [{ id: "333", name: "Catalog" }] } };
+      if (path === "/333/products") return { data: { data: [] } };
+      if (path === "/222/whatsapp_commerce_settings") {
+        return { data: { data: [{ is_catalog_visible: "invalid", is_cart_enabled: "invalid" }] } };
+      }
+      throw new Error(`Unexpected path: ${path}`);
+    },
+  } });
+  assert.deepEqual(await client.inspectCatalog("333", "444"), {
+    businessId: "444",
+    empty: true,
+    catalogVisible: false,
+    cartEnabled: true,
+  });
+});
+
 test("code 100 diagnostics identify the failed operation without exposing provider text or secrets", async () => {
   const error = { response: { status: 400, data: { error: { code: 100, error_subcode: 33,
     fbtrace_id: "trace_123", message: "Unsupported post request. Object secret-token cannot be loaded" } } } };

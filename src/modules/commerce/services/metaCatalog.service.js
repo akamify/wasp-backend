@@ -3,6 +3,7 @@ const { createMetaClient, authHeaders, getMetaGraphVersion } = require("@modules
 const { MAX_BATCH, remoteProductData } = require("../domain/catalog");
 
 const REMOTE_FIELDS = "id,retailer_id,custom_label_3,custom_label_4,review_status,visibility";
+const DEFAULT_COMMERCE_SETTINGS = Object.freeze({ catalogVisible: false, cartEnabled: true });
 function graphId(value) {
   if (typeof value !== "string" || !/^\d{1,30}$/.test(value)) throw new HttpError(400, "Invalid Meta asset identifier.");
   return value;
@@ -197,18 +198,45 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
     await verifyBinding(id);
     const [products, settings] = await Promise.all([
       get(`/${graphId(catalogId)}/products`, { fields: "id", limit: 1, return_only_approved_products: false }),
-      readSettings(),
+      // Commerce display settings do not determine catalog ownership or binding.
+      // Do not block product management when Meta returns an uninitialized or
+      // nonconforming 200 response for this optional read.
+      readSettings({ fallbackToDefaults: true }),
     ]);
     if (!Array.isArray(products?.data)) throw new HttpError(502, "Meta returned an invalid catalog.");
     return { businessId: graphId(businessId), empty: products.data.length === 0, ...settings };
   }
-  async function readSettings() {
+  async function readSettings({ fallbackToDefaults = false } = {}) {
     const result = await get(`/${graphId(credentials.phoneNumberId)}/whatsapp_commerce_settings`, {
       fields: "is_catalog_visible,is_cart_enabled",
     });
-    const data = Array.isArray(result?.data) ? result.data[0] : result;
-    if (typeof data?.is_catalog_visible !== "boolean" || typeof data?.is_cart_enabled !== "boolean") throw new HttpError(502, "Meta returned invalid commerce settings.");
-    return { catalogVisible: data.is_catalog_visible, cartEnabled: data.is_cart_enabled };
+    const rows = Array.isArray(result?.data) ? result.data : null;
+    const data = rows ? rows[0] : result;
+    // Meta documents these defaults, but a newly linked phone/catalog can return
+    // an empty row or omit unset fields until a commerce setting is first changed.
+    // Keep malformed values strict while allowing that uninitialized state.
+    if (rows?.length === 0 || (data && typeof data === "object" && !Array.isArray(data))) {
+      const visible = data?.is_catalog_visible;
+      const cart = data?.is_cart_enabled;
+      if ((visible === undefined || typeof visible === "boolean") &&
+          (cart === undefined || typeof cart === "boolean")) {
+        return {
+          catalogVisible: visible ?? DEFAULT_COMMERCE_SETTINGS.catalogVisible,
+          cartEnabled: cart ?? DEFAULT_COMMERCE_SETTINGS.cartEnabled,
+        };
+      }
+    }
+    const fieldNames = data && typeof data === "object" && !Array.isArray(data)
+      ? Object.keys(data).filter((field) => /^[A-Za-z0-9_]{1,50}$/.test(field)).slice(0, 20)
+      : [];
+    if (fallbackToDefaults) return { ...DEFAULT_COMMERCE_SETTINGS };
+    throw new HttpError(502, "Meta returned invalid commerce settings.", {
+      diagnosticCode: "invalid_commerce_settings_response",
+      graphApiVersion: version,
+      responseShape: rows ? "data_array" : Array.isArray(result) ? "array" : typeof result,
+      rowCount: rows?.length,
+      fieldNames,
+    });
   }
   async function updateSettings(settings) {
     const result = await post(`/${graphId(credentials.phoneNumberId)}/whatsapp_commerce_settings`, null, {
