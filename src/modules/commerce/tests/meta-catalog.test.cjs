@@ -80,6 +80,7 @@ test("code 100 diagnostics identify the failed operation without exposing provid
     assert.equal(failure.details.operation, "create_catalog");
     assert.equal(failure.details.providerSubcode, 33);
     assert.equal(failure.details.providerTraceId, "trace_123");
+    assert.equal(failure.details.graphApiVersion, "v22.0");
     assert.equal(failure.details.providerReason, "object_unavailable_or_operation_unsupported");
     assert.equal(JSON.stringify(failure).includes("secret-token"), false);
     return true;
@@ -124,11 +125,37 @@ test("catalog access and WABA link failures return actionable bounded errors", a
 });
 
 test("catalog object probe requires Meta to echo the requested catalog identity", async () => {
-  const client = createCatalogClient(credentials, { client: { get: async () => ({ data: { id: "999" } }) } });
+  const client = createCatalogClient(credentials, { client: { get: async () => ({ data: { id: "999", vertical: "commerce" } }) } });
   await assert.rejects(client.verifyCatalogObject("333"), (error) => {
     assert.equal(error.statusCode, 502);
     assert.equal(error.details.diagnosticCode, "catalog_identity_mismatch");
     assert.equal(error.details.requestedCatalogId, "333");
     return true;
   });
+});
+
+test("catalog object probe rejects non-commerce catalog verticals before reading products", async () => {
+  let request;
+  const client = createCatalogClient(credentials, { client: { get: async (path, options) => {
+    request = { path, options };
+    return { data: { id: "333", name: "Professional Services", vertical: "services", product_count: 0 } };
+  } } });
+  await assert.rejects(client.verifyCatalogObject("333"), (error) => {
+    assert.equal(error.statusCode, 409);
+    assert.equal(error.details.diagnosticCode, "unsupported_catalog_vertical");
+    assert.equal(error.details.catalogVertical, "services");
+    return true;
+  });
+  assert.equal(request.path, "/333");
+  assert.equal(request.options.params.fields, "id,name,vertical,product_count");
+});
+
+test("empty catalog probe relies on Meta's documented false default for approval filtering", async () => {
+  let params;
+  const client = createCatalogClient(credentials, { client: { get: async (_path, options) => {
+    params = options.params;
+    return { data: { data: [] } };
+  } } });
+  await client.verifyEmptyCatalog("333");
+  assert.deepEqual(params, { fields: "id", limit: 1 });
 });

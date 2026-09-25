@@ -38,11 +38,13 @@ async function bindCatalog(req, res) {
       requestedCatalogId: input.catalogId,
       authorizedCatalogIds: Array.isArray(details.authorizedCatalogIds) ? details.authorizedCatalogIds : undefined,
       diagnosticCode: details.diagnosticCode || "catalog_bind_failed",
+      catalogVertical: details.catalogVertical,
       statusCode: Number(error?.statusCode || 500),
       providerCode: details.providerCode,
       providerSubcode: details.providerSubcode,
       providerTraceId: details.providerTraceId,
       operation: details.operation,
+      graphApiVersion: details.graphApiVersion,
     });
     throw error;
   }

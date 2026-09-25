@@ -198,8 +198,7 @@ test("Meta recovery checks all products and rejects malformed or populated catal
     get: async (path, options) => { assert.equal(path, "/444/products"); parameters = options.params; return { data: { data } }; },
   } });
   await client.verifyEmptyCatalog("444");
-  assert.equal(parameters.return_only_approved_products, false);
-  assert.equal(parameters.limit, 1);
+  assert.deepEqual(parameters, { fields: "id", limit: 1 });
   data = [{ id: "555" }];
   await assert.rejects(client.verifyEmptyCatalog("444"), { statusCode: 409 });
   data = null;

@@ -31,6 +31,9 @@ function providerError(error, ambiguous = false, context = {}) {
   if (Number.isSafeInteger(remote.error_subcode)) details.providerSubcode = remote.error_subcode;
   if (typeof remote.fbtrace_id === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(remote.fbtrace_id)) details.providerTraceId = remote.fbtrace_id;
   if (context.operation) details.operation = context.operation;
+  if (typeof context.graphApiVersion === "string" && /^v\d+\.\d+$/.test(context.graphApiVersion)) {
+    details.graphApiVersion = context.graphApiVersion;
+  }
   // Never echo the raw provider response, headers or arbitrary message text.
   // Classify recognized diagnostics into fixed, non-sensitive explanations.
   const reason = String(remote.message || "");
@@ -40,7 +43,7 @@ function providerError(error, ambiguous = false, context = {}) {
   else if (/unsupported (get|post|delete) request|does not exist|cannot be loaded/i.test(reason)) details.providerReason = "object_unavailable_or_operation_unsupported";
   else if (/permission|not authorized|access denied/i.test(reason)) details.providerReason = "permission_denied";
   else if (/required|missing/i.test(reason)) details.providerReason = "missing_parameter";
-  else if (/invalid parameter|must be|invalid value/i.test(reason)) details.providerReason = "invalid_parameter";
+  else if (/invalid parameter|must be|invalid value/i.test(reason) || code === 100) details.providerReason = "invalid_parameter";
   if (field) details.providerField = field;
   const safe = new HttpError(statusCode, message, details);
   safe.retryable = retryable;
@@ -59,18 +62,18 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
     if (path.endsWith("/owned_product_catalogs")) return method === "POST" ? "create_catalog" : "read_owned_catalogs";
     if (path.endsWith("/product_catalogs")) return method === "POST" ? "link_catalog" : "read_linked_catalogs";
     if (params?.fields === "id,owner_business_info") return "read_business_owner";
-    if (/^\/\d{1,30}$/.test(path) && params?.fields === "id") return "read_catalog_object";
+    if (/^\/\d{1,30}$/.test(path) && method === "GET") return "read_catalog_object";
     if (path.endsWith("/whatsapp_commerce_settings")) return "commerce_settings";
     if (path.endsWith("/products")) return "read_catalog_products";
     return "catalog_details_or_products";
   }
   async function get(path, params = {}) {
     try { return (await http.get(path, { ...options, params })).data; }
-    catch (error) { throw providerError(error, false, { operation: operation(path, "GET", params) }); }
+    catch (error) { throw providerError(error, false, { operation: operation(path, "GET", params), graphApiVersion: version }); }
   }
   async function post(path, body, params) {
     try { return (await http.post(path, body, { ...options, params })).data; }
-    catch (error) { throw providerError(error, true, { operation: operation(path, "POST", params) }); }
+    catch (error) { throw providerError(error, true, { operation: operation(path, "POST", params), graphApiVersion: version }); }
   }
   async function linkedCatalogs(after) {
     const data = await get(`/${graphId(credentials.wabaId)}/product_catalogs`,
@@ -132,7 +135,7 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
     const id = graphId(catalogId);
     let products;
     try {
-      products = await get(`/${id}/products`, { fields: "id", limit: 1, return_only_approved_products: false });
+      products = await get(`/${id}/products`, { fields: "id", limit: 1 });
     } catch (error) {
       if (error instanceof HttpError) {
         error.details = {
@@ -150,7 +153,7 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
     const id = graphId(catalogId);
     let catalog;
     try {
-      catalog = await get(`/${id}`, { fields: "id" });
+      catalog = await get(`/${id}`, { fields: "id,name,vertical,product_count" });
     } catch (error) {
       if (error instanceof HttpError) {
         error.details = {
@@ -167,7 +170,15 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
         requestedCatalogId: id,
       });
     }
-    return { id };
+    const vertical = String(catalog?.vertical || "").trim().toLowerCase();
+    if (vertical !== "commerce") {
+      throw new HttpError(409, "AIWizChat product management requires a commerce catalog. Create or select a catalog whose Meta vertical is commerce.", {
+        diagnosticCode: "unsupported_catalog_vertical",
+        requestedCatalogId: id,
+        catalogVertical: vertical || "unknown",
+      });
+    }
+    return { id, vertical, name: String(catalog?.name || "").slice(0, 150) };
   }
   async function verifyBinding(catalogId) {
     graphId(catalogId);
