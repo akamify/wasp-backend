@@ -203,7 +203,9 @@ function createCatalogClient(credentials, { client, signal = AbortSignal.timeout
     return { businessId: graphId(businessId), empty: products.data.length === 0, ...settings };
   }
   async function readSettings() {
-    const result = await get(`/${graphId(credentials.phoneNumberId)}/whatsapp_commerce_settings`);
+    const result = await get(`/${graphId(credentials.phoneNumberId)}/whatsapp_commerce_settings`, {
+      fields: "is_catalog_visible,is_cart_enabled",
+    });
     const data = Array.isArray(result?.data) ? result.data[0] : result;
     if (typeof data?.is_catalog_visible !== "boolean" || typeof data?.is_cart_enabled !== "boolean") throw new HttpError(502, "Meta returned invalid commerce settings.");
     return { catalogVisible: data.is_catalog_visible, cartEnabled: data.is_cart_enabled };

@@ -61,14 +61,19 @@ test("malformed and timed-out writes remain ambiguous and provider secrets are n
   assert.equal(providerError(new Error("timeout"), true).ambiguous, true);
 });
 test("phone commerce settings are read back after successful update", async () => {
-  const calls = [];
+  const calls = [], reads = [];
   const client = createCatalogClient(credentials, { client: {
     post: async (path, _body, options) => { calls.push({ path, options }); return { data: { success: true } }; },
-    get: async () => ({ data: { data: [{ is_catalog_visible: true, is_cart_enabled: false }] } }),
+    get: async (path, options) => {
+      reads.push({ path, options });
+      return { data: { data: [{ is_catalog_visible: true, is_cart_enabled: false }] } };
+    },
   } });
   assert.deepEqual(await client.updateSettings({ catalogVisible: true, cartEnabled: false }), { catalogVisible: true, cartEnabled: false });
   assert.equal(calls[0].path, "/222/whatsapp_commerce_settings");
   assert.equal(calls[0].options.params.is_catalog_visible, true);
+  assert.equal(reads[0].path, "/222/whatsapp_commerce_settings");
+  assert.equal(reads[0].options.params.fields, "is_catalog_visible,is_cart_enabled");
 });
 
 test("code 100 diagnostics identify the failed operation without exposing provider text or secrets", async () => {
